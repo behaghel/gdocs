@@ -1406,6 +1406,21 @@
                           :source-uri "https://example.invalid/logo.png")))))
     (should (equal org "[[https://example.invalid/logo.png]]\n"))))
 
+(ert-deftest gdocs-convert-test-image-block-spacing ()
+  "Image IR is separated from surrounding paragraphs by blank lines."
+  (let ((org (gdocs-convert-ir-to-org
+              (list (list :type 'paragraph
+                          :style 'normal
+                          :contents (list (list :text "Before.")))
+                    (list :type 'image
+                          :source-uri "https://example.invalid/logo.png"
+                          :caption "Product logo")
+                    (list :type 'paragraph
+                          :style 'normal
+                          :contents (list (list :text "After.")))))))
+    (should (equal org
+                   "Before.\n\n#+CAPTION: Product logo\n[[https://example.invalid/logo.png]]\n\nAfter.\n"))))
+
 (ert-deftest gdocs-convert-test-image-ir-to-requests ()
   "Image IR with a fetchable URI emits an insertInlineImage request."
   (let* ((result (gdocs-convert--image-to-requests

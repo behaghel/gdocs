@@ -1251,6 +1251,7 @@ PREV-TYPE is the :type of the previous element."
       (or (eq type 'table)
           (eq type 'horizontal-rule)
           (eq type 'footnote)
+          (eq type 'image)
           (and (eq type 'paragraph)
                (not list-info)
                (not (eq prev-type 'horizontal-rule)))))))
