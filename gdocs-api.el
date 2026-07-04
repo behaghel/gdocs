@@ -213,6 +213,18 @@ MIME-TYPE is the file's MIME type."
     (base64-encode-region (point-min) (point-max) t)
     (buffer-string)))
 
+(defun gdocs-api-create-anyone-reader-permission (file-id callback &optional account)
+  "Create an anyone-reader permission for Drive FILE-ID.
+CALLBACK is called with the parsed permission response.  ACCOUNT is an optional
+account name."
+  (gdocs-api--request
+   'post
+   (concat gdocs-api--drive-base-url "/" file-id "/permissions")
+   callback
+   :account account
+   :body (json-encode '((type . "anyone")
+                        (role . "reader")))))
+
 (defun gdocs-api-rename-file (file-id new-name callback &optional account)
   "Rename the Google Drive file FILE-ID to NEW-NAME.
 CALLBACK is called with the parsed JSON response on success.

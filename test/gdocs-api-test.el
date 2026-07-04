@@ -219,6 +219,21 @@
   (let ((err (make-plz-error :message "network error" :response nil)))
     (should-not (gdocs-api--extract-retry-after err))))
 
+;;;; Drive permissions
+
+(ert-deftest gdocs-api-test-create-anyone-reader-permission ()
+  "Anyone-reader permission uses Drive permissions.create endpoint."
+  (let (captured)
+    (cl-letf (((symbol-function 'gdocs-api--request)
+               (lambda (method url callback &rest args)
+                 (setq captured (list method url callback args)))))
+      (gdocs-api-create-anyone-reader-permission "file-1" #'ignore "acct")
+      (should (eq (nth 0 captured) 'post))
+      (should (string-match-p "/files/file-1/permissions\\'" (nth 1 captured)))
+      (should (equal (plist-get (nth 3 captured) :account) "acct"))
+      (should (equal (json-read-from-string (plist-get (nth 3 captured) :body))
+                     '((type . "anyone") (role . "reader")))))))
+
 ;;;; Progress tracking
 
 (ert-deftest gdocs-api-test-show-progress-increments-counter ()
