@@ -1338,6 +1338,22 @@
                        . ((uri . "https://example.invalid/logo.png")
                           (location . ((index . 12)))))))))))
 
+(ert-deftest gdocs-convert-test-captioned-image-ir-to-requests ()
+  "Captioned image IR emits inline image plus visible caption text."
+  (let* ((result (gdocs-convert--image-to-requests
+                  (list :type 'image
+                        :uri "https://example.invalid/logo.png"
+                        :caption "Product logo")
+                  12))
+         (requests (plist-get result :requests)))
+    (should (= (plist-get result :index) 27))
+    (should (equal requests
+                   '(((insertInlineImage
+                       . ((uri . "https://example.invalid/logo.png")
+                          (location . ((index . 12))))))
+                     ((insertText . ((text . "\nProduct logo\n")
+                                     (location . ((index . 13)))))))))))
+
 (ert-deftest gdocs-convert-test-image-ir-without-uri-noops ()
   "Image IR without a fetchable URI is left to adapter preflight."
   (let ((result (gdocs-convert--image-to-requests

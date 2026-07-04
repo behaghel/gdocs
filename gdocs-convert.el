@@ -2164,13 +2164,26 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
 (defun gdocs-convert--image-to-requests (element index)
   "Create insertInlineImage requests for image ELEMENT at INDEX.
 ELEMENT must contain `:uri' or `:source-uri'.  Images without a fetchable URI are
-left to adapter preflight code and produce no requests."
+left to adapter preflight code and produce no requests.  When ELEMENT has a
+`:caption', insert it as visible text in the following paragraph for v1 semantic
+preservation."
   (if-let* ((uri (or (plist-get element :uri)
                     (plist-get element :source-uri))))
-      (list :requests (list `((insertInlineImage
-                               . ((uri . ,uri)
-                                  (location . ((index . ,index)))))))
-            :index (1+ index))
+      (let* ((caption (plist-get element :caption))
+             (caption-text (and caption (not (string-empty-p caption))
+                                (concat "\n" caption "\n")))
+             (caption-len (if caption-text
+                              (gdocs-convert--string-to-utf16-length caption-text)
+                            0))
+             (image-req `((insertInlineImage
+                           . ((uri . ,uri)
+                              (location . ((index . ,index)))))))
+             (caption-req (when caption-text
+                            (gdocs-convert--make-insert-text-request
+                             caption-text (1+ index)))))
+        (list :requests (append (list image-req)
+                                (when caption-req (list caption-req)))
+              :index (+ index 1 caption-len)))
     (list :requests nil :index index)))
 
 ;; ---------------------------------------------------------------------------
