@@ -328,13 +328,13 @@
       (should (equal 0 gdocs-api--active-requests))
       (should (equal "" gdocs-api--modeline-string)))))
 
-(ert-deftest gdocs-api-test-upload-image-hides-progress-with-finally ()
-  "Image upload uses the plz finalizer to clear progress."
+(ert-deftest gdocs-api-test-upload-image-uses-binary-body-and-finally ()
+  "Image upload sends binary multipart data and clears progress via finalizer."
   (let ((gdocs-api--active-requests 0)
         (gdocs-api--modeline-string "")
         (gdocs-accounts '(("acct")))
         (temp-file (make-temp-file "gdocs-test-img" nil ".png"))
-        captured-finally)
+        captured-body-type captured-finally)
     (unwind-protect
         (progn
           (with-temp-file temp-file
@@ -344,8 +344,10 @@
                        (funcall callback "token")))
                     ((symbol-function 'plz)
                      (lambda (_method _url &rest args)
-                       (setq captured-finally (plist-get args :finally)))))
+                       (setq captured-body-type (plist-get args :body-type)
+                             captured-finally (plist-get args :finally)))))
             (gdocs-api-upload-image temp-file #'ignore "acct")
+            (should (eq captured-body-type 'binary))
             (should (equal 1 gdocs-api--active-requests))
             (should (functionp captured-finally))
             (funcall captured-finally)

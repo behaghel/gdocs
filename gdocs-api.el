@@ -178,6 +178,7 @@ the account name for error reporting."
           :headers `(("Authorization" . ,(concat "Bearer " token))
                      ("Content-Type" . ,(concat "multipart/related; boundary=" boundary)))
           :body body
+          :body-type 'binary
           :as #'json-read
           :then callback
           :else (lambda (err)
@@ -196,14 +197,17 @@ the account name for error reporting."
 BOUNDARY is the MIME boundary string.  METADATA is the JSON
 metadata part.  FILE-PATH is the path to the file to upload.
 MIME-TYPE is the file's MIME type."
-  (concat "--" boundary "\r\n"
-          "Content-Type: application/json; charset=UTF-8\r\n\r\n"
-          metadata "\r\n"
-          "--" boundary "\r\n"
-          "Content-Type: " mime-type "\r\n"
-          "Content-Transfer-Encoding: base64\r\n\r\n"
-          (gdocs-api--file-to-base64 file-path) "\r\n"
-          "--" boundary "--"))
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert "--" boundary "\r\n")
+    (insert "Content-Type: application/json; charset=UTF-8\r\n\r\n")
+    (insert metadata "\r\n")
+    (insert "--" boundary "\r\n")
+    (insert "Content-Type: " mime-type "\r\n\r\n")
+    (insert-file-contents-literally file-path)
+    (goto-char (point-max))
+    (insert "\r\n--" boundary "--\r\n")
+    (buffer-string)))
 
 (defun gdocs-api--file-to-base64 (file-path)
   "Read FILE-PATH and return its contents as a base64 string."
