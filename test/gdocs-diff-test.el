@@ -50,6 +50,11 @@ ROWS is a list of lists of lists of run plists."
   "Create an IR horizontal rule element with ID."
   (list :type 'horizontal-rule :id id))
 
+(defun gdocs-diff-test--make-image (id &optional caption)
+  "Create an IR image element with ID and optional CAPTION."
+  (append (list :type 'image :path "img/logo.png" :id id)
+          (when caption (list :caption caption))))
+
 (defun gdocs-diff-test--plain-run (text)
   "Create a plain (unformatted) text run for TEXT."
   (list :text text
@@ -155,6 +160,13 @@ ROWS is a list of lists of lists of run plists."
     (should (string-match-p "paragraph:" key))
     (should (string-match-p "heading-1" key))
     (should (string-match-p "hello" key))))
+
+(ert-deftest gdocs-diff-test-element-key-image-caption ()
+  "Image element key includes caption text."
+  (should-not (equal (gdocs-diff--element-key
+                      (gdocs-diff-test--make-image "img-1"))
+                     (gdocs-diff--element-key
+                      (gdocs-diff-test--make-image "img-1" "Logo")))))
 
 (ert-deftest gdocs-diff-test-element-key-table ()
   "Table key includes cell contents."

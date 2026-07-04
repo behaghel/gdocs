@@ -72,7 +72,7 @@ identical keys."
     ('table (gdocs-diff--table-key element))
     ('horizontal-rule "horizontal-rule")
     ('page-break "page-break")
-    ('image (format "image:%s" (or (plist-get element :object-id) "")))
+    ('image (gdocs-diff--image-key element))
     ('footnote (gdocs-diff--footnote-key element))
     (_ (format "unknown:%s" (plist-get element :type)))))
 
@@ -94,6 +94,14 @@ Concatenates all cell text across all rows."
       (dolist (cell row)
         (push (gdocs-convert--runs-to-plain-text cell) cell-texts)))
     (format "table:%s" (s-join "|" (nreverse cell-texts)))))
+
+(defun gdocs-diff--image-key (element)
+  "Compute a content key for an image ELEMENT."
+  (format "image:%s:%s:%s:%s"
+          (or (plist-get element :object-id) "")
+          (or (plist-get element :path) "")
+          (or (plist-get element :source-uri) "")
+          (or (plist-get element :caption) "")))
 
 (defun gdocs-diff--footnote-key (element)
   "Compute a content key for a footnote ELEMENT."
