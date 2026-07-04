@@ -1326,6 +1326,26 @@
                           :caption "Product logo")))))
     (should (equal org "#+CAPTION: Product logo\n[[file:img/logo.png]]\n"))))
 
+(ert-deftest gdocs-convert-test-image-ir-to-requests ()
+  "Image IR with a fetchable URI emits an insertInlineImage request."
+  (let* ((result (gdocs-convert--image-to-requests
+                  (list :type 'image :uri "https://example.invalid/logo.png")
+                  12))
+         (requests (plist-get result :requests)))
+    (should (= (plist-get result :index) 13))
+    (should (equal requests
+                   '(((insertInlineImage
+                       . ((uri . "https://example.invalid/logo.png")
+                          (location . ((index . 12)))))))))))
+
+(ert-deftest gdocs-convert-test-image-ir-without-uri-noops ()
+  "Image IR without a fetchable URI is left to adapter preflight."
+  (let ((result (gdocs-convert--image-to-requests
+                 (list :type 'image :path "img/logo.png")
+                 12)))
+    (should-not (plist-get result :requests))
+    (should (= (plist-get result :index) 12))))
+
 ;; ---------------------------------------------------------------------------
 ;;; Src block conversion
 

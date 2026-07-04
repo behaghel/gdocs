@@ -2155,8 +2155,23 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
     ('table (gdocs-convert--table-to-requests element index))
     ('horizontal-rule (gdocs-convert--horizontal-rule-to-requests index))
     ('page-break (gdocs-convert--page-break-to-requests index))
-    ('image (list :requests nil :index index))
+    ('image (gdocs-convert--image-to-requests element index))
     ('footnote (gdocs-convert--footnote-to-requests element index))))
+
+;; ---------------------------------------------------------------------------
+;;; Image -> requests
+
+(defun gdocs-convert--image-to-requests (element index)
+  "Create insertInlineImage requests for image ELEMENT at INDEX.
+ELEMENT must contain `:uri' or `:source-uri'.  Images without a fetchable URI are
+left to adapter preflight code and produce no requests."
+  (if-let* ((uri (or (plist-get element :uri)
+                    (plist-get element :source-uri))))
+      (list :requests (list `((insertInlineImage
+                               . ((uri . ,uri)
+                                  (location . ((index . ,index)))))))
+            :index (1+ index))
+    (list :requests nil :index index)))
 
 ;; ---------------------------------------------------------------------------
 ;;; Paragraph -> requests
