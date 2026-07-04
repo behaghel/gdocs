@@ -418,6 +418,48 @@
     (should (equal (plist-get image :title) "Logo"))
     (should (equal (plist-get image :description) "Product logo"))))
 
+(ert-deftest gdocs-convert-test-docs-json-marked-image-caption ()
+  "Marked caption paragraphs attach to preceding image IR on pull."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 2)
+                    (paragraph
+                     . ((elements
+                         . ,(vector '((inlineObjectElement
+                                      . ((inlineObjectId . "img-1"))))))
+                        (paragraphStyle
+                         . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 2)
+                    (endIndex . 16)
+                    (paragraph
+                     . ((elements
+                         . ,(vector '((textRun
+                                      . ((content . "Hubert banner\n")
+                                         (textStyle . ()))))))
+                        (paragraphStyle
+                         . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (inlineObjects
+                  . ((img-1
+                      . ((inlineObjectProperties
+                          . ((embeddedObject
+                              . ((imageProperties
+                                  . ((sourceUri
+                                      . "https://example.invalid/logo.png")))))))))))
+                 (namedRanges
+                  . ((gdocs-org-marker:image-caption:img-1:org-image-caption
+                      . ((namedRanges
+                          . ,(vector `((ranges
+                                        . ,(vector '((startIndex . 2)
+                                                     (endIndex . 15)))))))))))))
+         (ir (gdocs-convert-docs-json-to-ir json))
+         (image (car ir)))
+    (should (= (length ir) 1))
+    (should (eq (plist-get image :type) 'image))
+    (should (equal (plist-get image :caption) "Hubert banner"))
+    (should (equal (gdocs-convert-ir-to-org ir)
+                   "#+CAPTION: Hubert banner\n[[https://example.invalid/logo.png]]\n"))))
+
 (ert-deftest gdocs-convert-test-docs-json-native-footnotes ()
   "Native Google Docs footnotes convert to Org references and definitions."
   (let* ((body-elements
@@ -1390,7 +1432,11 @@
                        . ((uri . "https://example.invalid/logo.png")
                           (location . ((index . 12))))))
                      ((insertText . ((text . "\nProduct logo\n")
-                                     (location . ((index . 13)))))))))))
+                                     (location . ((index . 13))))))
+                     ((createNamedRange
+                       . ((name . "gdocs-org-marker:image-caption:image-14:org-image-caption")
+                          (range . ((startIndex . 14)
+                                    (endIndex . 26)))))))))))
 
 (ert-deftest gdocs-convert-test-image-ir-without-uri-noops ()
   "Image IR without a fetchable URI is left to adapter preflight."
