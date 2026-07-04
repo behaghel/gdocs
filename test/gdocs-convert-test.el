@@ -1292,6 +1292,41 @@
     (should (null ir))))
 
 ;; ---------------------------------------------------------------------------
+;;; Image conversion
+
+(ert-deftest gdocs-convert-test-standalone-image-link-to-ir ()
+  "An undescribed standalone local image link becomes image IR."
+  (let* ((ir (gdocs-convert-org-string-to-ir "[[file:img/logo.png]]\n"))
+         (image (car ir)))
+    (should (= (length ir) 1))
+    (should (eq (plist-get image :type) 'image))
+    (should (equal (plist-get image :path) "img/logo.png"))))
+
+(ert-deftest gdocs-convert-test-captioned-image-link-to-ir ()
+  "An Org caption before a standalone image is captured in image IR."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+CAPTION: Product logo\n[[file:img/logo.png]]\n"))
+         (image (car ir)))
+    (should (eq (plist-get image :type) 'image))
+    (should (equal (plist-get image :caption) "Product logo"))))
+
+(ert-deftest gdocs-convert-test-described-image-link-stays-link ()
+  "A described local image link remains a normal link, not image IR."
+  (let* ((ir (gdocs-convert-org-string-to-ir "[[file:img/logo.png][Open image]]\n"))
+         (paragraph (car ir)))
+    (should (eq (plist-get paragraph :type) 'paragraph))
+    (should (equal (gdocs-convert--runs-to-org (plist-get paragraph :contents))
+                   "[[file:img/logo.png][Open image]]"))))
+
+(ert-deftest gdocs-convert-test-image-ir-to-org ()
+  "Image IR renders back to an Org image link and optional caption."
+  (let ((org (gdocs-convert-ir-to-org
+              (list (list :type 'image
+                          :path "img/logo.png"
+                          :caption "Product logo")))))
+    (should (equal org "#+CAPTION: Product logo\n[[file:img/logo.png]]\n"))))
+
+;; ---------------------------------------------------------------------------
 ;;; Src block conversion
 
 (ert-deftest gdocs-convert-test-src-block-to-ir ()

@@ -462,19 +462,56 @@ preservable metadata."
 (defun gdocs-convert--paragraph-to-ir (paragraph)
   "Convert an org PARAGRAPH element to a list of IR elements.
 Multi-line inline code paragraphs (consecutive ~...~ lines) are
-split into individual monospace paragraphs.  Returns nil if the
-paragraph contains only whitespace."
-  (let* ((contents (org-element-contents paragraph))
-         (runs (gdocs-convert--objects-to-runs contents))
-         (trimmed (gdocs-convert--trim-runs runs)))
-    (cond
-     ((null trimmed) nil)
-     ((gdocs-convert--multiline-code-paragraph-p trimmed)
-      (gdocs-convert--split-code-paragraph-runs trimmed))
-     (t (list (list :type 'paragraph
-                    :style (gdocs-convert--paragraph-style paragraph)
-                    :contents trimmed
-                    :id (gdocs-convert--next-id)))))))
+split into individual monospace paragraphs.  Standalone local image links become
+image IR elements.  Returns nil if the paragraph contains only whitespace."
+  (if-let* ((image (gdocs-convert--standalone-image-paragraph-to-ir paragraph)))
+      (list image)
+    (let* ((contents (org-element-contents paragraph))
+           (runs (gdocs-convert--objects-to-runs contents))
+           (trimmed (gdocs-convert--trim-runs runs)))
+      (cond
+       ((null trimmed) nil)
+       ((gdocs-convert--multiline-code-paragraph-p trimmed)
+        (gdocs-convert--split-code-paragraph-runs trimmed))
+       (t (list (list :type 'paragraph
+                      :style (gdocs-convert--paragraph-style paragraph)
+                      :contents trimmed
+                      :id (gdocs-convert--next-id))))))))
+
+(defconst gdocs-convert-image-file-extensions
+  '("png" "jpg" "jpeg" "gif" "webp" "svg")
+  "Local image file extensions that can be represented as image IR.")
+
+(defun gdocs-convert--standalone-image-paragraph-to-ir (paragraph)
+  "Return image IR when PARAGRAPH is a standalone local image link."
+  (let ((objects (seq-filter (lambda (object)
+                               (not (and (stringp object) (string-blank-p object))))
+                             (org-element-contents paragraph))))
+    (when (and (= (length objects) 1)
+               (gdocs-convert--standalone-image-link-p (car objects)))
+      (let* ((link (car objects))
+             (path (org-element-property :path link))
+             (caption (gdocs-convert--paragraph-caption paragraph)))
+        (append (list :type 'image
+                      :path path
+                      :id (gdocs-convert--next-id))
+                (when caption (list :caption caption)))))))
+
+(defun gdocs-convert--standalone-image-link-p (object)
+  "Return non-nil when OBJECT is an undescribed local image link."
+  (and (not (stringp object))
+       (eq (org-element-type object) 'link)
+       (string= (org-element-property :type object) "file")
+       (null (org-element-contents object))
+       (member (downcase (or (file-name-extension
+                              (org-element-property :path object))
+                             ""))
+               gdocs-convert-image-file-extensions)))
+
+(defun gdocs-convert--paragraph-caption (paragraph)
+  "Return Org caption text affiliated with PARAGRAPH, or nil."
+  (when-let* ((caption (org-element-property :caption paragraph)))
+    (s-trim (org-element-interpret-data caption))))
 
 (defun gdocs-convert--paragraph-style (paragraph)
   "Determine the IR style for PARAGRAPH based on its context."
@@ -1218,7 +1255,7 @@ PREV-TYPE is the :type of the previous element."
     ('horizontal-rule "-----")
     ('footnote (gdocs-convert--ir-footnote-to-org element))
     ('page-break "")
-    ('image "")))
+    ('image (gdocs-convert--ir-image-to-org element))))
 
 (defun gdocs-convert--ir-paragraph-to-org (element)
   "Convert an IR paragraph ELEMENT to an org string."
@@ -1480,6 +1517,24 @@ markers to produce valid emphasis markup."
   (let ((label (plist-get element :label))
         (text (gdocs-convert--runs-to-org (plist-get element :contents))))
     (format "[fn:%s] %s" (or label "") text)))
+
+;; ---------------------------------------------------------------------------
+;;; IR image -> org
+
+(defun gdocs-convert--ir-image-to-org (element)
+  "Convert an IR image ELEMENT to an Org image link."
+  (let ((target (or (plist-get element :path)
+                    (plist-get element :source-uri)
+                    (plist-get element :object-id)
+                    ""))
+        (caption (plist-get element :caption)))
+    (concat (when (and caption (not (string-empty-p caption)))
+              (format "#+CAPTION: %s\n" caption))
+            (format "[[%s]]" (if (string-prefix-p "file:" target)
+                                  target
+                                (if (plist-get element :path)
+                                    (concat "file:" target)
+                                  target))))))
 
 ;; ---------------------------------------------------------------------------
 ;;; IR table -> org
