@@ -811,7 +811,12 @@ heading line.  Includes a trailing newline."
     (if (and drawer (gdocs-sync--heading-element-p element))
         (concat (gdocs-sync--graft-drawer-into-heading org-text drawer)
                 "\n")
-      (concat org-text "\n"))))
+      (concat org-text
+              (if (gdocs-sync--block-element-p element) "\n\n" "\n")))))
+
+(defun gdocs-sync--block-element-p (element)
+  "Return non-nil when ELEMENT should be separated as an Org block."
+  (memq (plist-get element :type) '(image table horizontal-rule)))
 
 (defun gdocs-sync--heading-element-p (element)
   "Return non-nil if ELEMENT is a heading."

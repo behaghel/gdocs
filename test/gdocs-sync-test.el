@@ -714,6 +714,16 @@ local modification, allowing the merge to detect the conflict."
           (should (string-match-p ">>>> REMOTE" merged))
           (should (string-match-p "Remote text" merged)))))))
 
+(ert-deftest gdocs-sync-test-ir-image-segment-keeps-block-spacing ()
+  "Image segments produced during merge keep following block spacing."
+  (let ((segment (gdocs-sync--ir-element-to-org-segment
+                  (list :type 'image
+                        :source-uri "https://example.invalid/logo.png"
+                        :caption "Logo")
+                  nil)))
+    (should (equal segment
+                   "#+CAPTION: Logo\n[[https://example.invalid/logo.png]]\n\n"))))
+
 (ert-deftest gdocs-sync-test-three-way-merge-remote-insert ()
   "Remote adds a new element not in shadow -> appears in merged output."
   (gdocs-sync-test-with-org-buffer "First\n"
