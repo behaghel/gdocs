@@ -387,6 +387,58 @@
          (heading (car ir)))
     (should (eq (plist-get heading :style) 'heading-1))))
 
+(ert-deftest gdocs-convert-test-docs-json-native-footnotes ()
+  "Native Google Docs footnotes convert to Org references and definitions."
+  (let* ((body-elements
+          (vector `((paragraph
+                     . ((elements
+                         . ,(vector '((textRun . ((content . "Text")
+                                                   (textStyle . ()))))
+                                   '((footnoteReference
+                                      . ((footnoteId . "fn-a")
+                                         (footnoteNumber . "1")
+                                         (textStyle . ()))))
+                                   '((textRun . ((content . ".\n")
+                                                 (textStyle . ()))))))
+                        (paragraphStyle
+                         . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (footnote-content
+          (vector `((paragraph
+                     . ((elements
+                         . ,(vector '((textRun . ((content . "Body.\n")
+                                                   (textStyle . ()))))))
+                        (paragraphStyle
+                         . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (footnotes
+                  . ((fn-a . ((footnoteId . "fn-a")
+                              (content . ,footnote-content)))))))
+         (ir (gdocs-convert-docs-json-to-ir json))
+         (paragraph (car ir))
+         (footnote (cadr ir)))
+    (should (equal (gdocs-convert--runs-to-org
+                    (plist-get paragraph :contents))
+                   "Text[fn:1]."))
+    (should (eq (plist-get footnote :type) 'footnote))
+    (should (equal (plist-get footnote :label) "1"))
+    (should (equal (gdocs-convert--ir-footnote-to-org footnote)
+                   "[fn:1] Body."))))
+
+(ert-deftest gdocs-convert-test-ir-to-org-collects-footnotes-section ()
+  "IR footnotes render once under a conventional Footnotes section."
+  (let* ((ir (list (list :type 'paragraph
+                         :style 'normal
+                         :contents (list (gdocs-convert--make-plain-run "Text")
+                                         (plist-put
+                                          (gdocs-convert--make-plain-run "")
+                                          :footnote-label "1")
+                                         (gdocs-convert--make-plain-run ".")))
+                   (list :type 'footnote
+                         :label "1"
+                         :contents (list (gdocs-convert--make-plain-run "Body.")))))
+         (org (gdocs-convert-ir-to-org ir)))
+    (should (equal org "Text[fn:1].\n\n* Footnotes\n\n[fn:1] Body.\n"))))
+
 (ert-deftest gdocs-convert-test-docs-json-bold ()
   "Bold text in Google Docs JSON converts to a run with :bold t."
   (let* ((json `((body . ((content

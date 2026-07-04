@@ -1092,16 +1092,39 @@ the Google Docs representation."
 ;; ---------------------------------------------------------------------------
 ;;; Public API: IR -> org
 
+(defun gdocs-convert--split-footnote-elements (ir)
+  "Split IR into ordinary body elements and footnote definition elements."
+  (let ((body nil)
+        (footnotes nil))
+    (dolist (element ir)
+      (if (eq (plist-get element :type) 'footnote)
+          (push element footnotes)
+        (push element body)))
+    (list :body (nreverse body)
+          :footnotes (nreverse footnotes))))
+
+(defun gdocs-convert--append-footnotes-section (org-text footnotes)
+  "Append FOOTNOTES as a conventional Org footnotes section to ORG-TEXT."
+  (if (null footnotes)
+      org-text
+    (let ((body (s-trim-right org-text))
+          (definitions (mapconcat #'gdocs-convert--ir-footnote-to-org
+                                  footnotes "\n\n")))
+      (concat body "\n\n* Footnotes\n\n" definitions "\n"))))
+
 (defun gdocs-convert-ir-to-org (ir)
   "Convert an IR element list to an org-mode string.
 Returns a well-formatted org string.  Consecutive all-code
 paragraphs (monospace lines without a src-block marker) are
-grouped into a single =#+BEGIN_EXAMPLE= block."
-  (let ((parts nil)
+grouped into a single =#+BEGIN_EXAMPLE= block.  Footnote definitions are
+collected at the end under a conventional `* Footnotes' section."
+  (let* ((split (gdocs-convert--split-footnote-elements ir))
+         (footnotes (plist-get split :footnotes))
+         (parts nil)
         (prev-type nil)
-        (elements (seq-into ir 'vector))
+        (elements (seq-into (plist-get split :body) 'vector))
         (i 0)
-        (len (length ir))
+        (len (length (plist-get split :body)))
         (list-counter 0)
         (prev-list-level nil))
     (while (< i len)
@@ -1153,7 +1176,9 @@ grouped into a single =#+BEGIN_EXAMPLE= block."
               (push org-text parts)
               (setq prev-type type)))
           (setq i (1+ i))))))
-    (concat (s-join "\n" (nreverse parts)) "\n")))
+    (gdocs-convert--append-footnotes-section
+     (concat (s-join "\n" (nreverse parts)) "\n")
+     footnotes)))
 
 (defun gdocs-convert--all-code-paragraph-p (element)
   "Return non-nil if ELEMENT is a normal paragraph with all-code runs.
@@ -1314,7 +1339,9 @@ indent continuation lines to keep them inside the list item."
   "Convert a single text RUN plist to an org-formatted string.
 When `gdocs-convert--link-context' is bound, reverse-resolves
 Google Docs URLs back to org file: links."
-  (let ((text (plist-get run :text))
+  (if-let* ((label (plist-get run :footnote-label)))
+      (format "[fn:%s]" label)
+    (let ((text (plist-get run :text))
         (bold (plist-get run :bold))
         (italic (plist-get run :italic))
         (underline (plist-get run :underline))
@@ -1342,7 +1369,7 @@ Google Docs URLs back to org file: links."
       (setq text (format "_{%s}" text)))
     (when (plist-get run :superscript)
       (setq text (format "^{%s}" text)))
-    text))
+    text)))
 
 (defun gdocs-convert--reverse-resolve-link (url)
   "Reverse-resolve a Google Docs URL to an org link.
@@ -1496,6 +1523,7 @@ like `body', `title', `lists', and `namedRanges'."
          (lists-map (alist-get 'lists json))
          (named-ranges (alist-get 'namedRanges json))
          (markers (gdocs-convert--parse-named-range-markers named-ranges))
+         (footnote-refs nil)
          (result nil))
     (when title
       (push (list :type 'paragraph
@@ -1505,6 +1533,10 @@ like `body', `title', `lists', and `namedRanges'."
                   :id (gdocs-convert--next-id))
             result))
     (seq-doseq (structural-element content)
+      (setq footnote-refs
+            (append footnote-refs
+                    (gdocs-convert--structural-element-footnote-refs
+                     structural-element)))
       (let ((ir (gdocs-convert--structural-element-to-ir
                  structural-element lists-map markers))
             (si (alist-get 'startIndex structural-element))
@@ -1527,9 +1559,67 @@ like `body', `title', `lists', and `namedRanges'."
               (plist-put ir :doc-start si)
               (plist-put ir :doc-end ei))
             (push ir result)))))
-    (let ((ir (nreverse result)))
+    (let ((ir (append (nreverse result)
+                      (gdocs-convert--docs-footnotes-to-ir
+                       (alist-get 'footnotes json) footnote-refs))))
       (gdocs-convert--assign-list-counters ir)
       ir)))
+
+(defun gdocs-convert--structural-element-footnote-refs (element)
+  "Return footnote references found in Google Docs structural ELEMENT.
+Each returned plist has `:id' and `:label' keys."
+  (let ((paragraph (alist-get 'paragraph element))
+        (refs nil))
+    (when paragraph
+      (seq-doseq (el (alist-get 'elements paragraph))
+        (when-let* ((footnote-ref (alist-get 'footnoteReference el))
+                    (footnote-id (alist-get 'footnoteId footnote-ref)))
+          (push (list :id footnote-id
+                      :label (or (alist-get 'footnoteNumber footnote-ref)
+                                 footnote-id))
+                refs))))
+    (nreverse refs)))
+
+(defun gdocs-convert--docs-footnote-reference-to-run (footnote-ref)
+  "Convert Google Docs FOOTNOTE-REF to a zero-width IR footnote run."
+  (let ((label (or (alist-get 'footnoteNumber footnote-ref)
+                   (alist-get 'footnoteId footnote-ref))))
+    (plist-put (gdocs-convert--make-plain-run "") :footnote-label label)))
+
+(defun gdocs-convert--docs-footnote-content-to-runs (content)
+  "Convert Google Docs footnote CONTENT to IR text runs."
+  (let ((runs nil)
+        (first-paragraph-p t))
+    (seq-doseq (element content)
+      (when-let* ((paragraph (alist-get 'paragraph element)))
+        (unless first-paragraph-p
+          (push (gdocs-convert--make-plain-run "\n") runs))
+        (setq first-paragraph-p nil)
+        (setq runs
+              (append (nreverse
+                       (gdocs-convert--trim-trailing-newline-runs
+                        (gdocs-convert--docs-elements-to-runs
+                         (alist-get 'elements paragraph))))
+                      runs))))
+    (nreverse runs)))
+
+(defun gdocs-convert--docs-footnotes-to-ir (footnotes footnote-refs)
+  "Convert top-level Google Docs FOOTNOTES for encountered FOOTNOTE-REFS to IR."
+  (let ((seen (make-hash-table :test 'equal))
+        (result nil))
+    (dolist (ref footnote-refs)
+      (let* ((footnote-id (plist-get ref :id))
+             (label (plist-get ref :label))
+             (footnote (and footnotes (alist-get (intern footnote-id) footnotes))))
+        (unless (or (gethash footnote-id seen) (not footnote))
+          (puthash footnote-id t seen)
+          (push (list :type 'footnote
+                      :label label
+                      :contents (gdocs-convert--docs-footnote-content-to-runs
+                                 (alist-get 'content footnote))
+                      :id (gdocs-convert--next-id))
+                result))))
+    (nreverse result)))
 
 (defun gdocs-convert--structural-element-to-ir (element lists-map markers)
   "Convert a Google Docs structural ELEMENT to IR.
@@ -1619,9 +1709,14 @@ identical formatting are merged, and edge whitespace on
 formatted runs is normalized."
   (let ((runs nil))
     (seq-doseq (el elements)
-      (let ((text-run (alist-get 'textRun el)))
-        (when text-run
-          (push (gdocs-convert--docs-text-run-to-ir text-run) runs))))
+      (let ((text-run (alist-get 'textRun el))
+            (footnote-ref (alist-get 'footnoteReference el)))
+        (cond
+         (text-run
+          (push (gdocs-convert--docs-text-run-to-ir text-run) runs))
+         (footnote-ref
+          (push (gdocs-convert--docs-footnote-reference-to-run footnote-ref)
+                runs)))))
     (gdocs-convert--normalize-run-whitespace
      (gdocs-convert--merge-adjacent-runs (nreverse runs)))))
 
