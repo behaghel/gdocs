@@ -387,6 +387,37 @@
          (heading (car ir)))
     (should (eq (plist-get heading :style) 'heading-1))))
 
+(ert-deftest gdocs-convert-test-docs-json-inline-image-preserves-uri ()
+  "Google Docs inline images convert to image IR with source/content URIs."
+  (let* ((json `((body . ((content
+                           . [((paragraph
+                                . ((elements
+                                    . [((inlineObjectElement
+                                         . ((inlineObjectId . "img-1"))))])
+                                   (paragraphStyle
+                                    . ((namedStyleType . "NORMAL_TEXT"))))))])))
+                 (inlineObjects
+                  . ((img-1
+                      . ((inlineObjectProperties
+                          . ((embeddedObject
+                              . ((title . "Logo")
+                                 (description . "Product logo")
+                                 (imageProperties
+                                  . ((contentUri
+                                      . "https://lh3.googleusercontent.com/image")
+                                     (sourceUri
+                                      . "https://example.invalid/logo.png")))))))))))))
+         (ir (gdocs-convert-docs-json-to-ir json))
+         (image (car ir)))
+    (should (eq (plist-get image :type) 'image))
+    (should (equal (plist-get image :object-id) "img-1"))
+    (should (equal (plist-get image :source-uri)
+                   "https://example.invalid/logo.png"))
+    (should (equal (plist-get image :content-uri)
+                   "https://lh3.googleusercontent.com/image"))
+    (should (equal (plist-get image :title) "Logo"))
+    (should (equal (plist-get image :description) "Product logo"))))
+
 (ert-deftest gdocs-convert-test-docs-json-native-footnotes ()
   "Native Google Docs footnotes convert to Org references and definitions."
   (let* ((body-elements
@@ -1325,6 +1356,13 @@
                           :path "img/logo.png"
                           :caption "Product logo")))))
     (should (equal org "#+CAPTION: Product logo\n[[file:img/logo.png]]\n"))))
+
+(ert-deftest gdocs-convert-test-remote-image-ir-to-org ()
+  "Remote image IR renders back to an Org URL link."
+  (let ((org (gdocs-convert-ir-to-org
+              (list (list :type 'image
+                          :source-uri "https://example.invalid/logo.png")))))
+    (should (equal org "[[https://example.invalid/logo.png]]\n"))))
 
 (ert-deftest gdocs-convert-test-image-ir-to-requests ()
   "Image IR with a fetchable URI emits an insertInlineImage request."

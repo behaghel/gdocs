@@ -1525,6 +1525,7 @@ markers to produce valid emphasis markup."
   "Convert an IR image ELEMENT to an Org image link."
   (let ((target (or (plist-get element :path)
                     (plist-get element :source-uri)
+                    (plist-get element :content-uri)
                     (plist-get element :object-id)
                     ""))
         (caption (plist-get element :caption)))
@@ -1577,6 +1578,7 @@ like `body', `title', `lists', and `namedRanges'."
          (content (alist-get 'content body))
          (lists-map (alist-get 'lists json))
          (named-ranges (alist-get 'namedRanges json))
+         (inline-objects (alist-get 'inlineObjects json))
          (markers (gdocs-convert--parse-named-range-markers named-ranges))
          (footnote-refs nil)
          (result nil))
@@ -1593,7 +1595,7 @@ like `body', `title', `lists', and `namedRanges'."
                     (gdocs-convert--structural-element-footnote-refs
                      structural-element)))
       (let ((ir (gdocs-convert--structural-element-to-ir
-                 structural-element lists-map markers))
+                 structural-element lists-map markers inline-objects))
             (si (alist-get 'startIndex structural-element))
             (ei (alist-get 'endIndex structural-element)))
         (when ir
@@ -1676,14 +1678,17 @@ Each returned plist has `:id' and `:label' keys."
                 result))))
     (nreverse result)))
 
-(defun gdocs-convert--structural-element-to-ir (element lists-map markers)
+(defun gdocs-convert--structural-element-to-ir (element lists-map markers
+                                                       &optional inline-objects)
   "Convert a Google Docs structural ELEMENT to IR.
 LISTS-MAP is the document's lists property for bullet type
-lookup.  MARKERS is an alist of element markers from named ranges."
+lookup.  MARKERS is an alist of element markers from named ranges.
+INLINE-OBJECTS is the document's inline object metadata map."
   (cond
    ((alist-get 'paragraph element)
     (let ((paragraph (alist-get 'paragraph element)))
-      (or (gdocs-convert--docs-special-paragraph-elements paragraph)
+      (or (gdocs-convert--docs-special-paragraph-elements
+           paragraph inline-objects)
           (gdocs-convert--docs-paragraph-to-ir
            paragraph lists-map markers))))
    ((alist-get 'table element)
@@ -1692,9 +1697,11 @@ lookup.  MARKERS is an alist of element markers from named ranges."
     nil)
    (t nil)))
 
-(defun gdocs-convert--docs-special-paragraph-elements (paragraph)
+(defun gdocs-convert--docs-special-paragraph-elements (paragraph
+                                                       &optional inline-objects)
   "Check PARAGRAPH for special elements like page breaks or images.
-Returns an IR element if found, nil otherwise."
+INLINE-OBJECTS is the document's inline object metadata map.  Returns an IR
+element if found, nil otherwise."
   (let ((elements (alist-get 'elements paragraph)))
     (catch 'found
       (seq-doseq (el elements)
@@ -1704,10 +1711,29 @@ Returns an IR element if found, nil otherwise."
         (when (alist-get 'inlineObjectElement el)
           (let ((obj-id (alist-get 'inlineObjectId
                                    (alist-get 'inlineObjectElement el))))
-            (throw 'found (list :type 'image
-                                :object-id obj-id
-                                :id (gdocs-convert--next-id))))))
+            (throw 'found
+                   (gdocs-convert--docs-inline-object-to-image-ir
+                    obj-id inline-objects)))))
       nil)))
+
+(defun gdocs-convert--docs-inline-object-to-image-ir (object-id inline-objects)
+  "Return image IR for inline image OBJECT-ID using INLINE-OBJECTS metadata."
+  (let* ((inline-object (and object-id
+                             (alist-get (intern object-id) inline-objects)))
+         (properties (alist-get 'inlineObjectProperties inline-object))
+         (embedded-object (alist-get 'embeddedObject properties))
+         (image-properties (alist-get 'imageProperties embedded-object))
+         (content-uri (alist-get 'contentUri image-properties))
+         (source-uri (alist-get 'sourceUri image-properties))
+         (title (alist-get 'title embedded-object))
+         (description (alist-get 'description embedded-object)))
+    (append (list :type 'image
+                  :object-id object-id
+                  :id (gdocs-convert--next-id))
+            (when content-uri (list :content-uri content-uri))
+            (when source-uri (list :source-uri source-uri))
+            (when title (list :title title))
+            (when description (list :description description)))))
 
 
 ;; ---------------------------------------------------------------------------
