@@ -457,6 +457,8 @@
     (should (= (length ir) 1))
     (should (eq (plist-get image :type) 'image))
     (should (equal (plist-get image :caption) "Hubert banner"))
+    (should (= (plist-get image :doc-start) 1))
+    (should (= (plist-get image :doc-end) 16))
     (should (equal (gdocs-convert-ir-to-org ir)
                    "#+CAPTION: Hubert banner\n[[https://example.invalid/logo.png]]\n"))))
 

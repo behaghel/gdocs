@@ -1652,8 +1652,10 @@ like `body', `title', `lists', and `namedRanges'."
           (let ((image (copy-sequence (car result)))
                 (caption (gdocs-convert--runs-to-plain-text
                           (plist-get element :contents))))
-            (setq result (cons (plist-put image :caption caption)
-                               (cdr result))))
+            (plist-put image :caption caption)
+            (when-let* ((caption-end (plist-get element :doc-end)))
+              (plist-put image :doc-end caption-end))
+            (setq result (cons image (cdr result))))
         (push element result)))
     (nreverse result)))
 
