@@ -56,6 +56,13 @@ ROWS is a list of lists of lists of run plists."
         :bold nil :italic nil :underline nil
         :strikethrough nil :code nil :link nil))
 
+(defun gdocs-diff-test--footnote-run (label)
+  "Create a zero-width semantic footnote run for LABEL."
+  (list :text ""
+        :bold nil :italic nil :underline nil
+        :strikethrough nil :code nil :link nil
+        :footnote-label label))
+
 ;;;; LCS tests
 
 (ert-deftest gdocs-diff-test-lcs-identical ()
@@ -86,6 +93,60 @@ ROWS is a list of lists of lists of run plists."
     (should (equal result '((0 . 0) (2 . 1))))))
 
 ;;;; Element key tests
+
+(ert-deftest gdocs-diff-test-paragraph-key-includes-footnote-runs ()
+  "Zero-width footnote reference runs are semantically meaningful in diff keys."
+  (let ((without-footnote
+         (list :type 'paragraph
+               :style 'normal
+               :contents (list (gdocs-diff-test--plain-run "Text"))))
+        (with-footnote
+         (list :type 'paragraph
+               :style 'normal
+               :contents (list (gdocs-diff-test--plain-run "Text")
+                               (gdocs-diff-test--footnote-run "one")))))
+    (should-not (equal (gdocs-diff--element-key without-footnote)
+                       (gdocs-diff--element-key with-footnote)))))
+
+(ert-deftest gdocs-diff-test-formatting-only-modification-emits-footnote-seam ()
+  "Adding a zero-width footnote to identical text emits a footnote seam request."
+  (let* ((old (list :type 'paragraph
+                    :style 'normal
+                    :contents (list (gdocs-diff-test--plain-run "Text."))))
+         (new (list :type 'paragraph
+                    :style 'normal
+                    :contents (list (gdocs-diff-test--plain-run "Text")
+                                    (gdocs-diff-test--footnote-run "one")
+                                    (gdocs-diff-test--plain-run "."))))
+         (gdocs-convert-footnote-reference-handler
+          (lambda (run index)
+            (list (list :label (plist-get run :footnote-label)
+                        :index index))))
+         (result (gdocs-diff--formatting-only-modification new '(12 . 18))))
+    (should (member '(:label "one" :index 16)
+                    (plist-get result :style-reqs)))))
+
+(ert-deftest gdocs-diff-test-word-level-modification-emits-footnote-seams ()
+  "Text edits and added zero-width footnotes emit footnote seam requests."
+  (let* ((old (list :type 'paragraph
+                    :style 'normal
+                    :contents (list (gdocs-diff-test--plain-run "Text."))))
+         (new (list :type 'paragraph
+                    :style 'normal
+                    :contents (list (gdocs-diff-test--plain-run "Text")
+                                    (gdocs-diff-test--footnote-run "one")
+                                    (gdocs-diff-test--plain-run " and more")
+                                    (gdocs-diff-test--footnote-run "two")
+                                    (gdocs-diff-test--plain-run "."))))
+         (gdocs-convert-footnote-reference-handler
+          (lambda (run index)
+            (list (list :label (plist-get run :footnote-label)
+                        :index index))))
+         (result (gdocs-diff--word-level-paragraph-modification old new 12 18)))
+    (should (member '(:label "one" :index 16)
+                    (plist-get result :insert-reqs)))
+    (should (member '(:label "two" :index 25)
+                    (plist-get result :insert-reqs)))))
 
 (ert-deftest gdocs-diff-test-element-key-paragraph ()
   "Paragraph key includes text and style."

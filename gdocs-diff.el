@@ -107,13 +107,16 @@ Concatenates all cell text across all rows."
 
 (defun gdocs-diff--run-formatting-key (run)
   "Produce a formatting fingerprint string for RUN."
-  (format "%s%s%s%s%s%s"
+  (format "%s%s%s%s%s%s%s"
           (if (plist-get run :bold) "B" "")
           (if (plist-get run :italic) "I" "")
           (if (plist-get run :underline) "U" "")
           (if (plist-get run :strikethrough) "S" "")
           (if (plist-get run :code) "C" "")
-          (if (plist-get run :link) (format "L(%s)" (plist-get run :link)) "")))
+          (if (plist-get run :link) (format "L(%s)" (plist-get run :link)) "")
+          (if (plist-get run :footnote-label)
+              (format "F(%s)" (plist-get run :footnote-label))
+            "")))
 
 (defun gdocs-diff--list-key (list-info)
   "Produce a key fragment for LIST-INFO, or empty string if nil."
@@ -562,11 +565,14 @@ followed by per-run style requests for the new formatting."
                       (gdocs-convert--make-text-style-reset-request
                        start reset-end)))
          (runs (plist-get new-elem :contents))
-         (style-reqs (gdocs-convert--make-text-style-requests runs start)))
+         (style-reqs (gdocs-convert--make-text-style-requests runs start))
+         (footnote-reqs
+          (gdocs-convert--make-footnote-reference-requests runs start)))
     (list :delete-reqs nil
           :insert-reqs nil
           :style-reqs (append (when reset-req (list reset-req))
-                              style-reqs))))
+                              style-reqs
+                              footnote-reqs))))
 
 (defun gdocs-diff--content-modification (old-elem new-elem range)
   "Generate delete+insert requests for a content change.
@@ -753,12 +759,15 @@ tokens so that comment anchors on unchanged text survive."
            (para-end (+ start new-text-len 1))
            (style-reqs (gdocs-convert--make-paragraph-style-requests
                         new-elem start para-end))
-           (run-reqs (gdocs-convert--make-text-style-requests
-                      (plist-get new-elem :contents) start))
+           (runs (plist-get new-elem :contents))
+           (run-reqs (gdocs-convert--make-text-style-requests runs start))
            (list-reqs (gdocs-convert--make-list-requests
-                       new-elem start para-end)))
+                       new-elem start para-end))
+           (footnote-reqs
+            (gdocs-convert--make-footnote-reference-requests runs start)))
       (list :delete-reqs delete-reqs
-            :insert-reqs (append insert-reqs style-reqs run-reqs list-reqs)
+            :insert-reqs (append insert-reqs style-reqs run-reqs list-reqs
+                                 footnote-reqs)
             :style-reqs nil))))
 
 (defun gdocs-diff--deleted-token-ranges (old-tokens old-kept start)
