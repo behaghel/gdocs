@@ -2908,9 +2908,11 @@ RANGES provides the document extent.  Returns the augmented gap list."
 START and END define the text range in the document.
 ELEMENT's :gdocs-marker is a list of marker plists.
 String-valued :data is included in the named range name so it
-survives a round-trip through Google Docs."
+survives a round-trip through Google Docs.  Empty paragraphs are marked by
+covering their newline, because Google Docs rejects zero-length named ranges."
   (let ((marker (plist-get element :gdocs-marker))
-        (id (plist-get element :id)))
+        (id (plist-get element :id))
+        (range-end (max (1+ start) (1- end))))
     (when (and marker id)
       (mapcar (lambda (m)
                 (let* ((marker-type (plist-get m :type))
@@ -2923,7 +2925,7 @@ survives a round-trip through Google Docs."
                   `((createNamedRange
                      . ((name . ,name)
                         (range . ((startIndex . ,start)
-                                  (endIndex . ,(1- end)))))))))
+                                  (endIndex . ,range-end))))))))
               marker))))
 
 ;; ---------------------------------------------------------------------------

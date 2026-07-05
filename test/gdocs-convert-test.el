@@ -1578,6 +1578,22 @@
                           (fields . "weightedFontFamily"))))
                     requests))))
 
+(ert-deftest gdocs-convert-test-src-block-empty-line-marker-has-nonempty-range ()
+  "Source block empty-line markers cover the newline, not a zero-length range."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+begin_src emacs-lisp\n(message \"hello\")\n\n(+ 1 2)\n#+end_src"))
+         (requests (gdocs-convert-ir-to-docs-requests ir))
+         (marker-requests
+          (cl-remove-if-not (lambda (request)
+                              (alist-get 'createNamedRange request))
+                            requests)))
+    (dolist (request marker-requests)
+      (let* ((range (alist-get 'range
+                               (alist-get 'createNamedRange request)))
+             (start (alist-get 'startIndex range))
+             (end (alist-get 'endIndex range)))
+        (should (> end start))))))
+
 (ert-deftest gdocs-convert-test-src-block-requests-mark-language ()
   "Source block requests create a marker named range with the language."
   (let* ((ir (gdocs-convert-org-string-to-ir
