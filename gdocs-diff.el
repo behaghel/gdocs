@@ -99,8 +99,9 @@ Concatenates all cell text across all rows."
 
 (defun gdocs-diff--source-block-key (element)
   "Compute a content key for a source-block ELEMENT."
-  (format "source-block:%s:%s"
+  (format "source-block:%s:%s:%s"
           (or (plist-get element :language) "")
+          (or (plist-get element :style-revision) "")
           (s-join "\n" (plist-get element :lines))))
 
 (defun gdocs-diff--image-key (element)

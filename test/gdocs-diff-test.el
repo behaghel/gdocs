@@ -99,6 +99,18 @@ ROWS is a list of lists of lists of run plists."
 
 ;;;; Element key tests
 
+(ert-deftest gdocs-diff-test-source-block-key-includes-style-revision ()
+  "Source block style revisions can force block replacement."
+  (let ((unstyled (list :type 'source-block
+                        :language "emacs-lisp"
+                        :lines '("(+ 1 2)")))
+        (styled (list :type 'source-block
+                      :language "emacs-lisp"
+                      :style-revision "test-revision"
+                      :lines '("(+ 1 2)"))))
+    (should-not (equal (gdocs-diff--element-key unstyled)
+                       (gdocs-diff--element-key styled)))))
+
 (ert-deftest gdocs-diff-test-logical-paragraph-style-change-emits-style-request ()
   "Changing only logical paragraph style emits paragraph style requests."
   (let* ((old (list :type 'paragraph
