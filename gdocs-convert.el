@@ -83,6 +83,14 @@ IR-to-org conversion to resolve heading anchors back to text.")
      :text (:monospace t))
     (gdocs-source-block
      :parent normal)
+    (gdocs-source-block-first
+     :parent normal)
+    (gdocs-source-block-line
+     :parent normal)
+    (gdocs-source-block-last
+     :parent normal)
+    (gdocs-source-block-single
+     :parent normal)
     (gdocs-image-caption
      :parent normal))
   "Logical style definitions used when rendering IR to Google Docs.
@@ -1000,22 +1008,39 @@ Skips horizontal rule rows."
 ;; ---------------------------------------------------------------------------
 ;;; Src blocks / keywords -> IR (org-only markers)
 
+(defun gdocs-convert--block-line-style-name (base-style index count)
+  "Return logical block-line style from BASE-STYLE, INDEX, and COUNT.
+The naming convention is shared by typographic block renderers:
+BASE-STYLE-first, BASE-STYLE-line, BASE-STYLE-last, and BASE-STYLE-single."
+  (intern (format "%s-%s"
+                  base-style
+                  (cond
+                   ((= count 1) "single")
+                   ((= index 0) "first")
+                   ((= index (1- count)) "last")
+                   (t "line")))))
+
 (defun gdocs-convert--src-block-to-ir (src-block)
   "Convert a SRC-BLOCK to IR paragraphs with markers for round-trip."
   (let* ((language (or (org-element-property :language src-block) ""))
          (value (s-trim-right (or (org-element-property :value src-block) "")))
          (lines (split-string value "\n"))
-         (block-id (gdocs-convert--next-id)))
+         (count (length lines))
+         (block-id (gdocs-convert--next-id))
+         (index 0))
     (mapcar (lambda (line)
-              (list :type 'paragraph
-                    :style 'normal
-                    :style-name 'gdocs-source-block
-                    :contents (list (gdocs-convert--make-run
-                                     line
-                                     (gdocs-convert--code-props)))
-                    :gdocs-marker (list (list :type 'src-block
-                                              :data language))
-                    :id block-id))
+              (prog1
+                  (list :type 'paragraph
+                        :style 'normal
+                        :style-name (gdocs-convert--block-line-style-name
+                                     'gdocs-source-block index count)
+                        :contents (list (gdocs-convert--make-run
+                                         line
+                                         (gdocs-convert--code-props)))
+                        :gdocs-marker (list (list :type 'src-block
+                                                  :data language))
+                        :id block-id)
+                (cl-incf index)))
             lines)))
 
 (defun gdocs-convert--lines-to-monospace-ir (lines)

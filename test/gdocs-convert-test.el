@@ -1538,7 +1538,7 @@
          (marker (plist-get elem :gdocs-marker)))
     (should (= (length ir) 1))
     (should (eq (plist-get elem :type) 'paragraph))
-    (should (eq (plist-get elem :style-name) 'gdocs-source-block))
+    (should (eq (plist-get elem :style-name) 'gdocs-source-block-single))
     ;; The contents should have a code run with the source text
     (should (plist-get (car contents) :code))
     (should (member 'gdocs-code (plist-get (car contents) :style-names)))
@@ -1550,6 +1550,17 @@
     (should (string= (plist-get (car marker) :data)
                      "emacs-lisp"))))
 
+(ert-deftest gdocs-convert-test-block-line-style-name-is-generic ()
+  "Typographic block line roles use a reusable naming convention."
+  (should (eq (gdocs-convert--block-line-style-name 'gdocs-source-block 0 1)
+              'gdocs-source-block-single))
+  (should (eq (gdocs-convert--block-line-style-name 'gdocs-quote 0 3)
+              'gdocs-quote-first))
+  (should (eq (gdocs-convert--block-line-style-name 'gdocs-quote 1 3)
+              'gdocs-quote-line))
+  (should (eq (gdocs-convert--block-line-style-name 'gdocs-quote 2 3)
+              'gdocs-quote-last)))
+
 (ert-deftest gdocs-convert-test-src-block-preserves-blank-lines ()
   "Source block blank lines become explicit styled paragraphs."
   (let* ((ir (gdocs-convert-org-string-to-ir
@@ -1557,9 +1568,16 @@
          (texts (mapcar (lambda (element)
                           (gdocs-convert--plain-text element))
                         ir))
+         (style-names (mapcar (lambda (element)
+                                (plist-get element :style-name))
+                              ir))
          (org (gdocs-convert-ir-to-org ir)))
     (should (= (length ir) 3))
     (should (equal texts '("(message \"hello\")" "" "(+ 1 2)")))
+    (should (equal style-names
+                   '(gdocs-source-block-first
+                     gdocs-source-block-line
+                     gdocs-source-block-last)))
     (should (string= (s-trim org)
                      "#+BEGIN_SRC emacs-lisp\n(message \"hello\")\n\n(+ 1 2)\n#+END_SRC"))))
 
