@@ -82,6 +82,8 @@ IR-to-org conversion to resolve heading anchors back to text.")
   '((gdocs-code
      :text (:monospace t))
     (gdocs-source-block
+     :parent normal)
+    (gdocs-image-caption
      :parent normal))
   "Logical style definitions used when rendering IR to Google Docs.
 Definitions deliberately use logical names rather than treating Google Docs
@@ -89,6 +91,15 @@ properties as semantics.  The converter resolves these definitions late, when
 building batchUpdate requests.  Adapters and users may override this variable to
 change visual output without changing Org/IR semantics."
   :type '(alist :key-type symbol :value-type plist)
+  :group 'gdocs)
+
+(defcustom gdocs-style-base-font-size 11
+  "Fallback base font size used for logical `:font-scale' resolution.
+The Google Docs API exposes named styles when reading a document, but request
+conversion can also run without a document JSON context.  This value keeps the
+style resolver deterministic until a caller supplies document-derived style
+context."
+  :type 'number
   :group 'gdocs)
 
 (defvar gdocs-convert-footnote-reference-handler nil
@@ -2299,15 +2310,31 @@ preservation."
              (caption-req (when caption-text
                             (gdocs-convert--make-insert-text-request
                              caption-text caption-start)))
+             (caption-style-reqs
+              (when caption-text
+                (gdocs-convert--caption-style-requests
+                 caption-start caption-end caption-text-start caption-text-end)))
              (caption-marker-reqs
               (when caption-text
                 (gdocs-convert--make-image-caption-marker-requests
                  element caption-text-start caption-text-end))))
         (list :requests (append (list image-req)
                                 (when caption-req (list caption-req))
+                                caption-style-reqs
                                 caption-marker-reqs)
               :index (+ index 1 caption-len)))
     (list :requests nil :index index)))
+
+(defun gdocs-convert--caption-style-requests (paragraph-start paragraph-end
+                                                text-start text-end)
+  "Create logical image-caption style requests for caption ranges."
+  (let ((paragraph-request
+         (gdocs-convert--logical-style-paragraph-request
+          'gdocs-image-caption paragraph-start paragraph-end))
+        (text-request
+         (gdocs-convert--logical-style-text-request
+          'gdocs-image-caption text-start text-end)))
+    (delq nil (list paragraph-request text-request))))
 
 (defun gdocs-convert--make-image-caption-marker-requests (element text-start text-end)
   "Create semantic marker requests for image caption ELEMENT.
@@ -2383,16 +2410,23 @@ clear any inherited formatting before per-run styles are applied."
                               ('collapse-lists "COLLAPSE_LISTS")
                               (_ nil)))
             style))
+    (when-let ((space-above (plist-get style-plist :space-above)))
+      (push `(spaceAbove . ((magnitude . ,space-above) (unit . "PT"))) style))
+    (when-let ((space-below (plist-get style-plist :space-below)))
+      (push `(spaceBelow . ((magnitude . ,space-below) (unit . "PT"))) style))
+    (when-let ((background (plist-get style-plist :background-color)))
+      (push `(shading . ((backgroundColor . ,(gdocs-convert--hex-to-color
+                                              background))))
+            style))
     (delq nil style)))
 
 (defun gdocs-convert--style-fields-mask-from-alist (style)
   "Return comma-separated fields mask for STYLE alist."
   (s-join "," (mapcar (lambda (pair) (symbol-name (car pair))) style)))
 
-(defun gdocs-convert--logical-paragraph-style-request (element start end)
-  "Return logical style paragraph request for ELEMENT between START and END."
-  (when-let* ((style-name (plist-get element :style-name))
-              (definition (gdocs-convert--style-definition style-name)))
+(defun gdocs-convert--logical-style-paragraph-request (style-name start end)
+  "Return logical STYLE-NAME paragraph request between START and END."
+  (when-let* ((definition (gdocs-convert--style-definition style-name)))
     (let* ((parent (plist-get definition :parent))
            (paragraph-style (gdocs-convert--logical-paragraph-style-to-docs
                              (plist-get definition :paragraph)))
@@ -2407,6 +2441,11 @@ clear any inherited formatting before per-run styles are applied."
                         (endIndex . ,(1- end))))
               (fields . ,(gdocs-convert--style-fields-mask-from-alist
                           style)))))))))
+
+(defun gdocs-convert--logical-paragraph-style-request (element start end)
+  "Return logical style paragraph request for ELEMENT between START and END."
+  (when-let* ((style-name (plist-get element :style-name)))
+    (gdocs-convert--logical-style-paragraph-request style-name start end)))
 
 (defun gdocs-convert--make-paragraph-style-requests (element start end)
   "Create updateParagraphStyle requests for ELEMENT from START to END."
@@ -2537,17 +2576,34 @@ body are reset to their defaults by the Google Docs API."
       (push `(foregroundColor . ,(gdocs-convert--hex-to-color fg)) style))
     (when-let ((bg (plist-get style-plist :background-color)))
       (push `(backgroundColor . ,(gdocs-convert--hex-to-color bg)) style))
+    (when-let ((scale (plist-get style-plist :font-scale)))
+      (push `(fontSize . ((magnitude . ,(* gdocs-style-base-font-size scale))
+                          (unit . "PT")))
+            style))
     (when-let ((size (plist-get style-plist :font-size)))
       (push `(fontSize . ((magnitude . ,size) (unit . "PT"))) style))
     style))
 
+(defun gdocs-convert--logical-style-text-fields (style-name)
+  "Return Google Docs TextStyle fields for logical STYLE-NAME."
+  (gdocs-convert--logical-text-style-to-docs
+   (plist-get (gdocs-convert--style-definition style-name) :text)))
+
+(defun gdocs-convert--logical-style-text-request (style-name start end)
+  "Return logical STYLE-NAME text style request from START to END."
+  (let ((style (gdocs-convert--logical-style-text-fields style-name)))
+    (when style
+      `((updateTextStyle
+         . ((textStyle . ,style)
+            (range . ((startIndex . ,start)
+                      (endIndex . ,end)))
+            (fields . ,(gdocs-convert--style-fields-mask-from-alist
+                        style))))))))
+
 (defun gdocs-convert--run-logical-style (run)
   "Return Google Docs TextStyle fields for RUN logical styles."
   (apply #'append
-         (mapcar (lambda (style-name)
-                   (gdocs-convert--logical-text-style-to-docs
-                    (plist-get (gdocs-convert--style-definition style-name)
-                               :text)))
+         (mapcar #'gdocs-convert--logical-style-text-fields
                  (plist-get run :style-names))))
 
 (defun gdocs-convert--run-to-docs-style (run)

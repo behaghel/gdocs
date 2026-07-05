@@ -1470,16 +1470,53 @@
                   12))
          (requests (plist-get result :requests)))
     (should (= (plist-get result :index) 27))
-    (should (equal requests
-                   '(((insertInlineImage
+    (should (member '((insertInlineImage
                        . ((uri . "https://example.invalid/logo.png")
                           (location . ((index . 12))))))
-                     ((insertText . ((text . "\nProduct logo\n")
+                    requests))
+    (should (member '((insertText . ((text . "\nProduct logo\n")
                                      (location . ((index . 13))))))
-                     ((createNamedRange
+                    requests))
+    (should (member '((updateParagraphStyle
+                       . ((paragraphStyle . ((namedStyleType . "NORMAL_TEXT")))
+                          (range . ((startIndex . 13)
+                                    (endIndex . 26)))
+                          (fields . "namedStyleType"))))
+                    requests))
+    (should (member '((createNamedRange
                        . ((name . "gdocs-org-marker:image-caption:image-14:org-image-caption")
                           (range . ((startIndex . 14)
-                                    (endIndex . 26)))))))))))
+                                    (endIndex . 26))))))
+                    requests))))
+
+(ert-deftest gdocs-convert-test-image-caption-style-policy-is-overridable ()
+  "Logical image caption style can be changed by style definitions."
+  (let* ((gdocs-style-definitions
+          '((gdocs-image-caption
+             :parent normal
+             :paragraph (:alignment center)
+             :text (:italic t :font-scale 0.8 :foreground-color "#666666"))))
+         (result (gdocs-convert--image-to-requests
+                  (list :type 'image
+                        :uri "https://example.invalid/logo.png"
+                        :caption "Product logo")
+                  12))
+         (requests (plist-get result :requests)))
+    (should (member '((updateParagraphStyle
+                       . ((paragraphStyle . ((namedStyleType . "NORMAL_TEXT")
+                                             (alignment . "CENTER")))
+                          (range . ((startIndex . 13)
+                                    (endIndex . 26)))
+                          (fields . "namedStyleType,alignment"))))
+                    requests))
+    (should (seq-some
+             (lambda (request)
+               (let ((style (alist-get 'textStyle
+                                        (alist-get 'updateTextStyle request))))
+                 (and (equal (alist-get 'italic style) t)
+                      (alist-get 'fontSize style)
+                      (alist-get 'foregroundColor style))))
+             requests))))
 
 (ert-deftest gdocs-convert-test-image-ir-without-uri-noops ()
   "Image IR without a fetchable URI is left to adapter preflight."
