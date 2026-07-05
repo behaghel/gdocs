@@ -462,6 +462,32 @@
     (should (equal (gdocs-convert-ir-to-org ir)
                    "#+CAPTION: Hubert banner\n[[https://example.invalid/logo.png]]\n"))))
 
+(ert-deftest gdocs-convert-test-docs-json-marked-src-block ()
+  "Marked source-block paragraphs pull back to Org source blocks."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 10)
+                    (paragraph
+                     . ((elements
+                         . ,(vector '((textRun
+                                      . ((content . "print(1)\n")
+                                         (textStyle
+                                          . ((weightedFontFamily
+                                              . ((fontFamily . "Courier New"))))))))))
+                        (paragraphStyle
+                         . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (namedRanges
+                  . ((gdocs-org-marker:src-block:elem-001:python
+                      . ((namedRanges
+                          . ,(vector `((ranges
+                                        . ,(vector '((startIndex . 1)
+                                                     (endIndex . 9)))))))))))))
+         (ir (gdocs-convert-docs-json-to-ir json))
+         (org (gdocs-convert-ir-to-org ir)))
+    (should (string= (s-trim org)
+                     "#+BEGIN_SRC python\nprint(1)\n#+END_SRC"))))
+
 (ert-deftest gdocs-convert-test-docs-json-native-footnotes ()
   "Native Google Docs footnotes convert to Org references and definitions."
   (let* ((body-elements
@@ -657,7 +683,7 @@
     (should marker)
     (should (listp marker))
     (should (eq (plist-get (car marker) :type) 'src-block))
-    (should (string= (plist-get (plist-get (car marker) :data) :language) "python"))))
+    (should (string= (plist-get (car marker) :data) "python"))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Priority markers
@@ -1482,8 +1508,19 @@
     ;; The marker should record it as a src-block with the language
     (should marker)
     (should (eq (plist-get (car marker) :type) 'src-block))
-    (should (string= (plist-get (plist-get (car marker) :data) :language)
-                      "emacs-lisp"))))
+    (should (string= (plist-get (car marker) :data)
+                     "emacs-lisp"))))
+
+(ert-deftest gdocs-convert-test-src-block-requests-mark-language ()
+  "Source block requests create a marker named range with the language."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+begin_src emacs-lisp\n(message \"hello\")\n#+end_src"))
+         (requests (gdocs-convert-ir-to-docs-requests ir)))
+    (should (member '((createNamedRange
+                       . ((name . "gdocs-org-marker:src-block:elem-001:emacs-lisp")
+                          (range . ((startIndex . 1)
+                                    (endIndex . 18))))))
+                    requests))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Round-trip stability for complex documents

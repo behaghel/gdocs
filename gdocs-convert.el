@@ -978,8 +978,7 @@ Skips horizontal rule rows."
           :contents (list (gdocs-convert--make-run display-text
                                                    (list :code t)))
           :gdocs-marker (list (list :type 'src-block
-                                    :data (list :language language
-                                                :value value)))
+                                    :data language))
           :id (gdocs-convert--next-id))))
 
 (defun gdocs-convert--lines-to-monospace-ir (lines)
@@ -1284,7 +1283,7 @@ PREV-TYPE is the :type of the previous element."
      ((eq style 'quote)
       (format "#+BEGIN_QUOTE\n%s\n#+END_QUOTE" text))
      ((when-let* ((data (gdocs-convert--extract-marker-field marker 'src-block)))
-        (gdocs-convert--format-src-block data)))
+        (gdocs-convert--format-src-block data element)))
      ((when-let* ((data (gdocs-convert--extract-marker-field marker 'keyword)))
         (format "#+%s: %s" (plist-get data :key) (plist-get data :value))))
      ((gdocs-convert--extract-marker-field marker 'verse-block)
@@ -1365,10 +1364,15 @@ indent continuation lines to keep them inside the list item."
                 "- [X] "
               "- [ ] "))))
 
-(defun gdocs-convert--format-src-block (data)
-  "Format a src block from its marker DATA plist."
-  (let* ((language (plist-get data :language))
-         (value (plist-get data :value)))
+(defun gdocs-convert--format-src-block (data element)
+  "Format a src block from marker DATA and paragraph ELEMENT."
+  (let* ((legacy-data-p (listp data))
+         (language (if legacy-data-p
+                       (plist-get data :language)
+                     data))
+         (value (if legacy-data-p
+                    (plist-get data :value)
+                  (concat (gdocs-convert--plain-text element) "\n"))))
     (concat "#+BEGIN_SRC" (if (s-present? language)
                               (concat " " language)
                             "")
