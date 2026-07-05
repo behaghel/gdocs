@@ -2603,6 +2603,11 @@ clear any inherited formatting before per-run styles are applied."
       (push `(spaceBelow . ((magnitude . ,space-below) (unit . "PT"))) style))
     (when-let ((indent-start (plist-get style-plist :indent-start)))
       (push `(indentStart . ((magnitude . ,indent-start) (unit . "PT"))) style))
+    (when (plist-member style-plist :indent-first-line)
+      (push `(indentFirstLine
+              . ((magnitude . ,(plist-get style-plist :indent-first-line))
+                 (unit . "PT")))
+            style))
     (when-let ((indent-end (plist-get style-plist :indent-end)))
       (push `(indentEnd . ((magnitude . ,indent-end) (unit . "PT"))) style))
     (when-let ((background (plist-get style-plist :background-color)))

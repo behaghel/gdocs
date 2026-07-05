@@ -1595,7 +1595,12 @@
 (ert-deftest gdocs-convert-test-quote-block-requests-use-line-role-styles ()
   "Quote block requests use semantic markers and line-role styles."
   (let* ((gdocs-style-definitions
-          '((gdocs-quote-block-first :parent normal :paragraph (:space-above 6))
+          '((gdocs-quote-block-first
+             :parent normal
+             :paragraph (:space-above 6
+                         :indent-start 36
+                         :indent-first-line 0
+                         :background-color "#f5f5f5"))
             (gdocs-quote-block-last :parent normal :paragraph (:space-below 6))))
          (ir (gdocs-convert-org-string-to-ir
               "#+BEGIN_QUOTE\nLine one\n\nLine two\n#+END_QUOTE"))
@@ -1609,7 +1614,7 @@
                         (let ((update (alist-get 'updateParagraphStyle request)))
                           (and update
                                (equal (alist-get 'fields update)
-                                      "namedStyleType,spaceAbove"))))
+                                      "namedStyleType,shading.backgroundColor,indentFirstLine,indentStart,spaceAbove"))))
                       requests))
     (should (seq-some (lambda (request)
                         (let ((update (alist-get 'updateParagraphStyle request)))
