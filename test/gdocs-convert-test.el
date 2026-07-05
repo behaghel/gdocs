@@ -1501,8 +1501,10 @@
          (marker (plist-get elem :gdocs-marker)))
     (should (= (length ir) 1))
     (should (eq (plist-get elem :type) 'paragraph))
+    (should (eq (plist-get elem :style-name) 'gdocs-source-block))
     ;; The contents should have a code run with the source text
     (should (plist-get (car contents) :code))
+    (should (member 'gdocs-code (plist-get (car contents) :style-names)))
     (should (string= (plist-get (car contents) :text)
                       "(message \"hello\")"))
     ;; The marker should record it as a src-block with the language
@@ -1510,6 +1512,21 @@
     (should (eq (plist-get (car marker) :type) 'src-block))
     (should (string= (plist-get (car marker) :data)
                      "emacs-lisp"))))
+
+(ert-deftest gdocs-convert-test-code-style-policy-is-overridable ()
+  "Logical code style can be changed without changing code semantics."
+  (let* ((gdocs-style-definitions
+          '((gdocs-code :text (:font-family "Roboto Mono"))))
+         (ir (gdocs-convert-org-string-to-ir "~code~"))
+         (requests (gdocs-convert-ir-to-docs-requests ir)))
+    (should (member '((updateTextStyle
+                       . ((textStyle
+                           . ((weightedFontFamily
+                               . ((fontFamily . "Roboto Mono")))))
+                          (range . ((startIndex . 1)
+                                    (endIndex . 5)))
+                          (fields . "weightedFontFamily"))))
+                    requests))))
 
 (ert-deftest gdocs-convert-test-src-block-requests-mark-language ()
   "Source block requests create a marker named range with the language."

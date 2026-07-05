@@ -78,6 +78,19 @@ Used during org-to-IR link resolution to append heading anchors.")
 Reverse mapping of `gdocs-convert--heading-cache', used during
 IR-to-org conversion to resolve heading anchors back to text.")
 
+(defcustom gdocs-style-definitions
+  '((gdocs-code
+     :text (:monospace t))
+    (gdocs-source-block
+     :parent normal))
+  "Logical style definitions used when rendering IR to Google Docs.
+Definitions deliberately use logical names rather than treating Google Docs
+properties as semantics.  The converter resolves these definitions late, when
+building batchUpdate requests.  Adapters and users may override this variable to
+change visual output without changing Org/IR semantics."
+  :type '(alist :key-type symbol :value-type plist)
+  :group 'gdocs)
+
 (defvar gdocs-convert-footnote-reference-handler nil
   "Function called for each semantic footnote reference during request generation.
 When non-nil, the function receives two arguments: the zero-width footnote RUN
@@ -557,7 +570,7 @@ Google Docs representation of monospace blocks."
               (list :type 'paragraph
                     :style 'normal
                     :contents (list (gdocs-convert--make-run
-                                    line (list :code t)))
+                                    line (gdocs-convert--code-props)))
                     :id (gdocs-convert--next-id)))
             lines)))
 
@@ -680,11 +693,18 @@ keyword to set (e.g. :bold)."
                           (gdocs-convert--object-to-runs child new-props))))
       runs)))
 
-(defun gdocs-convert--code-object-to-run (object _inherited-props)
+(defun gdocs-convert--code-props (&optional inherited-props)
+  "Return code formatting props derived from INHERITED-PROPS."
+  (let ((props (copy-sequence inherited-props)))
+    (setq props (plist-put props :code t))
+    (plist-put props :style-names
+               (cons 'gdocs-code (plist-get props :style-names)))))
+
+(defun gdocs-convert--code-object-to-run (object inherited-props)
   "Convert a code or verbatim OBJECT to a text run with :code t.
 Post-blank whitespace is handled by `gdocs-convert--object-to-runs'."
   (let* ((value (org-element-property :value object))
-         (new-props (list :code t)))
+         (new-props (gdocs-convert--code-props inherited-props)))
     (list (gdocs-convert--make-run value new-props))))
 
 (defun gdocs-convert--link-to-runs (link inherited-props)
@@ -836,14 +856,14 @@ INHERITED-PROPS carries parent formatting."
   "Convert a LATEX-FRAGMENT OBJECT to a code text run.
 INHERITED-PROPS carries parent formatting."
   (let* ((value (org-element-property :value object))
-         (new-props (plist-put (copy-sequence inherited-props) :code t)))
+         (new-props (gdocs-convert--code-props inherited-props)))
     (list (gdocs-convert--make-run value new-props))))
 
 (defun gdocs-convert--inline-src-block-to-runs (object inherited-props)
   "Convert an INLINE-SRC-BLOCK OBJECT to a code text run.
 INHERITED-PROPS carries parent formatting."
   (let* ((value (org-element-property :value object))
-         (new-props (plist-put (copy-sequence inherited-props) :code t)))
+         (new-props (gdocs-convert--code-props inherited-props)))
     (list (gdocs-convert--make-run value new-props))))
 
 (defun gdocs-convert--footnote-reference-to-runs (object inherited-props)
@@ -869,6 +889,7 @@ INHERITED-PROPS carries parent formatting."
         :underline (plist-get props :underline)
         :strikethrough (plist-get props :strikethrough)
         :code (plist-get props :code)
+        :style-names (plist-get props :style-names)
         :link (plist-get props :link)
         :subscript (plist-get props :subscript)
         :superscript (plist-get props :superscript)
@@ -975,8 +996,10 @@ Skips horizontal rule rows."
          (display-text (s-trim-right (or value ""))))
     (list :type 'paragraph
           :style 'normal
-          :contents (list (gdocs-convert--make-run display-text
-                                                   (list :code t)))
+          :style-name 'gdocs-source-block
+          :contents (list (gdocs-convert--make-run
+                           display-text
+                           (gdocs-convert--code-props)))
           :gdocs-marker (list (list :type 'src-block
                                     :data language))
           :id (gdocs-convert--next-id))))
@@ -989,7 +1012,7 @@ the Google Docs representation."
             (list :type 'paragraph
                   :style 'normal
                   :contents (list (gdocs-convert--make-run
-                                  line (list :code t)))
+                                  line (gdocs-convert--code-props)))
                   :id (gdocs-convert--next-id)))
           lines))
 
@@ -1087,7 +1110,7 @@ the Google Docs representation."
               (list :type 'paragraph
                     :style 'normal
                     :contents (list (gdocs-convert--make-run
-                                    line (list :code t)))
+                                    line (gdocs-convert--code-props)))
                     :gdocs-marker (list (list :type 'latex-environment
                                               :data value))
                     :id (gdocs-convert--next-id)))
@@ -2349,11 +2372,49 @@ clear any inherited formatting before per-run styles are applied."
   `((insertText . ((text . ,text)
                    (location . ((index . ,index)))))))
 
+(defun gdocs-convert--logical-paragraph-style-to-docs (style-plist)
+  "Resolve logical paragraph STYLE-PLIST to Google Docs ParagraphStyle fields."
+  (let ((style nil))
+    (when-let ((alignment (plist-get style-plist :alignment)))
+      (push `(alignment . ,(gdocs-convert--ir-alignment-to-docs alignment)) style))
+    (when-let ((spacing-mode (plist-get style-plist :spacing-mode)))
+      (push `(spacingMode . ,(pcase spacing-mode
+                              ('never-collapse "NEVER_COLLAPSE")
+                              ('collapse-lists "COLLAPSE_LISTS")
+                              (_ nil)))
+            style))
+    (delq nil style)))
+
+(defun gdocs-convert--style-fields-mask-from-alist (style)
+  "Return comma-separated fields mask for STYLE alist."
+  (s-join "," (mapcar (lambda (pair) (symbol-name (car pair))) style)))
+
+(defun gdocs-convert--logical-paragraph-style-request (element start end)
+  "Return logical style paragraph request for ELEMENT between START and END."
+  (when-let* ((style-name (plist-get element :style-name))
+              (definition (gdocs-convert--style-definition style-name)))
+    (let* ((parent (plist-get definition :parent))
+           (paragraph-style (gdocs-convert--logical-paragraph-style-to-docs
+                             (plist-get definition :paragraph)))
+           (named-style (and parent (gdocs-convert--ir-style-to-docs parent)))
+           (style (append (when named-style
+                            `((namedStyleType . ,named-style)))
+                          paragraph-style)))
+      (when style
+        `((updateParagraphStyle
+           . ((paragraphStyle . ,style)
+              (range . ((startIndex . ,start)
+                        (endIndex . ,(1- end))))
+              (fields . ,(gdocs-convert--style-fields-mask-from-alist
+                          style)))))))))
+
 (defun gdocs-convert--make-paragraph-style-requests (element start end)
   "Create updateParagraphStyle requests for ELEMENT from START to END."
   (let* ((style (plist-get element :style))
          (alignment (plist-get element :alignment))
          (named-style (gdocs-convert--ir-style-to-docs style))
+         (logical-req (gdocs-convert--logical-paragraph-style-request
+                       element start end))
          (requests nil))
     (when named-style
       (push `((updateParagraphStyle
@@ -2371,6 +2432,8 @@ clear any inherited formatting before per-run styles are applied."
                                 (endIndex . ,(1- end))))
                       (fields . "alignment"))))
                 requests))))
+    (when logical-req
+      (push logical-req requests))
     (nreverse requests)))
 
 (defun gdocs-convert--ir-alignment-to-docs (alignment)
@@ -2451,14 +2514,49 @@ body are reset to their defaults by the Google Docs API."
                   (endIndex . ,end)))
         (fields . "bold,italic,underline,strikethrough,weightedFontFamily,baselineOffset,foregroundColor,backgroundColor")))))
 
+(defun gdocs-convert--style-definition (style-name)
+  "Return logical style definition for STYLE-NAME."
+  (cdr (assq style-name gdocs-style-definitions)))
+
+(defun gdocs-convert--logical-text-style-to-docs (style-plist)
+  "Resolve logical text STYLE-PLIST to Google Docs TextStyle fields."
+  (let ((style nil))
+    (when-let ((font-family (plist-get style-plist :font-family)))
+      (push `(weightedFontFamily . ((fontFamily . ,font-family))) style))
+    (when (plist-get style-plist :monospace)
+      (push `(weightedFontFamily
+              . ((fontFamily . ,(car gdocs-convert-monospace-font-families))))
+            style))
+    (when (plist-member style-plist :bold)
+      (push `(bold . ,(plist-get style-plist :bold)) style))
+    (when (plist-member style-plist :italic)
+      (push `(italic . ,(plist-get style-plist :italic)) style))
+    (when (plist-member style-plist :underline)
+      (push `(underline . ,(plist-get style-plist :underline)) style))
+    (when-let ((fg (plist-get style-plist :foreground-color)))
+      (push `(foregroundColor . ,(gdocs-convert--hex-to-color fg)) style))
+    (when-let ((bg (plist-get style-plist :background-color)))
+      (push `(backgroundColor . ,(gdocs-convert--hex-to-color bg)) style))
+    (when-let ((size (plist-get style-plist :font-size)))
+      (push `(fontSize . ((magnitude . ,size) (unit . "PT"))) style))
+    style))
+
+(defun gdocs-convert--run-logical-style (run)
+  "Return Google Docs TextStyle fields for RUN logical styles."
+  (apply #'append
+         (mapcar (lambda (style-name)
+                   (gdocs-convert--logical-text-style-to-docs
+                    (plist-get (gdocs-convert--style-definition style-name)
+                               :text)))
+                 (plist-get run :style-names))))
+
 (defun gdocs-convert--run-to-docs-style (run)
   "Convert formatting of a text RUN to a Google Docs textStyle alist.
 Returns nil if no formatting is applied."
   (let ((style nil))
     (when (plist-get run :link)
       (push `(link . ((url . ,(plist-get run :link)))) style))
-    (when (plist-get run :code)
-      (push `(weightedFontFamily . ((fontFamily . ,(car gdocs-convert-monospace-font-families)))) style))
+    (setq style (append (gdocs-convert--run-logical-style run) style))
     (when (plist-get run :strikethrough)
       (push `(strikethrough . t) style))
     (when (plist-get run :underline)
