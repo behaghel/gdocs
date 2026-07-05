@@ -91,6 +91,16 @@ IR-to-org conversion to resolve heading anchors back to text.")
      :parent normal)
     (gdocs-source-block-single
      :parent normal)
+    (gdocs-quote-block
+     :parent normal)
+    (gdocs-quote-block-first
+     :parent normal)
+    (gdocs-quote-block-line
+     :parent normal)
+    (gdocs-quote-block-last
+     :parent normal)
+    (gdocs-quote-block-single
+     :parent normal)
     (gdocs-image-caption
      :parent normal))
   "Logical style definitions used when rendering IR to Google Docs.
@@ -989,20 +999,18 @@ Skips horizontal rule rows."
 ;;; Quote blocks -> IR
 
 (defun gdocs-convert--quote-block-to-ir (quote-block)
-  "Convert a QUOTE-BLOCK element to an IR element."
-  (let* ((paragraphs (org-element-map quote-block 'paragraph
-                       #'identity))
-         (all-runs nil))
-    (dolist (para paragraphs)
-      (when all-runs
-        (setq all-runs (append all-runs
-                               (list (gdocs-convert--make-plain-run "\n")))))
-      (let ((runs (gdocs-convert--objects-to-runs
-                   (org-element-contents para))))
-        (setq all-runs (append all-runs runs))))
-    (list :type 'paragraph
-          :style 'quote
-          :contents (gdocs-convert--trim-runs all-runs)
+  "Convert a QUOTE-BLOCK element to semantic quote-block IR."
+  (let ((paragraphs nil))
+    (org-element-map quote-block 'paragraph
+      (lambda (para)
+        (let* ((runs (gdocs-convert--objects-to-runs
+                      (org-element-contents para)))
+               (trimmed (gdocs-convert--trim-runs runs)))
+          (when trimmed
+            (push trimmed paragraphs)))))
+    (list :type 'quote-block
+          :paragraphs (or (nreverse paragraphs)
+                          (list (list (gdocs-convert--make-plain-run ""))))
           :id (gdocs-convert--next-id))))
 
 ;; ---------------------------------------------------------------------------
@@ -1283,6 +1291,13 @@ collected at the end under a conventional `* Footnotes' section."
   (and (eq (plist-get element :type) 'paragraph)
        (gdocs-convert--src-block-data element)))
 
+(defun gdocs-convert--quote-block-paragraph-p (element)
+  "Return non-nil if ELEMENT is a marked quote-block paragraph."
+  (and (eq (plist-get element :type) 'paragraph)
+       (seq-some (lambda (marker)
+                   (eq (plist-get marker :type) 'quote-block))
+                 (plist-get element :gdocs-marker))))
+
 (defun gdocs-convert--all-code-paragraph-p (element)
   "Return non-nil if ELEMENT is a normal paragraph with all-code runs.
 Paragraphs that carry any marker are excluded, since they
@@ -1323,7 +1338,8 @@ PREV-TYPE is the :type of the previous element."
     ('footnote (gdocs-convert--ir-footnote-to-org element))
     ('page-break "")
     ('image (gdocs-convert--ir-image-to-org element))
-    ('source-block (gdocs-convert--ir-source-block-to-org element))))
+    ('source-block (gdocs-convert--ir-source-block-to-org element))
+    ('quote-block (gdocs-convert--ir-quote-block-to-org element))))
 
 (defun gdocs-convert--ir-paragraph-to-org (element)
   "Convert an IR paragraph ELEMENT to an org string."
@@ -1621,6 +1637,13 @@ markers to produce valid emphasis markup."
    (plist-get element :language)
    (plist-get element :lines)))
 
+(defun gdocs-convert--ir-quote-block-to-org (element)
+  "Convert quote-block IR ELEMENT to Org quote block text."
+  (format "#+BEGIN_QUOTE\n%s\n#+END_QUOTE"
+          (s-join "\n\n"
+                  (mapcar #'gdocs-convert--runs-to-org
+                          (plist-get element :paragraphs)))))
+
 ;; ---------------------------------------------------------------------------
 ;;; IR table -> org
 
@@ -1700,11 +1723,12 @@ like `body', `title', `lists', and `namedRanges'."
               (plist-put ir :doc-start si)
               (plist-put ir :doc-end ei))
             (push ir result)))))
-    (let ((ir (gdocs-convert--attach-source-block-markers
-               (gdocs-convert--attach-image-caption-markers
-                (append (nreverse result)
-                        (gdocs-convert--docs-footnotes-to-ir
-                         (alist-get 'footnotes json) footnote-refs))))))
+    (let ((ir (gdocs-convert--attach-quote-block-markers
+               (gdocs-convert--attach-source-block-markers
+                (gdocs-convert--attach-image-caption-markers
+                 (append (nreverse result)
+                         (gdocs-convert--docs-footnotes-to-ir
+                          (alist-get 'footnotes json) footnote-refs)))))))
       (gdocs-convert--assign-list-counters ir)
       ir)))
 
@@ -1733,6 +1757,32 @@ like `body', `title', `lists', and `namedRanges'."
               (plist-put image :doc-end caption-end))
             (setq result (cons image (cdr result))))
         (push element result)))
+    (nreverse result)))
+
+(defun gdocs-convert--attach-quote-block-markers (ir)
+  "Group consecutive marked quote-block paragraphs in IR."
+  (let ((result nil)
+        (remaining ir))
+    (while remaining
+      (let ((element (car remaining)))
+        (if (gdocs-convert--quote-block-paragraph-p element)
+            (let ((paragraphs nil)
+                  (start (plist-get element :doc-start))
+                  end)
+              (while (and remaining
+                          (gdocs-convert--quote-block-paragraph-p
+                           (car remaining)))
+                (push (plist-get (car remaining) :contents) paragraphs)
+                (setq end (plist-get (car remaining) :doc-end))
+                (setq remaining (cdr remaining)))
+              (push (append (list :type 'quote-block
+                                  :paragraphs (nreverse paragraphs)
+                                  :id (gdocs-convert--next-id))
+                            (when start (list :doc-start start))
+                            (when end (list :doc-end end)))
+                    result))
+          (push element result)
+          (setq remaining (cdr remaining)))))
     (nreverse result)))
 
 (defun gdocs-convert--attach-source-block-markers (ir)
@@ -2349,7 +2399,39 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
     ('page-break (gdocs-convert--page-break-to-requests index))
     ('image (gdocs-convert--image-to-requests element index))
     ('source-block (gdocs-convert--source-block-to-requests element index))
+    ('quote-block (gdocs-convert--quote-block-to-requests element index))
     ('footnote (gdocs-convert--footnote-to-requests element index))))
+
+;; ---------------------------------------------------------------------------
+;;; Typographic block -> requests
+
+(defun gdocs-convert--quote-block-paragraph-element (element runs index count)
+  "Return paragraph IR for quote-block ELEMENT RUNS at INDEX of COUNT."
+  (let ((id (plist-get element :id)))
+    (list :type 'paragraph
+          :style 'normal
+          :style-name (gdocs-convert--block-line-style-name
+                       'gdocs-quote-block index count)
+          :contents runs
+          :gdocs-marker (list (list :type 'quote-block))
+          :id id)))
+
+(defun gdocs-convert--quote-block-to-requests (element index)
+  "Create paragraph requests for quote-block ELEMENT at INDEX."
+  (let* ((paragraphs (or (plist-get element :paragraphs)
+                         (list (list (gdocs-convert--make-plain-run "")))))
+         (count (length paragraphs))
+         (paragraph-index 0)
+         (requests nil)
+         (current index))
+    (dolist (runs paragraphs)
+      (let* ((paragraph (gdocs-convert--quote-block-paragraph-element
+                         element runs paragraph-index count))
+             (result (gdocs-convert--paragraph-to-requests paragraph current)))
+        (setq requests (nconc requests (plist-get result :requests)))
+        (setq current (plist-get result :index))
+        (cl-incf paragraph-index)))
+    (list :requests requests :index current)))
 
 ;; ---------------------------------------------------------------------------
 ;;; Source block -> requests
@@ -2472,6 +2554,10 @@ clear any inherited formatting before per-run styles are applied."
          (reset-req (when (> text-only-len 0)
                       (gdocs-convert--make-text-style-reset-request
                        index (+ index text-only-len))))
+         (logical-text-req
+          (when (and (plist-get element :style-name) (> text-only-len 0))
+            (gdocs-convert--logical-style-text-request
+             (plist-get element :style-name) index (+ index text-only-len))))
          (run-reqs (gdocs-convert--make-text-style-requests
                     (plist-get element :contents) index))
          (list-reqs (gdocs-convert--make-list-requests element index
@@ -2483,6 +2569,7 @@ clear any inherited formatting before per-run styles are applied."
          (all-requests (append (list insert-req)
                                style-reqs
                                (when reset-req (list reset-req))
+                               (when logical-text-req (list logical-text-req))
                                run-reqs
                                list-reqs
                                marker-reqs
@@ -2514,6 +2601,10 @@ clear any inherited formatting before per-run styles are applied."
       (push `(spaceAbove . ((magnitude . ,space-above) (unit . "PT"))) style))
     (when-let ((space-below (plist-get style-plist :space-below)))
       (push `(spaceBelow . ((magnitude . ,space-below) (unit . "PT"))) style))
+    (when-let ((indent-start (plist-get style-plist :indent-start)))
+      (push `(indentStart . ((magnitude . ,indent-start) (unit . "PT"))) style))
+    (when-let ((indent-end (plist-get style-plist :indent-end)))
+      (push `(indentEnd . ((magnitude . ,indent-end) (unit . "PT"))) style))
     (when-let ((background (plist-get style-plist :background-color)))
       (push `(shading . ((backgroundColor . ,(gdocs-convert--hex-to-color
                                               background))))

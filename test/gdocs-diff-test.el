@@ -111,6 +111,18 @@ ROWS is a list of lists of lists of run plists."
     (should-not (equal (gdocs-diff--element-key unstyled)
                        (gdocs-diff--element-key styled)))))
 
+(ert-deftest gdocs-diff-test-quote-block-key-includes-style-revision ()
+  "Quote block style revisions can force block replacement."
+  (let ((unstyled (list :type 'quote-block
+                        :paragraphs (list (list (gdocs-convert--make-plain-run
+                                                 "quoted")))))
+        (styled (list :type 'quote-block
+                      :style-revision "test-revision"
+                      :paragraphs (list (list (gdocs-convert--make-plain-run
+                                               "quoted"))))))
+    (should-not (equal (gdocs-diff--element-key unstyled)
+                       (gdocs-diff--element-key styled)))))
+
 (ert-deftest gdocs-diff-test-logical-paragraph-style-change-emits-style-request ()
   "Changing only logical paragraph style emits paragraph style requests."
   (let* ((old (list :type 'paragraph

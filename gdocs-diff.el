@@ -74,6 +74,7 @@ identical keys."
     ('page-break "page-break")
     ('image (gdocs-diff--image-key element))
     ('source-block (gdocs-diff--source-block-key element))
+    ('quote-block (gdocs-diff--quote-block-key element))
     ('footnote (gdocs-diff--footnote-key element))
     (_ (format "unknown:%s" (plist-get element :type)))))
 
@@ -103,6 +104,17 @@ Concatenates all cell text across all rows."
           (or (plist-get element :language) "")
           (or (plist-get element :style-revision) "")
           (s-join "\n" (plist-get element :lines))))
+
+(defun gdocs-diff--quote-block-key (element)
+  "Compute a content key for quote-block ELEMENT."
+  (format "quote-block:%s:%s"
+          (or (plist-get element :style-revision) "")
+          (mapconcat (lambda (runs)
+                       (format "%s:%s"
+                               (gdocs-diff--runs-formatting-key runs)
+                               (gdocs-convert--runs-to-plain-text runs)))
+                     (plist-get element :paragraphs)
+                     "\n\n")))
 
 (defun gdocs-diff--image-key (element)
   "Compute a content key for an image ELEMENT."
@@ -305,6 +317,7 @@ the UTF-16 index where the first element begins (default 1)."
     ('page-break 1)
     ('image 1)
     ('source-block (gdocs-diff--source-block-utf16-length element))
+    ('quote-block (gdocs-diff--quote-block-utf16-length element))
     ;; Footnotes are inline references; their content lives in a
     ;; separate segment and does not consume body UTF-16 units.
     ('footnote 0)
@@ -316,6 +329,15 @@ the UTF-16 index where the first element begins (default 1)."
          (mapcar (lambda (line)
                    (1+ (gdocs-convert--string-to-utf16-length line)))
                  (or (plist-get element :lines) '("")))))
+
+(defun gdocs-diff--quote-block-utf16-length (element)
+  "Compute UTF-16 length of quote-block ELEMENT."
+  (apply #'+
+         (mapcar (lambda (runs)
+                   (1+ (gdocs-convert--string-to-utf16-length
+                        (gdocs-convert--runs-to-plain-text runs))))
+                 (or (plist-get element :paragraphs)
+                     (list (list (gdocs-convert--make-plain-run "")))))))
 
 (defun gdocs-diff--paragraph-utf16-length (element)
   "Compute UTF-16 length of a paragraph ELEMENT including trailing newline."

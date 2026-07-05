@@ -253,13 +253,14 @@
 ;;; Block quotes
 
 (ert-deftest gdocs-convert-test-quote-block ()
-  "A quote block produces an IR element with :style quote."
+  "A quote block produces semantic quote-block IR."
   (let* ((ir (gdocs-convert-org-string-to-ir
               "#+BEGIN_QUOTE\nTo be or not to be.\n#+END_QUOTE"))
-         (quote-elem (gdocs-convert-test--find-element ir 'paragraph 'quote)))
-    (should quote-elem)
-    (should (string= (plist-get (car (plist-get quote-elem :contents)) :text)
-                      "To be or not to be."))))
+         (quote-elem (car ir)))
+    (should (eq (plist-get quote-elem :type) 'quote-block))
+    (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
+                           (plist-get quote-elem :paragraphs))
+                   '("To be or not to be.")))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Round-trip fidelity
@@ -494,6 +495,51 @@
     (should (= (plist-get block :doc-end) 10))
     (should (string= (s-trim org)
                      "#+BEGIN_SRC python\nprint(1)\n#+END_SRC"))))
+
+(ert-deftest gdocs-convert-test-docs-json-marked-quote-block ()
+  "Marked quote-block paragraphs pull back to Org quote blocks."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 12)
+                    (paragraph
+                     . ((elements
+                         . ,(vector '((textRun . ((content . "Line one\n")
+                                                   (textStyle . ()))))))
+                        (paragraphStyle
+                         . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 12)
+                    (endIndex . 22)
+                    (paragraph
+                     . ((elements
+                         . ,(vector '((textRun . ((content . "Line two\n")
+                                                   (textStyle . ()))))))
+                        (paragraphStyle
+                         . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (namedRanges
+                  . ,(list
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001")
+                            `((namedRanges
+                               . ,(vector `((ranges
+                                             . ,(vector '((startIndex . 1)
+                                                          (endIndex . 11)))))))))
+                      (cons (intern "gdocs-org-marker:quote-block:elem-002")
+                            `((namedRanges
+                               . ,(vector `((ranges
+                                             . ,(vector '((startIndex . 12)
+                                                          (endIndex . 21)))))))))))))
+         (ir (gdocs-convert-docs-json-to-ir json))
+         (block (car ir))
+         (org (gdocs-convert-ir-to-org ir)))
+    (should (= (length ir) 1))
+    (should (eq (plist-get block :type) 'quote-block))
+    (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
+                           (plist-get block :paragraphs))
+                   '("Line one" "Line two")))
+    (should (= (plist-get block :doc-start) 1))
+    (should (= (plist-get block :doc-end) 22))
+    (should (string= (s-trim org)
+                     "#+BEGIN_QUOTE\nLine one\n\nLine two\n#+END_QUOTE"))))
 
 (ert-deftest gdocs-convert-test-docs-json-native-footnotes ()
   "Native Google Docs footnotes convert to Org references and definitions."
@@ -1546,6 +1592,32 @@
 ;; ---------------------------------------------------------------------------
 ;;; Src block conversion
 
+(ert-deftest gdocs-convert-test-quote-block-requests-use-line-role-styles ()
+  "Quote block requests use semantic markers and line-role styles."
+  (let* ((gdocs-style-definitions
+          '((gdocs-quote-block-first :parent normal :paragraph (:space-above 6))
+            (gdocs-quote-block-last :parent normal :paragraph (:space-below 6))))
+         (ir (gdocs-convert-org-string-to-ir
+              "#+BEGIN_QUOTE\nLine one\n\nLine two\n#+END_QUOTE"))
+         (requests (gdocs-convert-ir-to-docs-requests ir)))
+    (should (member '((createNamedRange
+                       . ((name . "gdocs-org-marker:quote-block:elem-001")
+                          (range . ((startIndex . 1)
+                                    (endIndex . 9))))))
+                    requests))
+    (should (seq-some (lambda (request)
+                        (let ((update (alist-get 'updateParagraphStyle request)))
+                          (and update
+                               (equal (alist-get 'fields update)
+                                      "namedStyleType,spaceAbove"))))
+                      requests))
+    (should (seq-some (lambda (request)
+                        (let ((update (alist-get 'updateParagraphStyle request)))
+                          (and update
+                               (equal (alist-get 'fields update)
+                                      "namedStyleType,spaceBelow"))))
+                      requests))))
+
 (ert-deftest gdocs-convert-test-src-block-to-ir ()
   "A src block produces a semantic source-block IR element."
   (let* ((ir (gdocs-convert-org-string-to-ir
@@ -1560,12 +1632,12 @@
   "Typographic block line roles use a reusable naming convention."
   (should (eq (gdocs-convert--block-line-style-name 'gdocs-source-block 0 1)
               'gdocs-source-block-single))
-  (should (eq (gdocs-convert--block-line-style-name 'gdocs-quote 0 3)
-              'gdocs-quote-first))
-  (should (eq (gdocs-convert--block-line-style-name 'gdocs-quote 1 3)
-              'gdocs-quote-line))
-  (should (eq (gdocs-convert--block-line-style-name 'gdocs-quote 2 3)
-              'gdocs-quote-last)))
+  (should (eq (gdocs-convert--block-line-style-name 'gdocs-quote-block 0 3)
+              'gdocs-quote-block-first))
+  (should (eq (gdocs-convert--block-line-style-name 'gdocs-quote-block 1 3)
+              'gdocs-quote-block-line))
+  (should (eq (gdocs-convert--block-line-style-name 'gdocs-quote-block 2 3)
+              'gdocs-quote-block-last)))
 
 (ert-deftest gdocs-convert-test-src-block-preserves-blank-lines ()
   "Source block blank lines stay inside a semantic block element."
