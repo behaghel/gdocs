@@ -80,11 +80,12 @@ identical keys."
   "Compute a content key for a paragraph ELEMENT.
 Includes type, style, list info, and full run details."
   (let ((style (symbol-name (or (plist-get element :style) 'normal)))
+        (style-name (symbol-name (or (plist-get element :style-name) 'none)))
         (text (gdocs-convert--runs-to-plain-text (plist-get element :contents)))
         (formatting (gdocs-diff--runs-formatting-key
                      (plist-get element :contents)))
         (list-key (gdocs-diff--list-key (plist-get element :list))))
-    (format "paragraph:%s:%s:%s:%s" style list-key formatting text)))
+    (format "paragraph:%s:%s:%s:%s:%s" style style-name list-key formatting text)))
 
 (defun gdocs-diff--table-key (element)
   "Compute a content key for a table ELEMENT.
