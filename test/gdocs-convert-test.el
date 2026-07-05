@@ -484,7 +484,14 @@
                                         . ,(vector '((startIndex . 1)
                                                      (endIndex . 9)))))))))))))
          (ir (gdocs-convert-docs-json-to-ir json))
+         (block (car ir))
          (org (gdocs-convert-ir-to-org ir)))
+    (should (= (length ir) 1))
+    (should (eq (plist-get block :type) 'source-block))
+    (should (equal (plist-get block :language) "python"))
+    (should (equal (plist-get block :lines) '("print(1)")))
+    (should (= (plist-get block :doc-start) 1))
+    (should (= (plist-get block :doc-end) 10))
     (should (string= (s-trim org)
                      "#+BEGIN_SRC python\nprint(1)\n#+END_SRC"))))
 
@@ -675,15 +682,13 @@
 ;;; Source block markers
 
 (ert-deftest gdocs-convert-test-src-block-marker ()
-  "A src block produces an IR element with :gdocs-marker of :type src-block."
+  "A src block produces semantic source-block IR with language metadata."
   (let* ((ir (gdocs-convert-org-string-to-ir
               "#+BEGIN_SRC python\nprint(\"hi\")\n#+END_SRC"))
-         (elem (car ir))
-         (marker (plist-get elem :gdocs-marker)))
-    (should marker)
-    (should (listp marker))
-    (should (eq (plist-get (car marker) :type) 'src-block))
-    (should (string= (plist-get (car marker) :data) "python"))))
+         (elem (car ir)))
+    (should (eq (plist-get elem :type) 'source-block))
+    (should (string= (plist-get elem :language) "python"))
+    (should (equal (plist-get elem :lines) '("print(\"hi\")")))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Priority markers
@@ -1530,25 +1535,14 @@
 ;;; Src block conversion
 
 (ert-deftest gdocs-convert-test-src-block-to-ir ()
-  "A src block produces an IR element with code content and :gdocs-marker."
+  "A src block produces a semantic source-block IR element."
   (let* ((ir (gdocs-convert-org-string-to-ir
               "#+begin_src emacs-lisp\n(message \"hello\")\n#+end_src"))
-         (elem (car ir))
-         (contents (plist-get elem :contents))
-         (marker (plist-get elem :gdocs-marker)))
+         (elem (car ir)))
     (should (= (length ir) 1))
-    (should (eq (plist-get elem :type) 'paragraph))
-    (should (eq (plist-get elem :style-name) 'gdocs-source-block-single))
-    ;; The contents should have a code run with the source text
-    (should (plist-get (car contents) :code))
-    (should (member 'gdocs-code (plist-get (car contents) :style-names)))
-    (should (string= (plist-get (car contents) :text)
-                      "(message \"hello\")"))
-    ;; The marker should record it as a src-block with the language
-    (should marker)
-    (should (eq (plist-get (car marker) :type) 'src-block))
-    (should (string= (plist-get (car marker) :data)
-                     "emacs-lisp"))))
+    (should (eq (plist-get elem :type) 'source-block))
+    (should (equal (plist-get elem :language) "emacs-lisp"))
+    (should (equal (plist-get elem :lines) '("(message \"hello\")")))))
 
 (ert-deftest gdocs-convert-test-block-line-style-name-is-generic ()
   "Typographic block line roles use a reusable naming convention."
@@ -1562,22 +1556,15 @@
               'gdocs-quote-last)))
 
 (ert-deftest gdocs-convert-test-src-block-preserves-blank-lines ()
-  "Source block blank lines become explicit styled paragraphs."
+  "Source block blank lines stay inside a semantic block element."
   (let* ((ir (gdocs-convert-org-string-to-ir
               "#+begin_src emacs-lisp\n(message \"hello\")\n\n(+ 1 2)\n#+end_src"))
-         (texts (mapcar (lambda (element)
-                          (gdocs-convert--plain-text element))
-                        ir))
-         (style-names (mapcar (lambda (element)
-                                (plist-get element :style-name))
-                              ir))
+         (block (car ir))
          (org (gdocs-convert-ir-to-org ir)))
-    (should (= (length ir) 3))
-    (should (equal texts '("(message \"hello\")" "" "(+ 1 2)")))
-    (should (equal style-names
-                   '(gdocs-source-block-first
-                     gdocs-source-block-line
-                     gdocs-source-block-last)))
+    (should (= (length ir) 1))
+    (should (eq (plist-get block :type) 'source-block))
+    (should (equal (plist-get block :lines)
+                   '("(message \"hello\")" "" "(+ 1 2)")))
     (should (string= (s-trim org)
                      "#+BEGIN_SRC emacs-lisp\n(message \"hello\")\n\n(+ 1 2)\n#+END_SRC"))))
 

@@ -324,9 +324,9 @@ The result is sorted by buffer position."
                            :begin (org-element-property :begin el))
                      result)))
             ('src-block
-             (let ((begin (org-element-property :begin el)))
-               (dolist (ir-elem (gdocs-convert--src-block-to-ir el))
-                 (push (list :ir ir-elem :begin begin) result))))
+             (push (list :ir (gdocs-convert--src-block-to-ir el)
+                         :begin (org-element-property :begin el))
+                   result))
             ('example-block
              (let ((begin (org-element-property :begin el)))
                (dolist (ir-elem (gdocs-convert--example-block-to-ir el))
@@ -1021,27 +1021,14 @@ BASE-STYLE-first, BASE-STYLE-line, BASE-STYLE-last, and BASE-STYLE-single."
                    (t "line")))))
 
 (defun gdocs-convert--src-block-to-ir (src-block)
-  "Convert a SRC-BLOCK to IR paragraphs with markers for round-trip."
+  "Convert a SRC-BLOCK to a semantic source-block IR element."
   (let* ((language (or (org-element-property :language src-block) ""))
          (value (s-trim-right (or (org-element-property :value src-block) "")))
-         (lines (split-string value "\n"))
-         (count (length lines))
-         (block-id (gdocs-convert--next-id))
-         (index 0))
-    (mapcar (lambda (line)
-              (prog1
-                  (list :type 'paragraph
-                        :style 'normal
-                        :style-name (gdocs-convert--block-line-style-name
-                                     'gdocs-source-block index count)
-                        :contents (list (gdocs-convert--make-run
-                                         line
-                                         (gdocs-convert--code-props)))
-                        :gdocs-marker (list (list :type 'src-block
-                                                  :data language))
-                        :id block-id)
-                (cl-incf index)))
-            lines)))
+         (lines (split-string value "\n")))
+    (list :type 'source-block
+          :language language
+          :lines lines
+          :id (gdocs-convert--next-id))))
 
 (defun gdocs-convert--lines-to-monospace-ir (lines)
   "Convert LINES to a list of monospace paragraph IR elements.
@@ -1241,26 +1228,6 @@ collected at the end under a conventional `* Footnotes' section."
          ((and (eq (plist-get element :type) 'paragraph)
                (null (plist-get element :contents)))
           (setq i (1+ i)))
-         ;; Collect consecutive marked source-block paragraphs into one Org block.
-         ((gdocs-convert--src-block-paragraph-p element)
-          (let ((code-lines nil)
-                (language (gdocs-convert--src-block-data element)))
-            (while (and (< i len)
-                        (gdocs-convert--src-block-paragraph-p
-                         (aref elements i))
-                        (equal language
-                               (gdocs-convert--src-block-data
-                                (aref elements i))))
-              (push (gdocs-convert--plain-text (aref elements i))
-                    code-lines)
-              (setq i (1+ i)))
-            (when (and parts prev-type)
-              (push "" parts))
-            (push (gdocs-convert--format-src-block-from-lines
-                   language (nreverse code-lines))
-                  parts)
-            (setq prev-type 'paragraph)
-            (setq list-counter 0 prev-list-level nil)))
          ;; Collect consecutive all-code paragraphs into an example block
          ((gdocs-convert--all-code-paragraph-p element)
           (let ((code-lines nil))
@@ -1355,7 +1322,8 @@ PREV-TYPE is the :type of the previous element."
     ('horizontal-rule "-----")
     ('footnote (gdocs-convert--ir-footnote-to-org element))
     ('page-break "")
-    ('image (gdocs-convert--ir-image-to-org element))))
+    ('image (gdocs-convert--ir-image-to-org element))
+    ('source-block (gdocs-convert--ir-source-block-to-org element))))
 
 (defun gdocs-convert--ir-paragraph-to-org (element)
   "Convert an IR paragraph ELEMENT to an org string."
@@ -1647,6 +1615,12 @@ markers to produce valid emphasis markup."
                                     (concat "file:" target)
                                   target))))))
 
+(defun gdocs-convert--ir-source-block-to-org (element)
+  "Convert source-block IR ELEMENT to Org source block text."
+  (gdocs-convert--format-src-block-from-lines
+   (plist-get element :language)
+   (plist-get element :lines)))
+
 ;; ---------------------------------------------------------------------------
 ;;; IR table -> org
 
@@ -1726,10 +1700,11 @@ like `body', `title', `lists', and `namedRanges'."
               (plist-put ir :doc-start si)
               (plist-put ir :doc-end ei))
             (push ir result)))))
-    (let ((ir (gdocs-convert--attach-image-caption-markers
-               (append (nreverse result)
-                       (gdocs-convert--docs-footnotes-to-ir
-                        (alist-get 'footnotes json) footnote-refs)))))
+    (let ((ir (gdocs-convert--attach-source-block-markers
+               (gdocs-convert--attach-image-caption-markers
+                (append (nreverse result)
+                        (gdocs-convert--docs-footnotes-to-ir
+                         (alist-get 'footnotes json) footnote-refs))))))
       (gdocs-convert--assign-list-counters ir)
       ir)))
 
@@ -1758,6 +1733,35 @@ like `body', `title', `lists', and `namedRanges'."
               (plist-put image :doc-end caption-end))
             (setq result (cons image (cdr result))))
         (push element result)))
+    (nreverse result)))
+
+(defun gdocs-convert--attach-source-block-markers (ir)
+  "Group consecutive marked source-block paragraphs in IR."
+  (let ((result nil)
+        (remaining ir))
+    (while remaining
+      (let ((element (car remaining)))
+        (if (gdocs-convert--src-block-paragraph-p element)
+            (let ((language (gdocs-convert--src-block-data element))
+                  (lines nil)
+                  (start (plist-get element :doc-start))
+                  end)
+              (while (and remaining
+                          (gdocs-convert--src-block-paragraph-p (car remaining))
+                          (equal language
+                                 (gdocs-convert--src-block-data (car remaining))))
+                (push (gdocs-convert--plain-text (car remaining)) lines)
+                (setq end (plist-get (car remaining) :doc-end))
+                (setq remaining (cdr remaining)))
+              (push (append (list :type 'source-block
+                                  :language language
+                                  :lines (nreverse lines)
+                                  :id (gdocs-convert--next-id))
+                            (when start (list :doc-start start))
+                            (when end (list :doc-end end)))
+                    result))
+          (push element result)
+          (setq remaining (cdr remaining)))))
     (nreverse result)))
 
 (defun gdocs-convert--structural-element-footnote-refs (element)
@@ -2344,7 +2348,40 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
     ('horizontal-rule (gdocs-convert--horizontal-rule-to-requests index))
     ('page-break (gdocs-convert--page-break-to-requests index))
     ('image (gdocs-convert--image-to-requests element index))
+    ('source-block (gdocs-convert--source-block-to-requests element index))
     ('footnote (gdocs-convert--footnote-to-requests element index))))
+
+;; ---------------------------------------------------------------------------
+;;; Source block -> requests
+
+(defun gdocs-convert--source-block-line-element (element line line-index line-count)
+  "Return paragraph IR for source-block ELEMENT LINE at LINE-INDEX."
+  (let ((id (plist-get element :id)))
+    (list :type 'paragraph
+          :style 'normal
+          :style-name (gdocs-convert--block-line-style-name
+                       'gdocs-source-block line-index line-count)
+          :contents (list (gdocs-convert--make-run
+                           line (gdocs-convert--code-props)))
+          :gdocs-marker (list (list :type 'src-block
+                                    :data (or (plist-get element :language) "")))
+          :id id)))
+
+(defun gdocs-convert--source-block-to-requests (element index)
+  "Create paragraph requests for source-block ELEMENT at INDEX."
+  (let* ((lines (or (plist-get element :lines) '("")))
+         (line-count (length lines))
+         (line-index 0)
+         (requests nil)
+         (current index))
+    (dolist (line lines)
+      (let* ((paragraph (gdocs-convert--source-block-line-element
+                         element line line-index line-count))
+             (result (gdocs-convert--paragraph-to-requests paragraph current)))
+        (setq requests (nconc requests (plist-get result :requests)))
+        (setq current (plist-get result :index))
+        (cl-incf line-index)))
+    (list :requests requests :index current)))
 
 ;; ---------------------------------------------------------------------------
 ;;; Image -> requests

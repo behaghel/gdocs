@@ -73,6 +73,7 @@ identical keys."
     ('horizontal-rule "horizontal-rule")
     ('page-break "page-break")
     ('image (gdocs-diff--image-key element))
+    ('source-block (gdocs-diff--source-block-key element))
     ('footnote (gdocs-diff--footnote-key element))
     (_ (format "unknown:%s" (plist-get element :type)))))
 
@@ -95,6 +96,12 @@ Concatenates all cell text across all rows."
       (dolist (cell row)
         (push (gdocs-convert--runs-to-plain-text cell) cell-texts)))
     (format "table:%s" (s-join "|" (nreverse cell-texts)))))
+
+(defun gdocs-diff--source-block-key (element)
+  "Compute a content key for a source-block ELEMENT."
+  (format "source-block:%s:%s"
+          (or (plist-get element :language) "")
+          (s-join "\n" (plist-get element :lines))))
 
 (defun gdocs-diff--image-key (element)
   "Compute a content key for an image ELEMENT."
@@ -296,10 +303,18 @@ the UTF-16 index where the first element begins (default 1)."
     ('horizontal-rule 1)
     ('page-break 1)
     ('image 1)
+    ('source-block (gdocs-diff--source-block-utf16-length element))
     ;; Footnotes are inline references; their content lives in a
     ;; separate segment and does not consume body UTF-16 units.
     ('footnote 0)
     (_ (error "gdocs-diff: unknown element type: %s" (plist-get element :type)))))
+
+(defun gdocs-diff--source-block-utf16-length (element)
+  "Compute UTF-16 length of source-block ELEMENT."
+  (apply #'+
+         (mapcar (lambda (line)
+                   (1+ (gdocs-convert--string-to-utf16-length line)))
+                 (or (plist-get element :lines) '("")))))
 
 (defun gdocs-diff--paragraph-utf16-length (element)
   "Compute UTF-16 length of a paragraph ELEMENT including trailing newline."
