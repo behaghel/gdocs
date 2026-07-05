@@ -115,12 +115,15 @@ Concatenates all cell text across all rows."
 
 (defun gdocs-diff--run-formatting-key (run)
   "Produce a formatting fingerprint string for RUN."
-  (format "%s%s%s%s%s%s%s"
+  (format "%s%s%s%s%s%s%s%s"
           (if (plist-get run :bold) "B" "")
           (if (plist-get run :italic) "I" "")
           (if (plist-get run :underline) "U" "")
           (if (plist-get run :strikethrough) "S" "")
           (if (plist-get run :code) "C" "")
+          (if-let* ((style-names (plist-get run :style-names)))
+              (format "Y(%s)" (mapconcat #'symbol-name style-names ","))
+            "")
           (if (plist-get run :link) (format "L(%s)" (plist-get run :link)) "")
           (if (plist-get run :footnote-label)
               (format "F(%s)" (plist-get run :footnote-label))

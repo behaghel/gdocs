@@ -99,6 +99,22 @@ ROWS is a list of lists of lists of run plists."
 
 ;;;; Element key tests
 
+(ert-deftest gdocs-diff-test-paragraph-key-includes-logical-run-styles ()
+  "Logical run style names are semantically meaningful in diff keys."
+  (let ((plain-code
+         (list :type 'paragraph
+               :style 'normal
+               :contents (list (plist-put
+                                (gdocs-diff-test--plain-run "code")
+                                :code t))))
+        (styled-code
+         (list :type 'paragraph
+               :style 'normal
+               :contents (list (append (gdocs-diff-test--plain-run "code")
+                                       '(:code t :style-names (gdocs-code)))))))
+    (should-not (equal (gdocs-diff--element-key plain-code)
+                       (gdocs-diff--element-key styled-code)))))
+
 (ert-deftest gdocs-diff-test-paragraph-key-includes-footnote-runs ()
   "Zero-width footnote reference runs are semantically meaningful in diff keys."
   (let ((without-footnote
