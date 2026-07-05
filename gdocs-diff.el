@@ -528,8 +528,10 @@ RANGE is a (START . END) cons.  Returns a plist with
 (defun gdocs-diff--only-style-changed-p (old-elem new-elem)
   "Return non-nil if only the paragraph style differs between elements."
   (and (gdocs-diff--same-text-paragraphs-p old-elem new-elem)
-       (not (equal (plist-get old-elem :style)
-                   (plist-get new-elem :style)))
+       (or (not (equal (plist-get old-elem :style)
+                       (plist-get new-elem :style)))
+           (not (equal (plist-get old-elem :style-name)
+                       (plist-get new-elem :style-name))))
        (equal (gdocs-diff--runs-formatting-key
                (plist-get old-elem :contents))
               (gdocs-diff--runs-formatting-key
@@ -540,6 +542,8 @@ RANGE is a (START . END) cons.  Returns a plist with
   (and (gdocs-diff--same-text-paragraphs-p old-elem new-elem)
        (equal (plist-get old-elem :style)
               (plist-get new-elem :style))
+       (equal (plist-get old-elem :style-name)
+              (plist-get new-elem :style-name))
        (not (equal (gdocs-diff--runs-formatting-key
                     (plist-get old-elem :contents))
                    (gdocs-diff--runs-formatting-key
@@ -549,19 +553,12 @@ RANGE is a (START . END) cons.  Returns a plist with
   "Generate requests for a paragraph style change.
 NEW-ELEM provides the new style.  RANGE is (START . END)."
   (let* ((start (car range))
-         (end (cdr range))
-         (style (plist-get new-elem :style))
-         (named-style (gdocs-convert--ir-style-to-docs style)))
+         (end (cdr range)))
     (list :delete-reqs nil
           :insert-reqs nil
           :style-reqs
-          (list `((updateParagraphStyle
-                   . ((paragraphStyle
-                       . ((namedStyleType . ,named-style)))
-                      (range . ((startIndex . ,start)
-                                ;; Exclude trailing newline
-                                (endIndex . ,(1- end))))
-                      (fields . "namedStyleType"))))))))
+          (gdocs-convert--make-paragraph-style-requests
+           new-elem start end))))
 
 (defun gdocs-diff--formatting-only-modification (new-elem range)
   "Generate updateTextStyle requests for formatting changes.
