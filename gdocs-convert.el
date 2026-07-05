@@ -2520,9 +2520,17 @@ clear any inherited formatting before per-run styles are applied."
             style))
     (delq nil style)))
 
+(defun gdocs-convert--style-field-mask-name (field)
+  "Return Google Docs field mask name for STYLE FIELD."
+  (pcase field
+    ('shading "shading.backgroundColor")
+    (_ (symbol-name field))))
+
 (defun gdocs-convert--style-fields-mask-from-alist (style)
   "Return comma-separated fields mask for STYLE alist."
-  (s-join "," (mapcar (lambda (pair) (symbol-name (car pair))) style)))
+  (s-join "," (mapcar (lambda (pair)
+                         (gdocs-convert--style-field-mask-name (car pair)))
+                       style)))
 
 (defun gdocs-convert--logical-style-paragraph-request (style-name start end)
   "Return logical STYLE-NAME paragraph request between START and END."

@@ -1494,6 +1494,18 @@
                                     (endIndex . 26))))))
                     requests))))
 
+(ert-deftest gdocs-convert-test-paragraph-shading-uses-nested-field-mask ()
+  "Paragraph shading style requests use the nested Google Docs field mask."
+  (let* ((gdocs-style-definitions
+          '((gdocs-source-block-single
+             :parent normal
+             :paragraph (:background-color "#f5f5f5"))))
+         (request (gdocs-convert--logical-style-paragraph-request
+                   'gdocs-source-block-single 1 10))
+         (update (alist-get 'updateParagraphStyle request)))
+    (should (string-match-p "shading\\.backgroundColor"
+                            (alist-get 'fields update)))))
+
 (ert-deftest gdocs-convert-test-image-caption-style-policy-is-overridable ()
   "Logical image caption style can be changed by style definitions."
   (let* ((gdocs-style-definitions
