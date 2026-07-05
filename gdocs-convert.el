@@ -316,9 +316,9 @@ The result is sorted by buffer position."
                            :begin (org-element-property :begin el))
                      result)))
             ('src-block
-             (push (list :ir (gdocs-convert--src-block-to-ir el)
-                         :begin (org-element-property :begin el))
-                   result))
+             (let ((begin (org-element-property :begin el)))
+               (dolist (ir-elem (gdocs-convert--src-block-to-ir el))
+                 (push (list :ir ir-elem :begin begin) result))))
             ('example-block
              (let ((begin (org-element-property :begin el)))
                (dolist (ir-elem (gdocs-convert--example-block-to-ir el))
@@ -1001,19 +1001,22 @@ Skips horizontal rule rows."
 ;;; Src blocks / keywords -> IR (org-only markers)
 
 (defun gdocs-convert--src-block-to-ir (src-block)
-  "Convert a SRC-BLOCK to an IR element with a marker for round-trip."
+  "Convert a SRC-BLOCK to IR paragraphs with markers for round-trip."
   (let* ((language (or (org-element-property :language src-block) ""))
-         (value (org-element-property :value src-block))
-         (display-text (s-trim-right (or value ""))))
-    (list :type 'paragraph
-          :style 'normal
-          :style-name 'gdocs-source-block
-          :contents (list (gdocs-convert--make-run
-                           display-text
-                           (gdocs-convert--code-props)))
-          :gdocs-marker (list (list :type 'src-block
-                                    :data language))
-          :id (gdocs-convert--next-id))))
+         (value (s-trim-right (or (org-element-property :value src-block) "")))
+         (lines (split-string value "\n"))
+         (block-id (gdocs-convert--next-id)))
+    (mapcar (lambda (line)
+              (list :type 'paragraph
+                    :style 'normal
+                    :style-name 'gdocs-source-block
+                    :contents (list (gdocs-convert--make-run
+                                     line
+                                     (gdocs-convert--code-props)))
+                    :gdocs-marker (list (list :type 'src-block
+                                              :data language))
+                    :id block-id))
+            lines)))
 
 (defun gdocs-convert--lines-to-monospace-ir (lines)
   "Convert LINES to a list of monospace paragraph IR elements.
@@ -1213,6 +1216,26 @@ collected at the end under a conventional `* Footnotes' section."
          ((and (eq (plist-get element :type) 'paragraph)
                (null (plist-get element :contents)))
           (setq i (1+ i)))
+         ;; Collect consecutive marked source-block paragraphs into one Org block.
+         ((gdocs-convert--src-block-paragraph-p element)
+          (let ((code-lines nil)
+                (language (gdocs-convert--src-block-data element)))
+            (while (and (< i len)
+                        (gdocs-convert--src-block-paragraph-p
+                         (aref elements i))
+                        (equal language
+                               (gdocs-convert--src-block-data
+                                (aref elements i))))
+              (push (gdocs-convert--plain-text (aref elements i))
+                    code-lines)
+              (setq i (1+ i)))
+            (when (and parts prev-type)
+              (push "" parts))
+            (push (gdocs-convert--format-src-block-from-lines
+                   language (nreverse code-lines))
+                  parts)
+            (setq prev-type 'paragraph)
+            (setq list-counter 0 prev-list-level nil)))
          ;; Collect consecutive all-code paragraphs into an example block
          ((gdocs-convert--all-code-paragraph-p element)
           (let ((code-lines nil))
@@ -1257,6 +1280,16 @@ collected at the end under a conventional `* Footnotes' section."
     (gdocs-convert--append-footnotes-section
      (concat (s-join "\n" (nreverse parts)) "\n")
      footnotes)))
+
+(defun gdocs-convert--src-block-data (element)
+  "Return source-block marker data from ELEMENT, or nil."
+  (gdocs-convert--extract-marker-field
+   (plist-get element :gdocs-marker) 'src-block))
+
+(defun gdocs-convert--src-block-paragraph-p (element)
+  "Return non-nil if ELEMENT is a marked source-block paragraph."
+  (and (eq (plist-get element :type) 'paragraph)
+       (gdocs-convert--src-block-data element)))
 
 (defun gdocs-convert--all-code-paragraph-p (element)
   "Return non-nil if ELEMENT is a normal paragraph with all-code runs.
@@ -1398,6 +1431,13 @@ indent continuation lines to keep them inside the list item."
                 "- [X] "
               "- [ ] "))))
 
+(defun gdocs-convert--format-src-block-from-lines (language lines)
+  "Format a source block with LANGUAGE from code LINES."
+  (concat "#+BEGIN_SRC" (if (s-present? language)
+                            (concat " " language)
+                          "")
+          "\n" (s-join "\n" lines) "\n#+END_SRC"))
+
 (defun gdocs-convert--format-src-block (data element)
   "Format a src block from marker DATA and paragraph ELEMENT."
   (let* ((legacy-data-p (listp data))
@@ -1407,10 +1447,8 @@ indent continuation lines to keep them inside the list item."
          (value (if legacy-data-p
                     (plist-get data :value)
                   (concat (gdocs-convert--plain-text element) "\n"))))
-    (concat "#+BEGIN_SRC" (if (s-present? language)
-                              (concat " " language)
-                            "")
-            "\n" value "#+END_SRC")))
+    (gdocs-convert--format-src-block-from-lines
+     language (split-string (s-trim-right value) "\n"))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Text runs -> org text

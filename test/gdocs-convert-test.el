@@ -1550,6 +1550,19 @@
     (should (string= (plist-get (car marker) :data)
                      "emacs-lisp"))))
 
+(ert-deftest gdocs-convert-test-src-block-preserves-blank-lines ()
+  "Source block blank lines become explicit styled paragraphs."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+begin_src emacs-lisp\n(message \"hello\")\n\n(+ 1 2)\n#+end_src"))
+         (texts (mapcar (lambda (element)
+                          (gdocs-convert--plain-text element))
+                        ir))
+         (org (gdocs-convert-ir-to-org ir)))
+    (should (= (length ir) 3))
+    (should (equal texts '("(message \"hello\")" "" "(+ 1 2)")))
+    (should (string= (s-trim org)
+                     "#+BEGIN_SRC emacs-lisp\n(message \"hello\")\n\n(+ 1 2)\n#+END_SRC"))))
+
 (ert-deftest gdocs-convert-test-code-style-policy-is-overridable ()
   "Logical code style can be changed without changing code semantics."
   (let* ((gdocs-style-definitions
