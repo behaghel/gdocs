@@ -21,6 +21,8 @@
 (require 's)
 (require 'org)
 (require 'org-element)
+(require 'ox)
+(require 'url-util)
 
 ;; ---------------------------------------------------------------------------
 ;;; ID generation
@@ -44,6 +46,21 @@
   "Additional directories to scan for cross-document link resolution.
 `gdocs-directory' is always included."
   :type '(repeat directory)
+  :group 'gdocs)
+
+(defcustom gdocs-callout-types '("info" "note" "warning" "tip" "important")
+  "Supported semantic Org callout types."
+  :type '(repeat string)
+  :group 'gdocs)
+
+(defcustom gdocs-callout-labels
+  '(("info" . "Info")
+    ("note" . "Note")
+    ("warning" . "Warning")
+    ("tip" . "Tip")
+    ("important" . "Important"))
+  "Visible labels used for semantic callout types."
+  :type '(alist :key-type string :value-type string)
   :group 'gdocs)
 
 (defcustom gdocs-image-caption-style-name "org-image-caption"
@@ -100,6 +117,61 @@ IR-to-org conversion to resolve heading anchors back to text.")
     (gdocs-quote-block-last
      :parent normal)
     (gdocs-quote-block-single
+     :parent normal)
+    (gdocs-callout-info-label
+     :parent normal
+     :text (:bold t))
+    (gdocs-callout-note-label
+     :parent normal
+     :text (:bold t))
+    (gdocs-callout-warning-label
+     :parent normal
+     :text (:bold t))
+    (gdocs-callout-tip-label
+     :parent normal
+     :text (:bold t))
+    (gdocs-callout-important-label
+     :parent normal
+     :text (:bold t))
+    (gdocs-callout-info-first
+     :parent normal)
+    (gdocs-callout-info-line
+     :parent normal)
+    (gdocs-callout-info-last
+     :parent normal)
+    (gdocs-callout-info-single
+     :parent normal)
+    (gdocs-callout-note-first
+     :parent normal)
+    (gdocs-callout-note-line
+     :parent normal)
+    (gdocs-callout-note-last
+     :parent normal)
+    (gdocs-callout-note-single
+     :parent normal)
+    (gdocs-callout-warning-first
+     :parent normal)
+    (gdocs-callout-warning-line
+     :parent normal)
+    (gdocs-callout-warning-last
+     :parent normal)
+    (gdocs-callout-warning-single
+     :parent normal)
+    (gdocs-callout-tip-first
+     :parent normal)
+    (gdocs-callout-tip-line
+     :parent normal)
+    (gdocs-callout-tip-last
+     :parent normal)
+    (gdocs-callout-tip-single
+     :parent normal)
+    (gdocs-callout-important-first
+     :parent normal)
+    (gdocs-callout-important-line
+     :parent normal)
+    (gdocs-callout-important-last
+     :parent normal)
+    (gdocs-callout-important-single
      :parent normal)
     (gdocs-image-caption
      :parent normal))
@@ -1107,22 +1179,84 @@ the Google Docs representation."
 
 (defun gdocs-convert--special-block-to-ir (special-block)
   "Convert a SPECIAL-BLOCK element to IR elements with a marker."
-  (let ((block-type (org-element-property :type special-block))
-        (result nil))
+  (if (gdocs-convert--callout-block-p special-block)
+      (list (gdocs-convert--callout-block-to-ir special-block))
+    (let ((block-type (org-element-property :type special-block))
+          (result nil))
+      (org-element-map special-block 'paragraph
+        (lambda (para)
+          (let* ((runs (gdocs-convert--objects-to-runs
+                        (org-element-contents para)))
+                 (trimmed (gdocs-convert--trim-runs runs)))
+            (when trimmed
+              (push (list :type 'paragraph
+                          :style 'normal
+                          :contents trimmed
+                          :gdocs-marker (list (list :type 'special-block
+                                                    :data block-type))
+                          :id (gdocs-convert--next-id))
+                    result)))))
+      (nreverse result))))
+
+(defun gdocs-convert--callout-block-p (special-block)
+  "Return non-nil if SPECIAL-BLOCK is the canonical callout block."
+  (string= (upcase (or (org-element-property :type special-block) ""))
+           "CALLOUT"))
+
+(defun gdocs-convert--callout-attributes (special-block)
+  "Return callout attributes from SPECIAL-BLOCK."
+  (let* ((attr (org-export-read-attribute :attr_callout special-block))
+         (type (or (plist-get attr :type) "info"))
+         (title (plist-get attr :title)))
+    (list :type (gdocs-convert--unquote-org-attribute type)
+          :title (gdocs-convert--unquote-org-attribute title))))
+
+(defun gdocs-convert--unquote-org-attribute (value)
+  "Return VALUE without one layer of Org attribute string quoting."
+  (cond
+   ((not (stringp value)) value)
+   ((string-match-p "\\`\".*\"\\'" value)
+    (condition-case nil
+        (car (read-from-string value))
+      (error (string-trim value "\"" "\""))))
+   (t value)))
+
+(defun gdocs-convert--validate-callout-type (type)
+  "Signal an error unless TYPE is a supported callout type."
+  (unless (member type gdocs-callout-types)
+    (user-error "Unsupported Org callout type `%s'; supported types: %s"
+                type (s-join ", " gdocs-callout-types))))
+
+(defun gdocs-convert--validate-callout-body (special-block)
+  "Signal when SPECIAL-BLOCK callout contains unsupported direct children."
+  (dolist (child (org-element-contents special-block))
+    (unless (or (stringp child)
+                (eq (org-element-type child) 'paragraph))
+      (user-error "Unsupported Org callout child `%s'; v1 supports paragraphs only"
+                  (org-element-type child)))))
+
+(defun gdocs-convert--callout-block-to-ir (special-block)
+  "Convert canonical Org SPECIAL-BLOCK callout to callout-block IR."
+  (gdocs-convert--validate-callout-body special-block)
+  (let* ((attributes (gdocs-convert--callout-attributes special-block))
+         (type (or (plist-get attributes :type) "info"))
+         (title (plist-get attributes :title))
+         (paragraphs nil))
+    (gdocs-convert--validate-callout-type type)
     (org-element-map special-block 'paragraph
       (lambda (para)
-        (let* ((runs (gdocs-convert--objects-to-runs
-                      (org-element-contents para)))
-               (trimmed (gdocs-convert--trim-runs runs)))
-          (when trimmed
-            (push (list :type 'paragraph
-                        :style 'normal
-                        :contents trimmed
-                        :gdocs-marker (list (list :type 'special-block
-                                                  :data block-type))
-                        :id (gdocs-convert--next-id))
-                  result)))))
-    (nreverse result)))
+        (let ((parent (org-element-parent para)))
+          (when (eq parent special-block)
+            (let* ((runs (gdocs-convert--objects-to-runs
+                          (org-element-contents para)))
+                   (trimmed (gdocs-convert--trim-runs runs)))
+              (when trimmed
+                (push trimmed paragraphs)))))))
+    (list :type 'callout-block
+          :callout-type type
+          :title title
+          :paragraphs (nreverse paragraphs)
+          :id (gdocs-convert--next-id))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Fixed-width -> IR
@@ -1339,7 +1473,8 @@ PREV-TYPE is the :type of the previous element."
     ('page-break "")
     ('image (gdocs-convert--ir-image-to-org element))
     ('source-block (gdocs-convert--ir-source-block-to-org element))
-    ('quote-block (gdocs-convert--ir-quote-block-to-org element))))
+    ('quote-block (gdocs-convert--ir-quote-block-to-org element))
+    ('callout-block (gdocs-convert--ir-callout-block-to-org element))))
 
 (defun gdocs-convert--ir-paragraph-to-org (element)
   "Convert an IR paragraph ELEMENT to an org string."
@@ -1644,6 +1779,19 @@ markers to produce valid emphasis markup."
                   (mapcar #'gdocs-convert--runs-to-org
                           (plist-get element :paragraphs)))))
 
+(defun gdocs-convert--ir-callout-block-to-org (element)
+  "Convert callout-block IR ELEMENT to Org callout block text."
+  (let* ((type (or (plist-get element :callout-type) "info"))
+         (title (plist-get element :title))
+         (attrs (concat "#+ATTR_CALLOUT: :type " type
+                        (if (and title (not (string-empty-p title)))
+                            (format " :title %S" title)
+                          "")))
+         (body (s-join "\n\n"
+                       (mapcar #'gdocs-convert--runs-to-org
+                               (plist-get element :paragraphs)))))
+    (format "%s\n#+BEGIN_CALLOUT\n%s\n#+END_CALLOUT" attrs body)))
+
 ;; ---------------------------------------------------------------------------
 ;;; IR table -> org
 
@@ -1723,12 +1871,13 @@ like `body', `title', `lists', and `namedRanges'."
               (plist-put ir :doc-start si)
               (plist-put ir :doc-end ei))
             (push ir result)))))
-    (let ((ir (gdocs-convert--attach-quote-block-markers
-               (gdocs-convert--attach-source-block-markers
-                (gdocs-convert--attach-image-caption-markers
-                 (append (nreverse result)
-                         (gdocs-convert--docs-footnotes-to-ir
-                          (alist-get 'footnotes json) footnote-refs)))))))
+    (let ((ir (gdocs-convert--attach-callout-block-markers
+               (gdocs-convert--attach-quote-block-markers
+                (gdocs-convert--attach-source-block-markers
+                 (gdocs-convert--attach-image-caption-markers
+                  (append (nreverse result)
+                          (gdocs-convert--docs-footnotes-to-ir
+                           (alist-get 'footnotes json) footnote-refs))))))))
       (gdocs-convert--assign-list-counters ir)
       ir)))
 
@@ -1757,6 +1906,64 @@ like `body', `title', `lists', and `namedRanges'."
               (plist-put image :doc-end caption-end))
             (setq result (cons image (cdr result))))
         (push element result)))
+    (nreverse result)))
+
+(defun gdocs-convert--callout-marker-p (marker)
+  "Return non-nil if MARKER is a callout marker."
+  (memq (plist-get marker :type) '(callout-label callout-body)))
+
+(defun gdocs-convert--callout-marker (element)
+  "Return the first callout marker on ELEMENT, or nil."
+  (seq-find #'gdocs-convert--callout-marker-p
+            (plist-get element :gdocs-marker)))
+
+(defun gdocs-convert--callout-marker-data (marker)
+  "Return plist data decoded from callout MARKER."
+  (let* ((raw (or (plist-get marker :data) "info:"))
+         (parts (s-split ":" raw))
+         (type (or (car parts) "info"))
+         (title (when-let* ((encoded (cadr parts)))
+                  (url-unhex-string encoded))))
+    (list :type type :title (and title (not (string-empty-p title)) title))))
+
+(defun gdocs-convert--attach-callout-block-markers (ir)
+  "Group marked callout paragraphs in IR."
+  (let ((result nil)
+        (remaining ir))
+    (while remaining
+      (let* ((element (car remaining))
+             (marker (gdocs-convert--callout-marker element)))
+        (if marker
+            (let* ((data (gdocs-convert--callout-marker-data marker))
+                   (type (plist-get data :type))
+                   (title (plist-get data :title))
+                   (paragraphs nil)
+                   (start (plist-get element :doc-start))
+                   end)
+              (while (and remaining
+                          (let ((candidate-marker
+                                 (gdocs-convert--callout-marker (car remaining))))
+                            (and candidate-marker
+                                 (equal data
+                                        (gdocs-convert--callout-marker-data
+                                         candidate-marker)))))
+                (when (eq (plist-get (gdocs-convert--callout-marker
+                                      (car remaining))
+                                     :type)
+                          'callout-body)
+                  (push (plist-get (car remaining) :contents) paragraphs))
+                (setq end (plist-get (car remaining) :doc-end))
+                (setq remaining (cdr remaining)))
+              (push (append (list :type 'callout-block
+                                  :callout-type type
+                                  :title title
+                                  :paragraphs (nreverse paragraphs)
+                                  :id (gdocs-convert--next-id))
+                            (when start (list :doc-start start))
+                            (when end (list :doc-end end)))
+                    result))
+          (push element result)
+          (setq remaining (cdr remaining)))))
     (nreverse result)))
 
 (defun gdocs-convert--attach-quote-block-markers (ir)
@@ -2400,6 +2607,7 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
     ('image (gdocs-convert--image-to-requests element index))
     ('source-block (gdocs-convert--source-block-to-requests element index))
     ('quote-block (gdocs-convert--quote-block-to-requests element index))
+    ('callout-block (gdocs-convert--callout-block-to-requests element index))
     ('footnote (gdocs-convert--footnote-to-requests element index))))
 
 ;; ---------------------------------------------------------------------------
@@ -2431,6 +2639,75 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
         (setq requests (nconc requests (plist-get result :requests)))
         (setq current (plist-get result :index))
         (cl-incf paragraph-index)))
+    (list :requests requests :index current)))
+
+(defun gdocs-convert--callout-style-base (type)
+  "Return logical style base symbol for callout TYPE."
+  (intern (format "gdocs-callout-%s" type)))
+
+(defun gdocs-convert--callout-label-style (type)
+  "Return logical label style symbol for callout TYPE."
+  (intern (format "gdocs-callout-%s-label" type)))
+
+(defun gdocs-convert--callout-label (type title)
+  "Return visible callout label for TYPE and TITLE."
+  (let ((label (or (cdr (assoc type gdocs-callout-labels))
+                   (capitalize type))))
+    (if (and title (not (string-empty-p title)))
+        (format "%s — %s" label title)
+      label)))
+
+(defun gdocs-convert--callout-marker-data-string (element)
+  "Return encoded callout marker data for ELEMENT."
+  (format "%s:%s"
+          (or (plist-get element :callout-type) "info")
+          (url-hexify-string (or (plist-get element :title) ""))))
+
+(defun gdocs-convert--callout-paragraph-element (element role runs index count)
+  "Return paragraph IR for callout ELEMENT ROLE RUNS at INDEX of COUNT."
+  (let* ((type (or (plist-get element :callout-type) "info"))
+         (style-name (if (eq role 'label)
+                         (gdocs-convert--callout-label-style type)
+                       (gdocs-convert--block-line-style-name
+                        (gdocs-convert--callout-style-base type)
+                        index count))))
+    (list :type 'paragraph
+          :style 'normal
+          :style-name style-name
+          :contents runs
+          :gdocs-marker (list (list :type (if (eq role 'label)
+                                              'callout-label
+                                            'callout-body)
+                                    :data (gdocs-convert--callout-marker-data-string
+                                           element)))
+          :id (plist-get element :id))))
+
+(defun gdocs-convert--callout-block-to-requests (element index)
+  "Create paragraph requests for callout-block ELEMENT at INDEX."
+  (let* ((type (or (plist-get element :callout-type) "info"))
+         (title (plist-get element :title))
+         (body-paragraphs (plist-get element :paragraphs))
+         (body-count (length body-paragraphs))
+         (body-index 0)
+         (requests nil)
+         (current index)
+         (label-paragraph
+          (gdocs-convert--callout-paragraph-element
+           element 'label
+           (list (gdocs-convert--make-plain-run
+                  (gdocs-convert--callout-label type title)))
+           0 1))
+         (label-result (gdocs-convert--paragraph-to-requests
+                        label-paragraph current)))
+    (setq requests (nconc requests (plist-get label-result :requests)))
+    (setq current (plist-get label-result :index))
+    (dolist (runs body-paragraphs)
+      (let* ((paragraph (gdocs-convert--callout-paragraph-element
+                         element 'body runs body-index body-count))
+             (result (gdocs-convert--paragraph-to-requests paragraph current)))
+        (setq requests (nconc requests (plist-get result :requests)))
+        (setq current (plist-get result :index))
+        (cl-incf body-index)))
     (list :requests requests :index current)))
 
 ;; ---------------------------------------------------------------------------

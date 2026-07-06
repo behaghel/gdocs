@@ -1590,6 +1590,94 @@
     (should (= (plist-get result :index) 12))))
 
 ;; ---------------------------------------------------------------------------
+;;; Callout block conversion
+
+(ert-deftest gdocs-convert-test-callout-block-to-ir ()
+  "Canonical CALLOUT special blocks produce semantic callout IR."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+ATTR_CALLOUT: :type warning :title \"Heads up\"\n#+BEGIN_CALLOUT\nBody with *bold*.\n#+END_CALLOUT"))
+         (block (car ir)))
+    (should (eq (plist-get block :type) 'callout-block))
+    (should (equal (plist-get block :callout-type) "warning"))
+    (should (equal (plist-get block :title) "Heads up"))
+    (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
+                           (plist-get block :paragraphs))
+                   '("Body with bold.")))))
+
+(ert-deftest gdocs-convert-test-callout-defaults-to-info ()
+  "Canonical CALLOUT blocks default to info type."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+BEGIN_CALLOUT\nBody.\n#+END_CALLOUT"))
+         (block (car ir)))
+    (should (equal (plist-get block :callout-type) "info"))))
+
+(ert-deftest gdocs-convert-test-callout-rejects-unsupported-type ()
+  "Canonical CALLOUT blocks fail closed for unsupported types."
+  (should-error
+   (gdocs-convert-org-string-to-ir
+    "#+ATTR_CALLOUT: :type danger\n#+BEGIN_CALLOUT\nBody.\n#+END_CALLOUT")
+   :type 'user-error))
+
+(ert-deftest gdocs-convert-test-callout-rejects-nested-list ()
+  "Canonical CALLOUT v1 fails closed for unsupported nested lists."
+  (should-error
+   (gdocs-convert-org-string-to-ir
+    "#+BEGIN_CALLOUT\n- one\n- two\n#+END_CALLOUT")
+   :type 'user-error))
+
+(ert-deftest gdocs-convert-test-callout-block-requests-mark-label-and-body ()
+  "Callout requests include generated label and body markers."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+ATTR_CALLOUT: :type warning :title \"Heads up\"\n#+BEGIN_CALLOUT\nBody.\n#+END_CALLOUT"))
+         (requests (gdocs-convert-ir-to-docs-requests ir)))
+    (should (member '((insertText . ((text . "Warning — Heads up\n")
+                                     (location . ((index . 1))))))
+                    requests))
+    (should (seq-some (lambda (request)
+                        (let ((range (alist-get 'createNamedRange request)))
+                          (and range
+                               (string-prefix-p
+                                "gdocs-org-marker:callout-label:elem-001:warning:Heads%20up"
+                                (alist-get 'name range)))))
+                      requests))
+    (should (seq-some (lambda (request)
+                        (let ((range (alist-get 'createNamedRange request)))
+                          (and range
+                               (string-prefix-p
+                                "gdocs-org-marker:callout-body:elem-001:warning:Heads%20up"
+                                (alist-get 'name range)))))
+                      requests))))
+
+(ert-deftest gdocs-convert-test-docs-json-marked-callout-block ()
+  "Marked callout label/body paragraphs pull back to Org callouts."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 20)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Warning — Heads up\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 20)
+                    (endIndex . 26)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Body.\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (namedRanges
+                  . ,(list
+                      (cons (intern "gdocs-org-marker:callout-label:elem-001:warning:Heads%20up")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 1) (endIndex . 19)))))))))
+                      (cons (intern "gdocs-org-marker:callout-body:elem-001:warning:Heads%20up")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 20) (endIndex . 25)))))))))))))
+         (ir (gdocs-convert-docs-json-to-ir json))
+         (org (gdocs-convert-ir-to-org ir)))
+    (should (= (length ir) 1))
+    (should (eq (plist-get (car ir) :type) 'callout-block))
+    (should (string= (s-trim org)
+                     "#+ATTR_CALLOUT: :type warning :title \"Heads up\"\n#+BEGIN_CALLOUT\nBody.\n#+END_CALLOUT"))))
+
+;; ---------------------------------------------------------------------------
 ;;; Src block conversion
 
 (ert-deftest gdocs-convert-test-quote-block-requests-use-line-role-styles ()
