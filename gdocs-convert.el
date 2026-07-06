@@ -2708,6 +2708,17 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
         (setq requests (nconc requests (plist-get result :requests)))
         (setq current (plist-get result :index))
         (cl-incf body-index)))
+    ;; Add an unmarked, unstyled separator paragraph so paragraph shading does
+    ;; not visually merge adjacent callout blocks.  Empty paragraphs are skipped
+    ;; by Org output on pull.
+    (let* ((separator (list :type 'paragraph
+                            :style 'normal
+                            :contents (list (gdocs-convert--make-plain-run ""))
+                            :id (plist-get element :id)))
+           (separator-result (gdocs-convert--paragraph-to-requests
+                              separator current)))
+      (setq requests (nconc requests (plist-get separator-result :requests)))
+      (setq current (plist-get separator-result :index)))
     (list :requests requests :index current)))
 
 ;; ---------------------------------------------------------------------------

@@ -1646,7 +1646,10 @@
                                (string-prefix-p
                                 "gdocs-org-marker:callout-body:elem-001:warning:Heads%20up"
                                 (alist-get 'name range)))))
-                      requests))))
+                      requests))
+    (should (member '((insertText . ((text . "\n")
+                                     (location . ((index . 26))))))
+                    requests))))
 
 (ert-deftest gdocs-convert-test-docs-json-marked-callout-block ()
   "Marked callout label/body paragraphs pull back to Org callouts."

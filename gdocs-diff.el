@@ -365,7 +365,8 @@ the UTF-16 index where the first element begins (default 1)."
                                     (1+ (gdocs-convert--string-to-utf16-length
                                          (gdocs-convert--runs-to-plain-text runs))))
                                   (plist-get element :paragraphs)))))
-    (+ label-len body-len)))
+    ;; Includes the generated unmarked empty separator paragraph.
+    (+ label-len body-len 1)))
 
 (defun gdocs-diff--paragraph-utf16-length (element)
   "Compute UTF-16 length of a paragraph ELEMENT including trailing newline."
