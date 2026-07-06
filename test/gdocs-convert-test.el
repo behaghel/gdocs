@@ -1540,6 +1540,25 @@
                                     (endIndex . 26))))))
                     requests))))
 
+(ert-deftest gdocs-convert-test-paragraph-border-padding-emits-border-requests ()
+  "Paragraph border padding resolves to complete transparent border objects."
+  (let* ((gdocs-style-definitions
+          '((gdocs-quote-block-single
+             :parent normal
+             :paragraph (:background-color "#f5f5f5"
+                         :border-padding 6))))
+         (request (gdocs-convert--logical-style-paragraph-request
+                   'gdocs-quote-block-single 1 10))
+         (update (alist-get 'updateParagraphStyle request))
+         (style (alist-get 'paragraphStyle update)))
+    (should (alist-get 'borderLeft style))
+    (should (equal (alist-get 'width (alist-get 'borderLeft style))
+                   '((magnitude . 1) (unit . "PT"))))
+    (should (equal (alist-get 'color (alist-get 'borderLeft style))
+                   (gdocs-convert--hex-to-color "#f5f5f5")))
+    (should (equal (alist-get 'fields update)
+                   "namedStyleType,shading.backgroundColor,borderTop,borderBottom,borderLeft,borderRight"))))
+
 (ert-deftest gdocs-convert-test-paragraph-shading-uses-nested-field-mask ()
   "Paragraph shading style requests use the nested Google Docs field mask."
   (let* ((gdocs-style-definitions

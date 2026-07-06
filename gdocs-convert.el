@@ -2898,11 +2898,29 @@ clear any inherited formatting before per-run styles are applied."
             style))
     (when-let ((indent-end (plist-get style-plist :indent-end)))
       (push `(indentEnd . ((magnitude . ,indent-end) (unit . "PT"))) style))
+    (when-let ((padding (plist-get style-plist :border-padding)))
+      (setq style (append (gdocs-convert--paragraph-padding-border-style
+                           padding
+                           (or (plist-get style-plist :border-color)
+                               (plist-get style-plist :background-color)
+                               "#FFFFFF"))
+                          style)))
     (when-let ((background (plist-get style-plist :background-color)))
       (push `(shading . ((backgroundColor . ,(gdocs-convert--hex-to-color
                                               background))))
             style))
     (delq nil style)))
+
+(defun gdocs-convert--paragraph-padding-border-style (padding color)
+  "Return paragraph borders with PADDING in points and COLOR."
+  (let ((border `((color . ,(gdocs-convert--hex-to-color color))
+                  (width . ((magnitude . 1) (unit . "PT")))
+                  (padding . ((magnitude . ,padding) (unit . "PT")))
+                  (dashStyle . "SOLID"))))
+    `((borderTop . ,border)
+      (borderBottom . ,border)
+      (borderLeft . ,border)
+      (borderRight . ,border))))
 
 (defun gdocs-convert--style-field-mask-name (field)
   "Return Google Docs field mask name for STYLE FIELD."
