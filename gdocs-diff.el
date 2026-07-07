@@ -350,12 +350,13 @@ the UTF-16 index where the first element begins (default 1)."
 
 (defun gdocs-diff--quote-block-utf16-length (element)
   "Compute UTF-16 length of quote-block ELEMENT."
-  (apply #'+
-         (mapcar (lambda (runs)
-                   (1+ (gdocs-convert--string-to-utf16-length
-                        (gdocs-convert--runs-to-plain-text runs))))
-                 (or (plist-get element :paragraphs)
-                     (list (list (gdocs-convert--make-plain-run "")))))))
+  ;; Includes the generated unmarked empty separator paragraph.
+  (1+ (apply #'+
+             (mapcar (lambda (runs)
+                       (1+ (gdocs-convert--string-to-utf16-length
+                            (gdocs-convert--runs-to-plain-text runs))))
+                     (or (plist-get element :paragraphs)
+                         (list (list (gdocs-convert--make-plain-run ""))))))))
 
 (defun gdocs-diff--callout-block-utf16-length (element)
   "Compute UTF-16 length of callout-block ELEMENT."

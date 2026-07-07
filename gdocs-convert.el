@@ -2045,6 +2045,10 @@ subsequent diffs treat the separator as part of the owning callout block."
                 (push (plist-get (car remaining) :contents) paragraphs)
                 (setq end (plist-get (car remaining) :doc-end))
                 (setq remaining (cdr remaining)))
+              (when (and remaining
+                         (gdocs-convert--empty-paragraph-p (car remaining)))
+                (setq end (plist-get (car remaining) :doc-end))
+                (setq remaining (cdr remaining)))
               (push (append (list :type 'quote-block
                                   :paragraphs (nreverse paragraphs)
                                   :id (gdocs-convert--next-id))
@@ -2702,6 +2706,16 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
         (setq requests (nconc requests (plist-get result :requests)))
         (setq current (plist-get result :index))
         (cl-incf paragraph-index)))
+    ;; Add unmarked spacing chrome so shaded quote blocks do not visually merge
+    ;; with following shaded typographic blocks such as callouts.
+    (let* ((separator (list :type 'paragraph
+                            :style 'normal
+                            :contents (list (gdocs-convert--make-plain-run ""))
+                            :id (plist-get element :id)))
+           (separator-result (gdocs-convert--paragraph-to-requests
+                              separator current)))
+      (setq requests (nconc requests (plist-get separator-result :requests)))
+      (setq current (plist-get separator-result :index)))
     (list :requests requests :index current)))
 
 (defun gdocs-convert--callout-style-base (type)

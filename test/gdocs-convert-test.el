@@ -496,6 +496,31 @@
     (should (string= (s-trim org)
                      "#+BEGIN_SRC python\nprint(1)\n#+END_SRC"))))
 
+(ert-deftest gdocs-convert-test-docs-json-marked-quote-block-consumes-separator ()
+  "Marked quote blocks consume generated trailing separator paragraphs."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 8)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Quote.\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 8)
+                    (endIndex . 9)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (namedRanges
+                  . ,(list
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 1) (endIndex . 7)))))))))))))
+         (ir (gdocs-convert-docs-json-to-ir json)))
+    (should (= (length ir) 1))
+    (should (eq (plist-get (car ir) :type) 'quote-block))
+    (should (= (plist-get (car ir) :doc-end) 9))))
+
 (ert-deftest gdocs-convert-test-docs-json-marked-quote-block ()
   "Marked quote-block paragraphs pull back to Org quote blocks."
   (let* ((body-elements
