@@ -185,6 +185,20 @@ comments; now it always diffs against the fetched remote document."
         (should gdocs-sync--shadow-ir)
         (should (equal gdocs-sync--revision-id "rev-3"))))))
 
+(ert-deftest gdocs-sync-test-push-success-strips-style-revision-from-shadow ()
+  "One-shot restyle metadata is not persisted in the sync shadow."
+  (gdocs-sync-test-with-org-buffer "#+BEGIN_QUOTE\nQuoted\n#+END_QUOTE\n"
+    (let ((current-ir (list (list :type 'quote-block
+                                  :style-revision "restyle-once"
+                                  :paragraphs (list (list (gdocs-convert--make-plain-run
+                                                           "Quoted")))))))
+      (cl-letf (((symbol-function 'gdocs-sync--update-revision-from-response) #'ignore)
+                ((symbol-function 'gdocs-sync--update-last-sync-time) #'ignore)
+                ((symbol-function 'gdocs-sync--persist-properties) #'ignore)
+                ((symbol-function 'gdocs-sync--finalize-push) #'ignore))
+        (gdocs-sync--handle-push-success current-ir nil)
+        (should-not (plist-get (car gdocs-sync--shadow-ir) :style-revision))))))
+
 (ert-deftest gdocs-sync-test-push-error-preserves-shadow ()
   "Shadow IR is updated on successful push."
   (gdocs-sync-test-with-org-buffer "Content\n"
@@ -528,6 +542,19 @@ local changes) but remote has new content."
     (should (= (gdocs-sync--body-start-index ir) 1))))
 
 ;;;; Remote unchanged detection
+
+(ert-deftest gdocs-sync-test-remote-unchanged-ignores-shadow-style-revision ()
+  "One-shot restyle metadata in an existing shadow does not force pull merge."
+  (gdocs-sync-test-with-org-buffer "#+BEGIN_QUOTE\nQuoted\n#+END_QUOTE\n"
+    (let ((remote (list (list :type 'quote-block
+                              :paragraphs (list (list (gdocs-convert--make-plain-run
+                                                       "Quoted")))))))
+      (setq gdocs-sync--shadow-ir
+            (list (list :type 'quote-block
+                        :style-revision "restyle-once"
+                        :paragraphs (list (list (gdocs-convert--make-plain-run
+                                                 "Quoted"))))))
+      (should (gdocs-sync--remote-unchanged-p remote)))))
 
 (ert-deftest gdocs-sync-test-remote-unchanged-matching-keys ()
   "Returns t when remote keys match shadow keys."

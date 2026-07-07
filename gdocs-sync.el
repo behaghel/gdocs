@@ -189,13 +189,29 @@ the shadow."
                (gdocs-sync--handle-push-error err))
            (message "Push failed: %s" (error-message-string err))))))))
 
+(defun gdocs-sync--plist-remove (plist property)
+  "Return PLIST with PROPERTY removed."
+  (let (result)
+    (while plist
+      (let ((key (pop plist))
+            (value (pop plist)))
+        (unless (eq key property)
+          (setq result (append result (list key value))))))
+    result))
+
+(defun gdocs-sync--normalize-shadow-ir (ir)
+  "Return IR with one-shot sync metadata removed for shadow storage."
+  (mapcar (lambda (element)
+            (gdocs-sync--plist-remove (copy-sequence element) :style-revision))
+          ir))
+
 (defun gdocs-sync--handle-push-success (current-ir response)
   "Update sync state after a successful push.
 CURRENT-IR is the IR that was pushed.  RESPONSE is the API
 response alist.  When the pushed IR contains nested list items
 \(level > 0), triggers a post-push fixup to correct nesting
 before finalizing."
-  (setq gdocs-sync--shadow-ir current-ir)
+  (setq gdocs-sync--shadow-ir (gdocs-sync--normalize-shadow-ir current-ir))
   (gdocs-sync--update-revision-from-response response)
   (gdocs-sync--update-last-sync-time)
   (gdocs-sync--persist-properties)
@@ -598,7 +614,8 @@ markers do not cause false mismatches."
   (when gdocs-sync--shadow-ir
     (equal (gdocs-diff--element-keys (gdocs-sync--filter-title remote-ir))
            (gdocs-diff--element-keys
-            (gdocs-sync--filter-title gdocs-sync--shadow-ir)))))
+            (gdocs-sync--filter-title
+             (gdocs-sync--normalize-shadow-ir gdocs-sync--shadow-ir))))))
 
 (defun gdocs-sync--install-content (org-string &optional revision-id)
   "Replace buffer content with ORG-STRING and update sync state.
@@ -685,7 +702,8 @@ changed remotely, uses the remote version with local markers
 grafted back.  Returns a plist with :merged-org and
 :has-conflicts."
   ;; Prepare three-way data and compute LCS
-  (let* ((shadow-ir (gdocs-sync--filter-title gdocs-sync--shadow-ir))
+  (let* ((shadow-ir (gdocs-sync--filter-title
+                     (gdocs-sync--normalize-shadow-ir gdocs-sync--shadow-ir)))
          (remote-filtered (gdocs-sync--filter-title remote-ir))
          (local-data (gdocs-convert-org-buffer-to-segments))
          (local-ir (gdocs-sync--filter-title (plist-get local-data :ir)))
