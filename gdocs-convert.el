@@ -1951,7 +1951,7 @@ like `body', `title', `lists', and `namedRanges'."
     (nreverse result)))
 
 (defun gdocs-convert--callout-marker-p (marker)
-  "Return non-nil if MARKER is a callout marker."
+  "Return non-nil if MARKER is a callout grouping marker."
   (memq (plist-get marker :type) '(callout-label callout-body)))
 
 (defun gdocs-convert--callout-marker (element)
@@ -1967,6 +1967,45 @@ like `body', `title', `lists', and `namedRanges'."
          (title (when-let* ((encoded (cadr parts)))
                   (url-unhex-string encoded))))
     (list :type type :title (and title (not (string-empty-p title)) title))))
+
+(defun gdocs-convert--callout-list-marker (element)
+  "Return the callout list marker on ELEMENT, or nil."
+  (seq-find (lambda (marker)
+              (eq (plist-get marker :type) 'callout-list))
+            (plist-get element :gdocs-marker)))
+
+(defun gdocs-convert--callout-list-marker-data (marker)
+  "Return list metadata decoded from callout-list MARKER."
+  (let* ((raw (or (plist-get marker :data) "bullet:0"))
+         (parts (s-split ":" raw))
+         (type (intern (or (car parts) "bullet")))
+         (level (string-to-number (or (cadr parts) "0"))))
+    (list :type type :level level)))
+
+(defun gdocs-convert--strip-callout-list-prefix (element list-info)
+  "Return ELEMENT contents with visible LIST-INFO marker prefix removed."
+  (let* ((marker (gdocs-convert--list-marker
+                  (plist-get list-info :type) list-info))
+         (copy (copy-sequence element))
+         (runs (copy-sequence (plist-get copy :contents))))
+    (when runs
+      (let ((first (copy-sequence (car runs))))
+        (when (string-prefix-p marker (or (plist-get first :text) ""))
+          (plist-put first :text (substring (plist-get first :text)
+                                            (length marker)))
+          (setq runs (cons first (cdr runs)))
+          (plist-put copy :contents runs))))
+    copy))
+
+(defun gdocs-convert--restore-callout-list-element (element)
+  "Return ELEMENT with callout-list marker restored as list metadata."
+  (if-let* ((marker (gdocs-convert--callout-list-marker element)))
+      (let* ((list-info (gdocs-convert--callout-list-marker-data marker))
+             (copy (gdocs-convert--strip-callout-list-prefix element
+                                                             list-info)))
+        (plist-put copy :list list-info)
+        copy)
+    element))
 
 (defun gdocs-convert--empty-paragraph-p (element)
   "Return non-nil when ELEMENT is an empty paragraph."
@@ -2005,7 +2044,9 @@ subsequent diffs treat the separator as part of the owning callout block."
                                       (car remaining))
                                      :type)
                           'callout-body)
-                  (push (car remaining) paragraphs))
+                  (push (gdocs-convert--restore-callout-list-element
+                         (car remaining))
+                        paragraphs))
                 (setq end (plist-get (car remaining) :doc-end))
                 (setq remaining (cdr remaining)))
               (when (and remaining
@@ -2740,6 +2781,25 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
           (or (plist-get element :callout-type) "info")
           (url-hexify-string (or (plist-get element :title) ""))))
 
+(defun gdocs-convert--callout-list-marker-data-string (paragraph)
+  "Return encoded callout list marker data for PARAGRAPH."
+  (let* ((list-info (plist-get paragraph :list))
+         (type (or (plist-get list-info :type) 'bullet))
+         (level (or (plist-get list-info :level) 0)))
+    (format "%s:%s" type level)))
+
+(defun gdocs-convert--prefix-runs (prefix runs)
+  "Return RUNS with PREFIX prepended to the first run."
+  (if runs
+      (let ((first (copy-sequence (car runs))))
+        (plist-put first :text (concat prefix (plist-get first :text)))
+        (cons first (cdr runs)))
+    (list (gdocs-convert--make-plain-run prefix))))
+
+(defun gdocs-convert--callout-render-list-paragraph (paragraph)
+  "Return PARAGRAPH rendered as a native Docs list paragraph."
+  (copy-sequence paragraph))
+
 (defun gdocs-convert--callout-paragraph-element (element role body index count)
   "Return paragraph IR for callout ELEMENT ROLE BODY at INDEX of COUNT."
   (let* ((type (or (plist-get element :callout-type) "info"))
@@ -2748,21 +2808,44 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
                        (gdocs-convert--block-line-style-name
                         (gdocs-convert--callout-style-base type)
                         index count)))
-         (paragraph (if (and (listp body) (plist-get body :type))
-                        (copy-sequence body)
-                      (list :type 'paragraph
-                            :style 'normal
-                            :contents body))))
+         (source-paragraph (if (and (listp body) (plist-get body :type))
+                               (copy-sequence body)
+                             (list :type 'paragraph
+                                   :style 'normal
+                                   :contents body)))
+         (list-info (plist-get source-paragraph :list))
+         (paragraph (if (and (eq role 'body) list-info)
+                        (gdocs-convert--callout-render-list-paragraph
+                         source-paragraph)
+                      source-paragraph))
+         (markers (list (list :type (if (eq role 'label)
+                                        'callout-label
+                                      'callout-body)
+                              :data (gdocs-convert--callout-marker-data-string
+                                     element)))))
+    (when (and (eq role 'body) list-info)
+      (push (list :type 'callout-list
+                  :data (gdocs-convert--callout-list-marker-data-string
+                         source-paragraph))
+            markers))
     (plist-put paragraph :style 'normal)
     (plist-put paragraph :style-name style-name)
-    (plist-put paragraph :gdocs-marker
-               (list (list :type (if (eq role 'label)
-                                     'callout-label
-                                   'callout-body)
-                           :data (gdocs-convert--callout-marker-data-string
-                                  element))))
+    (plist-put paragraph :gdocs-marker (nreverse markers))
     (plist-put paragraph :id (plist-get element :id))
     paragraph))
+
+(defun gdocs-convert--callout-list-indent-reset-request (start end)
+  "Return a post-bullet indent reset request from START to END.
+Google Docs applies default bullet indentation when `createParagraphBullets'
+runs.  Callout list items need native list semantics while keeping the shaded
+paragraph box aligned with the rest of the callout, so reset the paragraph
+indent after bullet creation."
+  `((updateParagraphStyle
+     . ((paragraphStyle . ((indentStart . ((magnitude . 0) (unit . "PT")))
+                           (indentFirstLine . ((magnitude . 0) (unit . "PT")))))
+        (range . ((startIndex . ,start)
+                  (endIndex . ,(1- end))))
+        (fields . "indentStart,indentFirstLine")))))
 
 (defun gdocs-convert--callout-block-to-requests (element index)
   "Create paragraph requests for callout-block ELEMENT at INDEX."
@@ -2787,8 +2870,13 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
     (dolist (body-element body-elements)
       (let* ((paragraph (gdocs-convert--callout-paragraph-element
                          element 'body body-element body-index body-count))
+             (start current)
              (result (gdocs-convert--paragraph-to-requests paragraph current)))
-        (setq requests (nconc requests (plist-get result :requests)))
+        (setq requests (nconc requests
+                              (plist-get result :requests)
+                              (when (plist-get paragraph :list)
+                                (list (gdocs-convert--callout-list-indent-reset-request
+                                       start (plist-get result :index))))))
         (setq current (plist-get result :index))
         (cl-incf body-index)))
     ;; Add an unmarked, unstyled separator paragraph so paragraph shading does
