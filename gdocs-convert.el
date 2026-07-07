@@ -1926,8 +1926,20 @@ like `body', `title', `lists', and `namedRanges'."
                   (url-unhex-string encoded))))
     (list :type type :title (and title (not (string-empty-p title)) title))))
 
+(defun gdocs-convert--empty-paragraph-p (element)
+  "Return non-nil when ELEMENT is an empty paragraph."
+  (and (eq (plist-get element :type) 'paragraph)
+       (let ((contents (plist-get element :contents)))
+         (or (null contents)
+             (and (= (length contents) 1)
+                  (string-empty-p
+                   (string-trim
+                    (or (plist-get (car contents) :text) ""))))))))
+
 (defun gdocs-convert--attach-callout-block-markers (ir)
-  "Group marked callout paragraphs in IR."
+  "Group marked callout paragraphs in IR.
+Consume one following empty paragraph as generated callout separator chrome so
+subsequent diffs treat the separator as part of the owning callout block."
   (let ((result nil)
         (remaining ir))
     (while remaining
@@ -1952,6 +1964,10 @@ like `body', `title', `lists', and `namedRanges'."
                                      :type)
                           'callout-body)
                   (push (plist-get (car remaining) :contents) paragraphs))
+                (setq end (plist-get (car remaining) :doc-end))
+                (setq remaining (cdr remaining)))
+              (when (and remaining
+                         (gdocs-convert--empty-paragraph-p (car remaining)))
                 (setq end (plist-get (car remaining) :doc-end))
                 (setq remaining (cdr remaining)))
               (push (append (list :type 'callout-block

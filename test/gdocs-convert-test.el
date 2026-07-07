@@ -1670,6 +1670,39 @@
                                      (location . ((index . 26))))))
                     requests))))
 
+(ert-deftest gdocs-convert-test-docs-json-marked-callout-block-consumes-separator ()
+  "Marked callouts consume the generated empty separator paragraph."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 9)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Warning\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 9)
+                    (endIndex . 15)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Body.\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 15)
+                    (endIndex . 16)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (namedRanges
+                  . ,(list
+                      (cons (intern "gdocs-org-marker:callout-label:elem-001:warning:")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 1) (endIndex . 8)))))))))
+                      (cons (intern "gdocs-org-marker:callout-body:elem-001:warning:")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 9) (endIndex . 14)))))))))))))
+         (ir (gdocs-convert-docs-json-to-ir json)))
+    (should (= (length ir) 1))
+    (should (eq (plist-get (car ir) :type) 'callout-block))
+    (should (= (plist-get (car ir) :doc-end) 16))))
+
 (ert-deftest gdocs-convert-test-docs-json-marked-callout-block ()
   "Marked callout label/body paragraphs pull back to Org callouts."
   (let* ((body-elements
