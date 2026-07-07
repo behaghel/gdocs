@@ -123,11 +123,14 @@ Concatenates all cell text across all rows."
           (or (plist-get element :callout-type) "info")
           (or (plist-get element :title) "")
           (or (plist-get element :style-revision) "")
-          (mapconcat (lambda (runs)
-                       (format "%s:%s"
-                               (gdocs-diff--runs-formatting-key runs)
-                               (gdocs-convert--runs-to-plain-text runs)))
-                     (plist-get element :paragraphs)
+          (mapconcat (lambda (body-element)
+                       (let ((runs (plist-get body-element :contents)))
+                         (format "%s:%s:%s"
+                                 (or (plist-get body-element :list) 'none)
+                                 (gdocs-diff--runs-formatting-key runs)
+                                 (gdocs-convert--runs-to-plain-text runs))))
+                     (gdocs-convert--callout-body-elements-from-paragraphs
+                      element)
                      "\n\n")))
 
 (defun gdocs-diff--image-key (element)
@@ -361,10 +364,12 @@ the UTF-16 index where the first element begins (default 1)."
          (label-len (1+ (gdocs-convert--string-to-utf16-length
                          (gdocs-convert--callout-label type title))))
          (body-len (apply #'+
-                          (mapcar (lambda (runs)
+                          (mapcar (lambda (body-element)
                                     (1+ (gdocs-convert--string-to-utf16-length
-                                         (gdocs-convert--runs-to-plain-text runs))))
-                                  (plist-get element :paragraphs)))))
+                                         (gdocs-convert--runs-to-plain-text
+                                          (plist-get body-element :contents)))))
+                                  (gdocs-convert--callout-body-elements-from-paragraphs
+                                   element)))))
     ;; Includes the generated unmarked empty separator paragraph.
     (+ label-len body-len 1)))
 

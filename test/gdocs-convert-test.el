@@ -1637,12 +1637,42 @@
     "#+ATTR_CALLOUT: :type danger\n#+BEGIN_CALLOUT\nBody.\n#+END_CALLOUT")
    :type 'user-error))
 
-(ert-deftest gdocs-convert-test-callout-rejects-nested-list ()
-  "Canonical CALLOUT v1 fails closed for unsupported nested lists."
+(ert-deftest gdocs-convert-test-callout-block-preserves-unordered-list ()
+  "Canonical CALLOUT blocks preserve unordered list body elements."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+ATTR_CALLOUT: :type tip\n#+BEGIN_CALLOUT\n- one\n- two\n#+END_CALLOUT"))
+         (block (car ir))
+         (body-elements (plist-get block :body-elements))
+         (org (gdocs-convert-ir-to-org ir)))
+    (should (= (length ir) 1))
+    (should (eq (plist-get block :type) 'callout-block))
+    (should (= (length body-elements) 2))
+    (should (equal (plist-get (car body-elements) :list)
+                   '(:type bullet :level 0)))
+    (should (string-match-p "^- one\n- two$" org))))
+
+(ert-deftest gdocs-convert-test-callout-rejects-nested-table ()
+  "Canonical CALLOUT v1 fails closed for unsupported nested tables."
   (should-error
    (gdocs-convert-org-string-to-ir
-    "#+BEGIN_CALLOUT\n- one\n- two\n#+END_CALLOUT")
+    "#+BEGIN_CALLOUT\n| one |\n#+END_CALLOUT")
    :type 'user-error))
+
+(ert-deftest gdocs-convert-test-callout-block-requests-mark-list-body ()
+  "Callout list body requests include body markers and bullet requests."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+ATTR_CALLOUT: :type tip\n#+BEGIN_CALLOUT\n- one\n- two\n#+END_CALLOUT"))
+         (requests (gdocs-convert-ir-to-docs-requests ir)))
+    (should (seq-some (lambda (request)
+                        (let ((range (alist-get 'createNamedRange request)))
+                          (and range
+                               (string-prefix-p
+                                "gdocs-org-marker:callout-body:elem-003:tip:"
+                                (alist-get 'name range)))))
+                      requests))
+    (should (seq-some (lambda (request)
+                        (alist-get 'createParagraphBullets request))
+                      requests))))
 
 (ert-deftest gdocs-convert-test-callout-block-requests-mark-label-and-body ()
   "Callout requests include generated label and body markers."
@@ -1655,15 +1685,15 @@
     (should (seq-some (lambda (request)
                         (let ((range (alist-get 'createNamedRange request)))
                           (and range
-                               (string-prefix-p
-                                "gdocs-org-marker:callout-label:elem-001:warning:Heads%20up"
+                               (string-match-p
+                                "gdocs-org-marker:callout-label:elem-[0-9][0-9]*:warning:Heads%20up"
                                 (alist-get 'name range)))))
                       requests))
     (should (seq-some (lambda (request)
                         (let ((range (alist-get 'createNamedRange request)))
                           (and range
-                               (string-prefix-p
-                                "gdocs-org-marker:callout-body:elem-001:warning:Heads%20up"
+                               (string-match-p
+                                "gdocs-org-marker:callout-body:elem-[0-9][0-9]*:warning:Heads%20up"
                                 (alist-get 'name range)))))
                       requests))
     (should (member '((insertText . ((text . "\n")
@@ -1702,6 +1732,40 @@
     (should (= (length ir) 1))
     (should (eq (plist-get (car ir) :type) 'callout-block))
     (should (= (plist-get (car ir) :doc-end) 16))))
+
+(ert-deftest gdocs-convert-test-docs-json-marked-callout-list-block ()
+  "Marked callout list body paragraphs pull back inside Org callouts."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 5)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Tip\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 5)
+                    (endIndex . 9)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "one\n")
+                                                            (textStyle . ()))))))
+                        (bullet . ((listId . "list-1")))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 9)
+                    (endIndex . 13)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "two\n")
+                                                            (textStyle . ()))))))
+                        (bullet . ((listId . "list-1")))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (lists . ((list-1 . ((listProperties . ((nestingLevels . [((glyphType . "BULLET"))])))))))
+                 (namedRanges
+                  . ,(list
+                      (cons (intern "gdocs-org-marker:callout-label:elem-001:tip:")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 1) (endIndex . 4)))))))))
+                      (cons (intern "gdocs-org-marker:callout-body:elem-001:tip:")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 5) (endIndex . 12)))))))))))))
+         (org (gdocs-convert-ir-to-org (gdocs-convert-docs-json-to-ir json))))
+    (should (string-search "#+BEGIN_CALLOUT\n- one\n- two\n#+END_CALLOUT" org))))
 
 (ert-deftest gdocs-convert-test-docs-json-marked-callout-block ()
   "Marked callout label/body paragraphs pull back to Org callouts."

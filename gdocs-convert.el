@@ -513,9 +513,10 @@ a paragraph inside a quote block is handled by the quote walker."
         (eq parent-type 'org-data))))
 
 (defun gdocs-convert--top-level-list-p (plain-list)
-  "Return non-nil if PLAIN-LIST is not nested inside another list item."
-  (let ((parent (org-element-parent plain-list)))
-    (not (eq (org-element-type parent) 'item))))
+  "Return non-nil if PLAIN-LIST is a direct document/section child."
+  (let ((parent-type (org-element-type (org-element-parent plain-list))))
+    (or (eq parent-type 'section)
+        (eq parent-type 'org-data))))
 
 (defun gdocs-convert--preservable-keyword-p (keyword)
   "Return non-nil if KEYWORD is an org-only construct to preserve.
@@ -1231,9 +1232,35 @@ the Google Docs representation."
   "Signal when SPECIAL-BLOCK callout contains unsupported direct children."
   (dolist (child (org-element-contents special-block))
     (unless (or (stringp child)
-                (eq (org-element-type child) 'paragraph))
-      (user-error "Unsupported Org callout child `%s'; v1 supports paragraphs only"
+                (memq (org-element-type child) '(paragraph plain-list)))
+      (user-error "Unsupported Org callout child `%s'; v1 supports paragraphs and lists only"
                   (org-element-type child)))))
+
+(defun gdocs-convert--callout-body-elements (special-block)
+  "Return ordered paragraph IR elements for SPECIAL-BLOCK callout body."
+  (let (entries)
+    (dolist (child (org-element-contents special-block))
+      (unless (stringp child)
+        (pcase (org-element-type child)
+          ('paragraph
+           (let* ((runs (gdocs-convert--objects-to-runs
+                         (org-element-contents child)))
+                  (trimmed (gdocs-convert--trim-runs runs)))
+             (when trimmed
+               (push (list :ir (list :type 'paragraph
+                                     :style 'normal
+                                     :contents trimmed
+                                     :id (gdocs-convert--next-id))
+                           :begin (org-element-property :begin child))
+                     entries))))
+          ('plain-list
+           (setq entries
+                 (nconc (gdocs-convert--plain-list-positioned child 0)
+                        entries))))))
+    (mapcar (lambda (entry) (plist-get entry :ir))
+            (sort entries
+                  (lambda (a b) (< (plist-get a :begin)
+                                   (plist-get b :begin)))))))
 
 (defun gdocs-convert--callout-block-to-ir (special-block)
   "Convert canonical Org SPECIAL-BLOCK callout to callout-block IR."
@@ -1241,21 +1268,15 @@ the Google Docs representation."
   (let* ((attributes (gdocs-convert--callout-attributes special-block))
          (type (or (plist-get attributes :type) "info"))
          (title (plist-get attributes :title))
-         (paragraphs nil))
+         (body-elements (gdocs-convert--callout-body-elements special-block)))
     (gdocs-convert--validate-callout-type type)
-    (org-element-map special-block 'paragraph
-      (lambda (para)
-        (let ((parent (org-element-parent para)))
-          (when (eq parent special-block)
-            (let* ((runs (gdocs-convert--objects-to-runs
-                          (org-element-contents para)))
-                   (trimmed (gdocs-convert--trim-runs runs)))
-              (when trimmed
-                (push trimmed paragraphs)))))))
     (list :type 'callout-block
           :callout-type type
           :title title
-          :paragraphs (nreverse paragraphs)
+          :body-elements body-elements
+          :paragraphs (mapcar (lambda (element)
+                                (plist-get element :contents))
+                              body-elements)
           :id (gdocs-convert--next-id))))
 
 ;; ---------------------------------------------------------------------------
@@ -1779,6 +1800,28 @@ markers to produce valid emphasis markup."
                   (mapcar #'gdocs-convert--runs-to-org
                           (plist-get element :paragraphs)))))
 
+(defun gdocs-convert--callout-body-elements-from-paragraphs (element)
+  "Return backward-compatible callout body elements for ELEMENT."
+  (or (plist-get element :body-elements)
+      (mapcar (lambda (runs)
+                (list :type 'paragraph
+                      :style 'normal
+                      :contents runs))
+              (plist-get element :paragraphs))))
+
+(defun gdocs-convert--join-callout-body-org (elements)
+  "Join callout body ELEMENTS as Org text."
+  (let ((parts nil)
+        previous-list-p)
+    (dolist (element elements)
+      (let ((current-list-p (plist-get element :list))
+            (text (gdocs-convert--ir-paragraph-to-org element)))
+        (when parts
+          (push (if (or previous-list-p current-list-p) "\n" "\n\n") parts))
+        (push text parts)
+        (setq previous-list-p current-list-p)))
+    (apply #'concat (nreverse parts))))
+
 (defun gdocs-convert--ir-callout-block-to-org (element)
   "Convert callout-block IR ELEMENT to Org callout block text."
   (let* ((type (or (plist-get element :callout-type) "info"))
@@ -1787,9 +1830,8 @@ markers to produce valid emphasis markup."
                         (if (and title (not (string-empty-p title)))
                             (format " :title %S" title)
                           "")))
-         (body (s-join "\n\n"
-                       (mapcar #'gdocs-convert--runs-to-org
-                               (plist-get element :paragraphs)))))
+         (body (gdocs-convert--join-callout-body-org
+                (gdocs-convert--callout-body-elements-from-paragraphs element))))
     (format "%s\n#+BEGIN_CALLOUT\n%s\n#+END_CALLOUT" attrs body)))
 
 ;; ---------------------------------------------------------------------------
@@ -1963,21 +2005,26 @@ subsequent diffs treat the separator as part of the owning callout block."
                                       (car remaining))
                                      :type)
                           'callout-body)
-                  (push (plist-get (car remaining) :contents) paragraphs))
+                  (push (car remaining) paragraphs))
                 (setq end (plist-get (car remaining) :doc-end))
                 (setq remaining (cdr remaining)))
               (when (and remaining
                          (gdocs-convert--empty-paragraph-p (car remaining)))
                 (setq end (plist-get (car remaining) :doc-end))
                 (setq remaining (cdr remaining)))
-              (push (append (list :type 'callout-block
-                                  :callout-type type
-                                  :title title
-                                  :paragraphs (nreverse paragraphs)
-                                  :id (gdocs-convert--next-id))
+              (let ((body-elements (nreverse paragraphs)))
+                (push (append (list :type 'callout-block
+                                    :callout-type type
+                                    :title title
+                                    :body-elements body-elements
+                                    :paragraphs (mapcar (lambda (paragraph)
+                                                          (plist-get paragraph
+                                                                     :contents))
+                                                        body-elements)
+                                    :id (gdocs-convert--next-id))
                             (when start (list :doc-start start))
                             (when end (list :doc-end end)))
-                    result))
+                    result)))
           (push element result)
           (setq remaining (cdr remaining)))))
     (nreverse result)))
@@ -2679,31 +2726,37 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
           (or (plist-get element :callout-type) "info")
           (url-hexify-string (or (plist-get element :title) ""))))
 
-(defun gdocs-convert--callout-paragraph-element (element role runs index count)
-  "Return paragraph IR for callout ELEMENT ROLE RUNS at INDEX of COUNT."
+(defun gdocs-convert--callout-paragraph-element (element role body index count)
+  "Return paragraph IR for callout ELEMENT ROLE BODY at INDEX of COUNT."
   (let* ((type (or (plist-get element :callout-type) "info"))
          (style-name (if (eq role 'label)
                          (gdocs-convert--callout-label-style type)
                        (gdocs-convert--block-line-style-name
                         (gdocs-convert--callout-style-base type)
-                        index count))))
-    (list :type 'paragraph
-          :style 'normal
-          :style-name style-name
-          :contents runs
-          :gdocs-marker (list (list :type (if (eq role 'label)
-                                              'callout-label
-                                            'callout-body)
-                                    :data (gdocs-convert--callout-marker-data-string
-                                           element)))
-          :id (plist-get element :id))))
+                        index count)))
+         (paragraph (if (and (listp body) (plist-get body :type))
+                        (copy-sequence body)
+                      (list :type 'paragraph
+                            :style 'normal
+                            :contents body))))
+    (plist-put paragraph :style 'normal)
+    (plist-put paragraph :style-name style-name)
+    (plist-put paragraph :gdocs-marker
+               (list (list :type (if (eq role 'label)
+                                     'callout-label
+                                   'callout-body)
+                           :data (gdocs-convert--callout-marker-data-string
+                                  element))))
+    (plist-put paragraph :id (plist-get element :id))
+    paragraph))
 
 (defun gdocs-convert--callout-block-to-requests (element index)
   "Create paragraph requests for callout-block ELEMENT at INDEX."
   (let* ((type (or (plist-get element :callout-type) "info"))
          (title (plist-get element :title))
-         (body-paragraphs (plist-get element :paragraphs))
-         (body-count (length body-paragraphs))
+         (body-elements (gdocs-convert--callout-body-elements-from-paragraphs
+                         element))
+         (body-count (length body-elements))
          (body-index 0)
          (requests nil)
          (current index)
@@ -2717,9 +2770,9 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
                         label-paragraph current)))
     (setq requests (nconc requests (plist-get label-result :requests)))
     (setq current (plist-get label-result :index))
-    (dolist (runs body-paragraphs)
+    (dolist (body-element body-elements)
       (let* ((paragraph (gdocs-convert--callout-paragraph-element
-                         element 'body runs body-index body-count))
+                         element 'body body-element body-index body-count))
              (result (gdocs-convert--paragraph-to-requests paragraph current)))
         (setq requests (nconc requests (plist-get result :requests)))
         (setq current (plist-get result :index))
@@ -3262,15 +3315,31 @@ This function removes per-paragraph `createParagraphBullets' and
 appends a single merged request per contiguous list group.
 Consecutive numbered groups receive alternating presets to prevent
 Google Docs from merging them into one continuous list."
-  (let ((groups (gdocs-convert--find-list-groups element-ranges))
-        (filtered (cl-remove-if
-                   (lambda (req) (alist-get 'createParagraphBullets req))
-                   requests)))
-    (gdocs-convert--alternate-numbered-presets groups)
-    (append filtered
-            (mapcar #'gdocs-convert--list-group-bullet-request groups)
-            (gdocs-convert--guard-non-list-paragraphs
-             element-ranges groups))))
+  (let ((groups (gdocs-convert--find-list-groups element-ranges)))
+    (if (null groups)
+        requests
+      (let ((filtered (cl-remove-if
+                       (lambda (req)
+                         (and (alist-get 'createParagraphBullets req)
+                              (gdocs-convert--bullet-request-in-list-groups-p
+                               req groups)))
+                       requests)))
+        (gdocs-convert--alternate-numbered-presets groups)
+        (append filtered
+                (mapcar #'gdocs-convert--list-group-bullet-request groups)
+                (gdocs-convert--guard-non-list-paragraphs
+                 element-ranges groups))))))
+
+(defun gdocs-convert--bullet-request-in-list-groups-p (request groups)
+  "Return non-nil if bullet REQUEST belongs to one of GROUPS."
+  (when-let* ((bullet (alist-get 'createParagraphBullets request))
+              (range (alist-get 'range bullet))
+              (start (alist-get 'startIndex range))
+              (end (alist-get 'endIndex range)))
+    (seq-some (lambda (group)
+                (and (>= start (plist-get group :start))
+                     (<= end (1- (plist-get group :end)))))
+              groups)))
 
 (defun gdocs-convert--find-list-groups (element-ranges)
   "Find contiguous groups of list elements in ELEMENT-RANGES.
