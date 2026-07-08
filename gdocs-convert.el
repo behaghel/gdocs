@@ -1101,6 +1101,20 @@ BASE-STYLE-first, BASE-STYLE-line, BASE-STYLE-last, and BASE-STYLE-single."
                    ((= index (1- count)) "last")
                    (t "line")))))
 
+(defun gdocs-convert--typographic-block-paragraph
+    (element contents style-base marker index count)
+  "Return shared paragraph IR for typographic block ELEMENT.
+CONTENTS is a run list, STYLE-BASE is the logical style family,
+MARKER is a marker plist, and INDEX/COUNT select first/line/last/single
+line style names."
+  (list :type 'paragraph
+        :style 'normal
+        :style-name (gdocs-convert--block-line-style-name
+                     style-base index count)
+        :contents contents
+        :gdocs-marker (list marker)
+        :id (plist-get element :id)))
+
 (defun gdocs-convert--src-block-to-ir (src-block)
   "Convert a SRC-BLOCK to a semantic source-block IR element."
   (let* ((language (or (org-element-property :language src-block) ""))
@@ -2018,6 +2032,17 @@ like `body', `title', `lists', and `namedRanges'."
                    (string-trim
                     (or (plist-get (car contents) :text) ""))))))))
 
+(defun gdocs-convert--consume-generated-separator (remaining end)
+  "Consume one generated empty paragraph from REMAINING.
+Return a plist with :remaining and :end.  Typographic block renderers use an
+unmarked empty paragraph as separator chrome; pull grouping treats it as owned
+by the preceding marked block so repeated push/restyle operations stay
+idempotent."
+  (if (and remaining (gdocs-convert--empty-paragraph-p (car remaining)))
+      (list :remaining (cdr remaining)
+            :end (or (plist-get (car remaining) :doc-end) end))
+    (list :remaining remaining :end end)))
+
 (defun gdocs-convert--attach-callout-block-markers (ir)
   "Group marked callout paragraphs in IR.
 Consume one following empty paragraph as generated callout separator chrome so
@@ -2050,10 +2075,10 @@ subsequent diffs treat the separator as part of the owning callout block."
                         paragraphs))
                 (setq end (plist-get (car remaining) :doc-end))
                 (setq remaining (cdr remaining)))
-              (when (and remaining
-                         (gdocs-convert--empty-paragraph-p (car remaining)))
-                (setq end (plist-get (car remaining) :doc-end))
-                (setq remaining (cdr remaining)))
+              (let ((separator (gdocs-convert--consume-generated-separator
+                                remaining end)))
+                (setq remaining (plist-get separator :remaining))
+                (setq end (plist-get separator :end)))
               (let ((body-elements (nreverse paragraphs)))
                 (push (append (list :type 'callout-block
                                     :callout-type type
@@ -2087,10 +2112,10 @@ subsequent diffs treat the separator as part of the owning callout block."
                 (push (plist-get (car remaining) :contents) paragraphs)
                 (setq end (plist-get (car remaining) :doc-end))
                 (setq remaining (cdr remaining)))
-              (when (and remaining
-                         (gdocs-convert--empty-paragraph-p (car remaining)))
-                (setq end (plist-get (car remaining) :doc-end))
-                (setq remaining (cdr remaining)))
+              (let ((separator (gdocs-convert--consume-generated-separator
+                                remaining end)))
+                (setq remaining (plist-get separator :remaining))
+                (setq end (plist-get separator :end)))
               (push (append (list :type 'quote-block
                                   :paragraphs (nreverse paragraphs)
                                   :id (gdocs-convert--next-id))
@@ -2722,16 +2747,24 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
 ;; ---------------------------------------------------------------------------
 ;;; Typographic block -> requests
 
+(defun gdocs-convert--append-generated-separator-requests
+    (requests current element)
+  "Append shared generated separator chrome for typographic block ELEMENT.
+Return a plist with :requests and :index.  The separator is intentionally
+unmarked and unstyled; pull grouping consumes one following empty paragraph as
+owned chrome via `gdocs-convert--consume-generated-separator'."
+  (let* ((separator (list :type 'paragraph
+                          :style 'normal
+                          :contents (list (gdocs-convert--make-plain-run ""))
+                          :id (plist-get element :id)))
+         (result (gdocs-convert--paragraph-to-requests separator current)))
+    (list :requests (nconc requests (plist-get result :requests))
+          :index (plist-get result :index))))
+
 (defun gdocs-convert--quote-block-paragraph-element (element runs index count)
   "Return paragraph IR for quote-block ELEMENT RUNS at INDEX of COUNT."
-  (let ((id (plist-get element :id)))
-    (list :type 'paragraph
-          :style 'normal
-          :style-name (gdocs-convert--block-line-style-name
-                       'gdocs-quote-block index count)
-          :contents runs
-          :gdocs-marker (list (list :type 'quote-block))
-          :id id)))
+  (gdocs-convert--typographic-block-paragraph
+   element runs 'gdocs-quote-block (list :type 'quote-block) index count))
 
 (defun gdocs-convert--quote-block-to-requests (element index)
   "Create paragraph requests for quote-block ELEMENT at INDEX."
@@ -2750,14 +2783,10 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
         (cl-incf paragraph-index)))
     ;; Add unmarked spacing chrome so shaded quote blocks do not visually merge
     ;; with following shaded typographic blocks such as callouts.
-    (let* ((separator (list :type 'paragraph
-                            :style 'normal
-                            :contents (list (gdocs-convert--make-plain-run ""))
-                            :id (plist-get element :id)))
-           (separator-result (gdocs-convert--paragraph-to-requests
-                              separator current)))
-      (setq requests (nconc requests (plist-get separator-result :requests)))
-      (setq current (plist-get separator-result :index)))
+    (let ((result (gdocs-convert--append-generated-separator-requests
+                   requests current element)))
+      (setq requests (plist-get result :requests))
+      (setq current (plist-get result :index)))
     (list :requests requests :index current)))
 
 (defun gdocs-convert--callout-style-base (type)
@@ -2880,17 +2909,13 @@ indent after bullet creation."
                                        start (plist-get result :index))))))
         (setq current (plist-get result :index))
         (cl-incf body-index)))
-    ;; Add an unmarked, unstyled separator paragraph so paragraph shading does
-    ;; not visually merge adjacent callout blocks.  Empty paragraphs are skipped
-    ;; by Org output on pull.
-    (let* ((separator (list :type 'paragraph
-                            :style 'normal
-                            :contents (list (gdocs-convert--make-plain-run ""))
-                            :id (plist-get element :id)))
-           (separator-result (gdocs-convert--paragraph-to-requests
-                              separator current)))
-      (setq requests (nconc requests (plist-get separator-result :requests)))
-      (setq current (plist-get separator-result :index)))
+    ;; Add unmarked spacing chrome so shaded callouts do not visually merge with
+    ;; adjacent shaded typographic blocks.  Empty paragraphs are skipped by Org
+    ;; output on pull.
+    (let ((result (gdocs-convert--append-generated-separator-requests
+                   requests current element)))
+      (setq requests (plist-get result :requests))
+      (setq current (plist-get result :index)))
     (list :requests requests :index current)))
 
 ;; ---------------------------------------------------------------------------
@@ -2898,16 +2923,13 @@ indent after bullet creation."
 
 (defun gdocs-convert--source-block-line-element (element line line-index line-count)
   "Return paragraph IR for source-block ELEMENT LINE at LINE-INDEX."
-  (let ((id (plist-get element :id)))
-    (list :type 'paragraph
-          :style 'normal
-          :style-name (gdocs-convert--block-line-style-name
-                       'gdocs-source-block line-index line-count)
-          :contents (list (gdocs-convert--make-run
-                           line (gdocs-convert--code-props)))
-          :gdocs-marker (list (list :type 'src-block
-                                    :data (or (plist-get element :language) "")))
-          :id id)))
+  (gdocs-convert--typographic-block-paragraph
+   element
+   (list (gdocs-convert--make-run line (gdocs-convert--code-props)))
+   'gdocs-source-block
+   (list :type 'src-block :data (or (plist-get element :language) ""))
+   line-index
+   line-count))
 
 (defun gdocs-convert--source-block-to-requests (element index)
   "Create paragraph requests for source-block ELEMENT at INDEX."
