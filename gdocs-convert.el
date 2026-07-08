@@ -1811,6 +1811,7 @@ markers to produce valid emphasis markup."
 
 (defun gdocs-convert--join-callout-body-org (elements)
   "Join callout body ELEMENTS as Org text."
+  (gdocs-convert--assign-list-counters elements)
   (let ((parts nil)
         previous-list-p)
     (dolist (element elements)
