@@ -1662,6 +1662,20 @@
     "#+ATTR_CALLOUT: :type danger\n#+BEGIN_CALLOUT\nBody.\n#+END_CALLOUT")
    :type 'user-error))
 
+(ert-deftest gdocs-convert-test-callout-block-preserves-nested-list ()
+  "Canonical CALLOUT blocks preserve nested list body elements."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+ATTR_CALLOUT: :type tip\n#+BEGIN_CALLOUT\n- parent\n  - child\n- sibling\n#+END_CALLOUT"))
+         (block (car ir))
+         (body-elements (plist-get block :body-elements))
+         (org (gdocs-convert-ir-to-org ir)))
+    (should (= (length body-elements) 3))
+    (should (equal (plist-get (nth 0 body-elements) :list)
+                   '(:type bullet :level 0)))
+    (should (equal (plist-get (nth 1 body-elements) :list)
+                   '(:type bullet :level 1)))
+    (should (string-search "#+BEGIN_CALLOUT\n- parent\n  - child\n- sibling\n#+END_CALLOUT" org))))
+
 (ert-deftest gdocs-convert-test-callout-block-preserves-ordered-list ()
   "Canonical CALLOUT blocks preserve ordered list body elements."
   (let* ((ir (gdocs-convert-org-string-to-ir
@@ -1786,6 +1800,41 @@
     (should (= (length ir) 1))
     (should (eq (plist-get (car ir) :type) 'callout-block))
     (should (= (plist-get (car ir) :doc-end) 16))))
+
+(ert-deftest gdocs-convert-test-docs-json-marked-callout-nested-list-block ()
+  "Marked callout nested list body paragraphs pull back with nesting."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 5)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Tip\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 5)
+                    (endIndex . 12)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "parent\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 12)
+                    (endIndex . 18)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "child\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (namedRanges
+                  . ,(list
+                      (cons (intern "gdocs-org-marker:callout-label:elem-001:tip:")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 1) (endIndex . 4)))))))))
+                      (cons (intern "gdocs-org-marker:callout-body:elem-001:tip:")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 5) (endIndex . 17)))))))))
+                      (cons (intern "gdocs-org-marker:callout-list:elem-001:bullet:0")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 5) (endIndex . 11)))))))))
+                      (cons (intern "gdocs-org-marker:callout-list:elem-001:bullet:1")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 12) (endIndex . 17)))))))))))))
+         (org (gdocs-convert-ir-to-org (gdocs-convert-docs-json-to-ir json))))
+    (should (string-search "#+BEGIN_CALLOUT\n- parent\n  - child\n#+END_CALLOUT" org))))
 
 (ert-deftest gdocs-convert-test-docs-json-marked-callout-numbered-list-block ()
   "Marked callout numbered list body paragraphs pull back as Org numbering."
