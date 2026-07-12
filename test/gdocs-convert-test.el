@@ -1721,10 +1721,24 @@
     (should (string-match-p "^- one\n- two$" org))))
 
 (ert-deftest gdocs-convert-test-callout-rejects-nested-table ()
-  "Canonical CALLOUT v1 fails closed for unsupported nested tables."
+  "Canonical CALLOUT fails closed for nested tables."
   (should-error
    (gdocs-convert-org-string-to-ir
     "#+BEGIN_CALLOUT\n| one |\n#+END_CALLOUT")
+   :type 'user-error))
+
+(ert-deftest gdocs-convert-test-callout-rejects-nested-source-block ()
+  "Canonical CALLOUT fails closed for nested source blocks."
+  (should-error
+   (gdocs-convert-org-string-to-ir
+    "#+BEGIN_CALLOUT\n#+BEGIN_SRC emacs-lisp\n(message \"nope\")\n#+END_SRC\n#+END_CALLOUT")
+   :type 'user-error))
+
+(ert-deftest gdocs-convert-test-callout-rejects-nested-quote-block ()
+  "Canonical CALLOUT fails closed for nested quote blocks."
+  (should-error
+   (gdocs-convert-org-string-to-ir
+    "#+BEGIN_CALLOUT\n#+BEGIN_QUOTE\nNo nested blocks.\n#+END_QUOTE\n#+END_CALLOUT")
    :type 'user-error))
 
 (ert-deftest gdocs-convert-test-callout-block-requests-mark-list-body ()
