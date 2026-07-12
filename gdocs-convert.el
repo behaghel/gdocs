@@ -54,11 +54,11 @@
   :group 'gdocs)
 
 (defcustom gdocs-callout-labels
-  '(("info" . "Info")
-    ("note" . "Note")
-    ("warning" . "Warning")
-    ("tip" . "Tip")
-    ("important" . "Important"))
+  '(("info" . "ℹ️ Info")
+    ("note" . "📝 Note")
+    ("warning" . "⚠️ Warning")
+    ("tip" . "💡 Tip")
+    ("important" . "❗ Important"))
   "Visible labels used for semantic callout types."
   :type '(alist :key-type string :value-type string)
   :group 'gdocs)

@@ -1780,7 +1780,7 @@
                                 (alist-get 'name range)))))
                       requests))
     (should (member '((insertText . ((text . "one\n")
-                                     (location . ((index . 5))))))
+                                     (location . ((index . 8))))))
                     requests))
     (should (seq-some (lambda (request)
                         (let ((range (alist-get 'createNamedRange request)))
@@ -1805,7 +1805,7 @@
   (let* ((ir (gdocs-convert-org-string-to-ir
               "#+ATTR_CALLOUT: :type warning :title \"Heads up\"\n#+BEGIN_CALLOUT\nBody.\n#+END_CALLOUT"))
          (requests (gdocs-convert-ir-to-docs-requests ir)))
-    (should (member '((insertText . ((text . "Warning — Heads up\n")
+    (should (member '((insertText . ((text . "⚠️ Warning — Heads up\n")
                                      (location . ((index . 1))))))
                     requests))
     (should (seq-some (lambda (request)
@@ -1823,7 +1823,7 @@
                                 (alist-get 'name range)))))
                       requests))
     (should (member '((insertText . ((text . "\n")
-                                     (location . ((index . 26))))))
+                                     (location . ((index . 29))))))
                     requests))))
 
 (ert-deftest gdocs-convert-test-callout-mixed-body-idempotence ()
@@ -1879,7 +1879,7 @@
     (should (= (cl-count-if
                 (lambda (request)
                   (equal (alist-get 'insertText request)
-                         '((text . "\n") (location . ((index . 23))))))
+                         '((text . "\n") (location . ((index . 26))))))
                 requests)
                1))))
 
