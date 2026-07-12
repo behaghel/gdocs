@@ -3120,25 +3120,61 @@ clear any inherited formatting before per-run styles are applied."
             style))
     (when-let ((indent-end (plist-get style-plist :indent-end)))
       (push `(indentEnd . ((magnitude . ,indent-end) (unit . "PT"))) style))
-    (when-let ((padding (plist-get style-plist :border-padding)))
-      (setq style (append (gdocs-convert--paragraph-padding-border-style
-                           padding
-                           (or (plist-get style-plist :border-color)
-                               (plist-get style-plist :background-color)
-                               "#FFFFFF"))
-                          style)))
+    (if-let ((borders (plist-get style-plist :borders)))
+        (setq style (append (gdocs-convert--paragraph-border-styles
+                             borders style-plist)
+                            style))
+      (when-let ((padding (plist-get style-plist :border-padding)))
+        (setq style (append (gdocs-convert--paragraph-padding-border-style
+                             padding
+                             (or (plist-get style-plist :border-color)
+                                 (plist-get style-plist :background-color)
+                                 "#FFFFFF"))
+                            style))))
     (when-let ((background (plist-get style-plist :background-color)))
       (push `(shading . ((backgroundColor . ,(gdocs-convert--hex-to-color
                                               background))))
             style))
     (delq nil style)))
 
+(defun gdocs-convert--paragraph-border-object (spec fallback-color fallback-padding)
+  "Return a Google Docs ParagraphBorder from SPEC.
+FALLBACK-COLOR and FALLBACK-PADDING are used when SPEC omits :color or
+:padding.  SPEC may also provide :width in points."
+  `((color . ,(gdocs-convert--hex-to-color
+               (or (plist-get spec :color) fallback-color "#FFFFFF")))
+    (width . ((magnitude . ,(or (plist-get spec :width) 1)) (unit . "PT")))
+    (padding . ((magnitude . ,(or (plist-get spec :padding) fallback-padding 0))
+                (unit . "PT")))
+    (dashStyle . "SOLID")))
+
+(defun gdocs-convert--paragraph-border-field (side)
+  "Return Google Docs paragraph border field for SIDE."
+  (pcase side
+    ('top 'borderTop)
+    ('bottom 'borderBottom)
+    ('left 'borderLeft)
+    ('right 'borderRight)))
+
+(defun gdocs-convert--paragraph-border-styles (borders style-plist)
+  "Return paragraph border styles from BORDERS and STYLE-PLIST.
+BORDERS is an alist of (SIDE . SPEC), where SIDE is one of `top', `bottom',
+`left', or `right', and SPEC is a plist accepted by
+`gdocs-convert--paragraph-border-object'."
+  (let ((fallback-color (or (plist-get style-plist :border-color)
+                            (plist-get style-plist :background-color)
+                            "#FFFFFF"))
+        (fallback-padding (plist-get style-plist :border-padding)))
+    (mapcar (lambda (entry)
+              (cons (gdocs-convert--paragraph-border-field (car entry))
+                    (gdocs-convert--paragraph-border-object
+                     (cdr entry) fallback-color fallback-padding)))
+            borders)))
+
 (defun gdocs-convert--paragraph-padding-border-style (padding color)
   "Return paragraph borders with PADDING in points and COLOR."
-  (let ((border `((color . ,(gdocs-convert--hex-to-color color))
-                  (width . ((magnitude . 1) (unit . "PT")))
-                  (padding . ((magnitude . ,padding) (unit . "PT")))
-                  (dashStyle . "SOLID"))))
+  (let ((border (gdocs-convert--paragraph-border-object
+                 (list :color color :width 1 :padding padding) color padding)))
     `((borderTop . ,border)
       (borderBottom . ,border)
       (borderLeft . ,border)

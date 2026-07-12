@@ -1569,6 +1569,28 @@
                                     (endIndex . 26))))))
                     requests))))
 
+(ert-deftest gdocs-convert-test-paragraph-borders-can-target-individual-sides ()
+  "Logical paragraph styles can set side-specific border objects."
+  (let* ((gdocs-style-definitions
+          '((gdocs-quote-block-single
+             :parent normal
+             :paragraph (:background-color "#f5f5f5"
+                         :border-padding 6
+                         :borders ((left :color "#9DF5EA" :width 4)
+                                   (top :color "#f5f5f5" :width 0))))))
+         (request (gdocs-convert--logical-style-paragraph-request
+                   'gdocs-quote-block-single 1 10))
+         (update (alist-get 'updateParagraphStyle request))
+         (style (alist-get 'paragraphStyle update)))
+    (should (equal (alist-get 'width (alist-get 'borderLeft style))
+                   '((magnitude . 4) (unit . "PT"))))
+    (should (equal (alist-get 'width (alist-get 'borderTop style))
+                   '((magnitude . 0) (unit . "PT"))))
+    (should (equal (alist-get 'padding (alist-get 'borderLeft style))
+                   '((magnitude . 6) (unit . "PT"))))
+    (should (equal (alist-get 'fields update)
+                   "namedStyleType,shading.backgroundColor,borderLeft,borderTop"))))
+
 (ert-deftest gdocs-convert-test-paragraph-border-padding-emits-border-requests ()
   "Paragraph border padding resolves to complete transparent border objects."
   (let* ((gdocs-style-definitions
