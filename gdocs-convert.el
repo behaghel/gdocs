@@ -518,6 +518,56 @@ a paragraph inside a quote block is handled by the quote walker."
     (or (eq parent-type 'section)
         (eq parent-type 'org-data))))
 
+(defun gdocs-convert--paragraph-child-to-ir (paragraph)
+  "Convert Org PARAGRAPH child to paragraph IR, or nil if empty."
+  (let* ((runs (gdocs-convert--objects-to-runs
+                (org-element-contents paragraph)))
+         (trimmed (gdocs-convert--trim-runs runs)))
+    (when trimmed
+      (list :type 'paragraph
+            :style 'normal
+            :contents trimmed
+            :id (gdocs-convert--next-id)))))
+
+(defun gdocs-convert--block-paragraph-runs (block)
+  "Return non-empty paragraph run lists from Org BLOCK."
+  (let (paragraphs)
+    (org-element-map block 'paragraph
+      (lambda (paragraph)
+        (let* ((runs (gdocs-convert--objects-to-runs
+                      (org-element-contents paragraph)))
+               (trimmed (gdocs-convert--trim-runs runs)))
+          (when trimmed
+            (push trimmed paragraphs)))))
+    (nreverse paragraphs)))
+
+(defun gdocs-convert--block-body-elements (block allowed-types block-name)
+  "Return positioned body element IR for direct children of Org BLOCK.
+ALLOWED-TYPES is a list of permitted direct child element types.  BLOCK-NAME is
+used in diagnostics.  V1 supports paragraph/list container children on this
+shared path; unsupported children fail closed before remote mutation."
+  (let (entries)
+    (dolist (child (org-element-contents block))
+      (unless (stringp child)
+        (let ((child-type (org-element-type child)))
+          (unless (memq child-type allowed-types)
+            (user-error "Unsupported Org %s child `%s'; v1 supports paragraphs and lists only"
+                        block-name child-type))
+          (pcase child-type
+            ('paragraph
+             (when-let* ((ir (gdocs-convert--paragraph-child-to-ir child)))
+               (push (list :ir ir
+                           :begin (org-element-property :begin child))
+                     entries)))
+            ('plain-list
+             (setq entries
+                   (nconc (gdocs-convert--plain-list-positioned child 0)
+                          entries)))))))
+    (mapcar (lambda (entry) (plist-get entry :ir))
+            (sort entries
+                  (lambda (a b) (< (plist-get a :begin)
+                                   (plist-get b :begin)))))))
+
 (defun gdocs-convert--preservable-keyword-p (keyword)
   "Return non-nil if KEYWORD is an org-only construct to preserve.
 Excludes TITLE which is handled separately."
@@ -1073,16 +1123,9 @@ Skips horizontal rule rows."
 
 (defun gdocs-convert--quote-block-to-ir (quote-block)
   "Convert a QUOTE-BLOCK element to semantic quote-block IR."
-  (let ((paragraphs nil))
-    (org-element-map quote-block 'paragraph
-      (lambda (para)
-        (let* ((runs (gdocs-convert--objects-to-runs
-                      (org-element-contents para)))
-               (trimmed (gdocs-convert--trim-runs runs)))
-          (when trimmed
-            (push trimmed paragraphs)))))
+  (let ((paragraphs (gdocs-convert--block-paragraph-runs quote-block)))
     (list :type 'quote-block
-          :paragraphs (or (nreverse paragraphs)
+          :paragraphs (or paragraphs
                           (list (list (gdocs-convert--make-plain-run ""))))
           :id (gdocs-convert--next-id))))
 
@@ -1244,41 +1287,17 @@ the Google Docs representation."
 
 (defun gdocs-convert--validate-callout-body (special-block)
   "Signal when SPECIAL-BLOCK callout contains unsupported direct children."
-  (dolist (child (org-element-contents special-block))
-    (unless (or (stringp child)
-                (memq (org-element-type child) '(paragraph plain-list)))
-      (user-error "Unsupported Org callout child `%s'; v1 supports paragraphs and lists only"
-                  (org-element-type child)))))
+  (gdocs-convert--block-body-elements special-block '(paragraph plain-list)
+                                      "callout")
+  nil)
 
 (defun gdocs-convert--callout-body-elements (special-block)
   "Return ordered paragraph IR elements for SPECIAL-BLOCK callout body."
-  (let (entries)
-    (dolist (child (org-element-contents special-block))
-      (unless (stringp child)
-        (pcase (org-element-type child)
-          ('paragraph
-           (let* ((runs (gdocs-convert--objects-to-runs
-                         (org-element-contents child)))
-                  (trimmed (gdocs-convert--trim-runs runs)))
-             (when trimmed
-               (push (list :ir (list :type 'paragraph
-                                     :style 'normal
-                                     :contents trimmed
-                                     :id (gdocs-convert--next-id))
-                           :begin (org-element-property :begin child))
-                     entries))))
-          ('plain-list
-           (setq entries
-                 (nconc (gdocs-convert--plain-list-positioned child 0)
-                        entries))))))
-    (mapcar (lambda (entry) (plist-get entry :ir))
-            (sort entries
-                  (lambda (a b) (< (plist-get a :begin)
-                                   (plist-get b :begin)))))))
+  (gdocs-convert--block-body-elements special-block '(paragraph plain-list)
+                                      "callout"))
 
 (defun gdocs-convert--callout-block-to-ir (special-block)
   "Convert canonical Org SPECIAL-BLOCK callout to callout-block IR."
-  (gdocs-convert--validate-callout-body special-block)
   (let* ((attributes (gdocs-convert--callout-attributes special-block))
          (type (or (plist-get attributes :type) "info"))
          (title (plist-get attributes :title))
