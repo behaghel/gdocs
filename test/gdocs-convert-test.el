@@ -31,6 +31,7 @@
     (should (= (length ir) 1))
     (should (eq (plist-get (car ir) :type) 'paragraph))
     (should (eq (plist-get (car ir) :style) 'normal))
+    (should (eq (plist-get (car ir) :style-name) 'gdocs-body))
     (should (string= (plist-get (gdocs-convert-test--first-content-run ir)
                                 :text)
                       "Hello world"))))
@@ -46,7 +47,9 @@
            (ir (gdocs-convert-org-string-to-ir org-str))
            (elem (car ir)))
       (should (eq (plist-get elem :style)
-                  (intern (format "heading-%d" level)))))))
+                  (intern (format "heading-%d" level))))
+      (should (eq (plist-get elem :style-name)
+                  (intern (format "gdocs-heading-%d" level)))))))
 
 (ert-deftest gdocs-convert-test-heading-level-7-clamped ()
   "Heading level 7+ is clamped to heading-6."
@@ -1459,6 +1462,7 @@
     (should (= (length ir) 1))
     (should (eq (plist-get (car ir) :type) 'paragraph))
     (should (eq (plist-get (car ir) :style) 'title))
+    (should (eq (plist-get (car ir) :style-name) 'gdocs-title))
     (should (string= (plist-get (gdocs-convert-test--first-content-run ir)
                                 :text)
                       "My doc"))))
@@ -2087,6 +2091,17 @@
                    '("(message \"hello\")" "" "(+ 1 2)")))
     (should (string= (s-trim org)
                      "#+BEGIN_SRC emacs-lisp\n(message \"hello\")\n\n(+ 1 2)\n#+END_SRC"))))
+
+(ert-deftest gdocs-convert-test-logical-text-style-supports-font-weight ()
+  "Logical text styles can set Google Docs weighted font weights."
+  (let* ((gdocs-style-definitions
+          '((gdocs-heading-1 :text (:font-family "Inter" :font-weight 800))))
+         (request (gdocs-convert--logical-style-text-request
+                   'gdocs-heading-1 1 10))
+         (style (alist-get 'textStyle (alist-get 'updateTextStyle request)))
+         (font (alist-get 'weightedFontFamily style)))
+    (should (equal (alist-get 'fontFamily font) "Inter"))
+    (should (= (alist-get 'weight font) 800))))
 
 (ert-deftest gdocs-convert-test-code-style-policy-is-overridable ()
   "Logical code style can be changed without changing code semantics."

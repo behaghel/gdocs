@@ -305,6 +305,7 @@ Creates a temporary buffer, inserts STRING, and calls
     (when title-kw
       (list :type 'paragraph
             :style 'title
+            :style-name 'gdocs-title
             :contents (list (gdocs-convert--make-plain-run title-kw))
             ;; :source distinguishes synthetic elements created from
             ;; document metadata vs. body paragraphs.  Downstream code
@@ -588,9 +589,14 @@ Excludes TITLE which is handled separately."
          (marker (gdocs-convert--headline-marker headline)))
     (append (list :type 'paragraph
                   :style style
+                  :style-name (gdocs-convert--heading-logical-style-name style)
                   :contents contents
                   :id (gdocs-convert--next-id))
             (when marker (list :gdocs-marker marker)))))
+
+(defun gdocs-convert--heading-logical-style-name (style)
+  "Return logical Google Docs style name for heading STYLE."
+  (intern (format "gdocs-%s" style)))
 
 (defun gdocs-convert--level-to-style (level)
   "Convert an org heading LEVEL (integer) to an IR style symbol.
@@ -646,10 +652,13 @@ image IR elements.  Returns nil if the paragraph contains only whitespace."
        ((null trimmed) nil)
        ((gdocs-convert--multiline-code-paragraph-p trimmed)
         (gdocs-convert--split-code-paragraph-runs trimmed))
-       (t (list (list :type 'paragraph
-                      :style (gdocs-convert--paragraph-style paragraph)
-                      :contents trimmed
-                      :id (gdocs-convert--next-id))))))))
+       (t (let ((style (gdocs-convert--paragraph-style paragraph)))
+            (list (append (list :type 'paragraph
+                                :style style
+                                :contents trimmed
+                                :id (gdocs-convert--next-id))
+                          (when (eq style 'normal)
+                            (list :style-name 'gdocs-body))))))))))
 
 (defconst gdocs-convert-image-file-extensions
   '("png" "jpg" "jpeg" "gif" "webp" "svg")
@@ -3283,12 +3292,16 @@ body are reset to their defaults by the Google Docs API."
 (defun gdocs-convert--logical-text-style-to-docs (style-plist)
   "Resolve logical text STYLE-PLIST to Google Docs TextStyle fields."
   (let ((style nil))
-    (when-let ((font-family (plist-get style-plist :font-family)))
-      (push `(weightedFontFamily . ((fontFamily . ,font-family))) style))
-    (when (plist-get style-plist :monospace)
-      (push `(weightedFontFamily
-              . ((fontFamily . ,(car gdocs-convert-monospace-font-families))))
-            style))
+    (let ((font-family (or (plist-get style-plist :font-family)
+                           (when (plist-get style-plist :monospace)
+                             (car gdocs-convert-monospace-font-families))))
+          (font-weight (plist-get style-plist :font-weight)))
+      (when font-family
+        (push `(weightedFontFamily
+                . ,(append `((fontFamily . ,font-family))
+                            (when font-weight
+                              `((weight . ,font-weight)))))
+              style)))
     (when (plist-member style-plist :bold)
       (push `(bold . ,(plist-get style-plist :bold)) style))
     (when (plist-member style-plist :italic)
