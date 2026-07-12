@@ -1662,6 +1662,24 @@
     "#+ATTR_CALLOUT: :type danger\n#+BEGIN_CALLOUT\nBody.\n#+END_CALLOUT")
    :type 'user-error))
 
+(ert-deftest gdocs-convert-test-callout-block-preserves-mixed-body ()
+  "Canonical CALLOUT blocks preserve mixed paragraphs, lists, and inline markup."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+ATTR_CALLOUT: :type tip\n#+BEGIN_CALLOUT\nIntro with *bold* and =code=.\n\n- one with /emphasis/\n- two\n\nOutro with [[https://example.com][link]].\n#+END_CALLOUT"))
+         (block (car ir))
+         (body-elements (plist-get block :body-elements))
+         (org (gdocs-convert-ir-to-org ir)))
+    (should (= (length body-elements) 4))
+    (should-not (plist-get (nth 0 body-elements) :list))
+    (should (equal (plist-get (nth 1 body-elements) :list)
+                   '(:type bullet :level 0)))
+    (should (equal (plist-get (nth 2 body-elements) :list)
+                   '(:type bullet :level 0)))
+    (should-not (plist-get (nth 3 body-elements) :list))
+    (should (string-search "Intro with *bold* and ~code~." org))
+    (should (string-search "- one with /emphasis/\n- two" org))
+    (should (string-search "Outro with [[https://example.com][link]]." org))))
+
 (ert-deftest gdocs-convert-test-callout-block-preserves-nested-list ()
   "Canonical CALLOUT blocks preserve nested list body elements."
   (let* ((ir (gdocs-convert-org-string-to-ir
