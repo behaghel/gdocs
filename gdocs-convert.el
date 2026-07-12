@@ -1003,10 +1003,23 @@ heading cache and append a #heading=h.ID fragment."
       base)))
 
 (defun gdocs-convert--timestamp-to-runs (timestamp inherited-props)
-  "Convert a TIMESTAMP object to a text run with a marker.
-INHERITED-PROPS carries parent formatting."
-  (let ((raw (org-element-interpret-data timestamp)))
-    (list (gdocs-convert--make-run raw inherited-props))))
+  "Convert TIMESTAMP to a native Google Docs date run.
+INHERITED-PROPS carries parent formatting.  The original Org timestamp syntax is
+kept as the run text so Org output can reconstruct the source form when the IR is
+not pushed to Google Docs."
+  (let ((raw (org-element-interpret-data timestamp))
+        (year (org-element-property :year-start timestamp))
+        (month (org-element-property :month-start timestamp))
+        (day (org-element-property :day-start timestamp)))
+    (list (append (gdocs-convert--make-run raw inherited-props)
+                  (when (and year month day)
+                    (list :date-element
+                          (list :timestamp
+                                (format "%04d-%02d-%02dT00:00:00Z"
+                                        year month day)
+                                :raw raw
+                                :active (eq (org-element-property :type timestamp)
+                                            'active))))))))
 
 (defun gdocs-convert--entity-to-run (entity inherited-props)
   "Convert an ENTITY object to a text run.
@@ -2205,6 +2218,27 @@ Each returned plist has `:id' and `:label' keys."
                    (alist-get 'footnoteId footnote-ref))))
     (plist-put (gdocs-convert--make-plain-run "") :footnote-label label)))
 
+(defun gdocs-convert--docs-date-element-to-run (date-element)
+  "Convert Google Docs DATE-ELEMENT to an Org timestamp run."
+  (let* ((props (alist-get 'dateElementProperties date-element))
+         (timestamp (alist-get 'timestamp props))
+         (raw (gdocs-convert--docs-date-timestamp-to-org timestamp)))
+    (list :text raw
+          :date-element (list :timestamp timestamp
+                              :raw raw))))
+
+(defun gdocs-convert--docs-date-timestamp-to-org (timestamp)
+  "Return an active Org timestamp string for Google Docs TIMESTAMP."
+  (if (and timestamp
+           (string-match "\\`\\([0-9][0-9][0-9][0-9]\\)-\\([0-9][0-9]\\)-\\([0-9][0-9]\\)" timestamp))
+      (let* ((year (string-to-number (match-string 1 timestamp)))
+             (month (string-to-number (match-string 2 timestamp)))
+             (day (string-to-number (match-string 3 timestamp)))
+             (time (encode-time 0 0 0 day month year t))
+             (weekday (format-time-string "%a" time t)))
+        (format "<%04d-%02d-%02d %s>" year month day weekday))
+    "<1970-01-01 Thu>"))
+
 (defun gdocs-convert--docs-footnote-content-to-runs (content)
   "Convert Google Docs footnote CONTENT to IR text runs."
   (let ((runs nil)
@@ -2369,12 +2403,16 @@ formatted runs is normalized."
   (let ((runs nil))
     (seq-doseq (el elements)
       (let ((text-run (alist-get 'textRun el))
-            (footnote-ref (alist-get 'footnoteReference el)))
+            (footnote-ref (alist-get 'footnoteReference el))
+            (date-element (alist-get 'dateElement el)))
         (cond
          (text-run
           (push (gdocs-convert--docs-text-run-to-ir text-run) runs))
          (footnote-ref
           (push (gdocs-convert--docs-footnote-reference-to-run footnote-ref)
+                runs))
+         (date-element
+          (push (gdocs-convert--docs-date-element-to-run date-element)
                 runs)))))
     (gdocs-convert--normalize-run-whitespace
      (gdocs-convert--merge-adjacent-runs (nreverse runs)))))
@@ -2398,7 +2436,9 @@ coarser run boundaries that org-element produces."
 
 (defun gdocs-convert--runs-same-format-p (a b)
   "Return non-nil if runs A and B have identical formatting."
-  (and (eq (plist-get a :bold) (plist-get b :bold))
+  (and (not (or (plist-get a :date-element)
+                (plist-get b :date-element)))
+       (eq (plist-get a :bold) (plist-get b :bold))
        (eq (plist-get a :italic) (plist-get b :italic))
        (eq (plist-get a :underline) (plist-get b :underline))
        (eq (plist-get a :strikethrough) (plist-get b :strikethrough))
@@ -3050,13 +3090,12 @@ Returns a plist (:requests LIST :index NEW-INDEX).
 
 A text-style reset request is emitted after the insertText to
 clear any inherited formatting before per-run styles are applied."
-  (let* ((text (gdocs-convert--runs-to-plain-text
-                (plist-get element :contents)))
-         (full-text (concat text "\n"))
-         (text-len (gdocs-convert--string-to-utf16-length full-text))
-         (text-only-len (gdocs-convert--string-to-utf16-length text))
-         (insert-req (gdocs-convert--make-insert-text-request
-                      full-text index))
+  (let* ((contents (plist-get element :contents))
+         (text (gdocs-convert--runs-to-plain-text contents))
+         (insert-data (gdocs-convert--make-inline-insert-requests contents index))
+         (text-len (plist-get insert-data :length))
+         (text-only-len (1- text-len))
+         (insert-reqs (plist-get insert-data :requests))
          (style-reqs (gdocs-convert--make-paragraph-style-requests
                       element index (+ index text-len)))
          ;; Reset formatting on the text portion (excluding trailing
@@ -3070,14 +3109,14 @@ clear any inherited formatting before per-run styles are applied."
             (gdocs-convert--logical-style-text-request
              (plist-get element :style-name) index (+ index text-only-len))))
          (run-reqs (gdocs-convert--make-text-style-requests
-                    (plist-get element :contents) index))
+                    contents index))
          (list-reqs (gdocs-convert--make-list-requests element index
                                                        (+ index text-len)))
          (marker-reqs (gdocs-convert--make-marker-requests
                        element index (+ index text-len)))
          (footnote-reqs (gdocs-convert--make-footnote-reference-requests
-                         (plist-get element :contents) index))
-         (all-requests (append (list insert-req)
+                         contents index))
+         (all-requests (append insert-reqs
                                style-reqs
                                (when reset-req (list reset-req))
                                (when logical-text-req (list logical-text-req))
@@ -3096,6 +3135,44 @@ clear any inherited formatting before per-run styles are applied."
   "Create an insertText request for TEXT at INDEX."
   `((insertText . ((text . ,text)
                    (location . ((index . ,index)))))))
+
+(defun gdocs-convert--make-inline-insert-requests (runs index)
+  "Return insert requests for RUNS followed by a paragraph newline at INDEX.
+The returned plist contains :requests and model :length.  Native date runs are
+inserted with `insertDate' and count as one UTF-16 model unit."
+  (if (not (seq-some (lambda (run) (plist-get run :date-element)) runs))
+      (let* ((text (gdocs-convert--runs-to-plain-text runs))
+             (full-text (concat text "\n")))
+        (list :requests (list (gdocs-convert--make-insert-text-request
+                               full-text index))
+              :length (gdocs-convert--string-to-utf16-length full-text)))
+    (let ((requests nil)
+          (cursor index))
+      (dolist (run runs)
+        (if-let ((date (plist-get run :date-element)))
+            (progn
+              (push (gdocs-convert--make-insert-date-request date cursor)
+                    requests)
+              (setq cursor (1+ cursor)))
+          (let ((text (plist-get run :text)))
+            (unless (string-empty-p text)
+              (push (gdocs-convert--make-insert-text-request text cursor)
+                    requests)
+              (setq cursor (+ cursor
+                              (gdocs-convert--string-to-utf16-length text)))))))
+      (push (gdocs-convert--make-insert-text-request "\n" cursor) requests)
+      (list :requests (nreverse requests)
+            :length (1+ (- cursor index))))))
+
+(defun gdocs-convert--make-insert-date-request (date index)
+  "Create an insertDate request for DATE at INDEX."
+  `((insertDate
+     . ((dateElementProperties
+         . ((timestamp . ,(plist-get date :timestamp))
+            (locale . "en")
+            (dateFormat . "DATE_FORMAT_MONTH_DAY_YEAR_ABBREVIATED")
+            (timeFormat . "TIME_FORMAT_DISABLED")))
+        (location . ((index . ,index)))))))
 
 (defun gdocs-convert--logical-paragraph-style-to-docs (style-plist)
   "Resolve logical paragraph STYLE-PLIST to Google Docs ParagraphStyle fields."
@@ -3273,8 +3350,7 @@ The handler receives each zero-width footnote run and its exact body index."
   (let ((requests nil)
         (index start-index))
     (dolist (run runs)
-      (let* ((text (plist-get run :text))
-             (len (gdocs-convert--string-to-utf16-length text)))
+      (let ((len (gdocs-convert--run-model-length run)))
         (when (and (plist-get run :footnote-label)
                    gdocs-convert-footnote-reference-handler)
           (setq requests
@@ -3284,14 +3360,19 @@ The handler receives each zero-width footnote run and its exact body index."
         (setq index (+ index len))))
     requests))
 
+(defun gdocs-convert--run-model-length (run)
+  "Return Google Docs UTF-16 model length for RUN."
+  (if (plist-get run :date-element)
+      1
+    (gdocs-convert--string-to-utf16-length (or (plist-get run :text) ""))))
+
 (defun gdocs-convert--make-text-style-requests (runs start-index)
   "Create updateTextStyle requests for formatted RUNS starting at START-INDEX.
 Each run that has any formatting generates a request."
   (let ((requests nil)
         (index start-index))
     (dolist (run runs)
-      (let* ((text (plist-get run :text))
-             (len (gdocs-convert--string-to-utf16-length text))
+      (let* ((len (gdocs-convert--run-model-length run))
              (end (+ index len))
              (style-fields (gdocs-convert--run-to-docs-style run)))
         (when (and style-fields (> len 0))

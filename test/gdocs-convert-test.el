@@ -850,6 +850,54 @@
       (should (string= (plist-get italic-run :text) "italic")))))
 
 ;; ---------------------------------------------------------------------------
+;;; Date chips
+
+(ert-deftest gdocs-convert-test-timestamp-emits-insert-date-request ()
+  "Org timestamps are emitted as native Google Docs date elements."
+  (let* ((ir (gdocs-convert-org-string-to-ir "Date <2026-07-12 Sun> here."))
+         (requests (gdocs-convert-ir-to-docs-requests ir)))
+    (should (seq-some (lambda (request)
+                        (let* ((insert-date (alist-get 'insertDate request))
+                               (props (alist-get 'dateElementProperties
+                                                 insert-date)))
+                          (and insert-date
+                               (equal (alist-get 'timestamp props)
+                                      "2026-07-12T00:00:00Z")
+                               (equal (alist-get 'dateFormat props)
+                                      "DATE_FORMAT_MONTH_DAY_YEAR_ABBREVIATED"))))
+                      requests))
+    (should-not (seq-some (lambda (request)
+                            (equal (alist-get 'insertText request)
+                                   '((text . "<2026-07-12 Sun>")
+                                     (location . ((index . 6))))))
+                          requests))))
+
+(ert-deftest gdocs-convert-test-docs-json-date-element-to-org-timestamp ()
+  "Google Docs date elements pull back as Org timestamps."
+  (let* ((json '((body . ((content . [((startIndex . 1)
+                                       (endIndex . 15)
+                                       (paragraph
+                                        . ((elements
+                                            . [((startIndex . 1)
+                                                (endIndex . 6)
+                                                (textRun . ((content . "Due ")
+                                                            (textStyle . ()))))
+                                               ((startIndex . 6)
+                                                (endIndex . 7)
+                                                (dateElement
+                                                 . ((dateElementProperties
+                                                     . ((timestamp . "2026-07-12T00:00:00Z")
+                                                        (dateFormat . "DATE_FORMAT_MONTH_DAY_YEAR_ABBREVIATED")
+                                                        (displayText . "Jul 12, 2026"))))))
+                                               ((startIndex . 7)
+                                                (endIndex . 15)
+                                                (textRun . ((content . " done.\n")
+                                                            (textStyle . ()))))]))))])))))
+         (ir (gdocs-convert-docs-json-to-ir json)))
+    (should (equal (gdocs-convert-ir-to-org ir)
+                   "Due <2026-07-12 Sun> done.\n"))))
+
+;; ---------------------------------------------------------------------------
 ;;; Keyword markers
 
 (ert-deftest gdocs-convert-test-source-metadata-keywords-are-not-body-content ()
