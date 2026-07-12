@@ -1800,6 +1800,63 @@
                                      (location . ((index . 26))))))
                     requests))))
 
+(ert-deftest gdocs-convert-test-callout-mixed-body-idempotence ()
+  "Mixed callout bodies pull and push with one owned separator."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 5)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Tip\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 5)
+                    (endIndex . 12)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Intro.\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 12)
+                    (endIndex . 16)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "one\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 16)
+                    (endIndex . 23)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Outro.\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 23)
+                    (endIndex . 24)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (namedRanges
+                  . ,(list
+                      (cons (intern "gdocs-org-marker:callout-label:elem-001:tip:")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 1) (endIndex . 4)))))))))
+                      (cons (intern "gdocs-org-marker:callout-body:elem-001:tip:")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 5) (endIndex . 22)))))))))
+                      (cons (intern "gdocs-org-marker:callout-list:elem-001:bullet:0")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 12) (endIndex . 15)))))))))))))
+         (pulled-ir (gdocs-convert-docs-json-to-ir json))
+         (pulled-org (gdocs-convert-ir-to-org pulled-ir))
+         (round-trip-ir (gdocs-convert-org-string-to-ir pulled-org))
+         (requests (gdocs-convert-ir-to-docs-requests round-trip-ir)))
+    (should (= (length pulled-ir) 1))
+    (should (= (plist-get (car pulled-ir) :doc-end) 24))
+    (should (string-search "#+BEGIN_CALLOUT\nIntro.\n- one\nOutro.\n#+END_CALLOUT" pulled-org))
+    (should (= (length (plist-get (car round-trip-ir) :body-elements)) 3))
+    (should (= (cl-count-if
+                (lambda (request)
+                  (equal (alist-get 'insertText request)
+                         '((text . "\n") (location . ((index . 23))))))
+                requests)
+               1))))
+
 (ert-deftest gdocs-convert-test-docs-json-marked-callout-block-consumes-separator ()
   "Marked callouts consume the generated empty separator paragraph."
   (let* ((body-elements
