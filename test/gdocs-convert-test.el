@@ -852,18 +852,15 @@
 ;; ---------------------------------------------------------------------------
 ;;; Keyword markers
 
-(ert-deftest gdocs-convert-test-keyword-marker ()
-  "#+AUTHOR: Pablo produces an IR element with :gdocs-marker of :type keyword."
-  (let* ((ir (gdocs-convert-org-string-to-ir "#+AUTHOR: Pablo"))
-         (elem (--first (let ((m (plist-get it :gdocs-marker)))
-                          (and m (eq (plist-get (car m) :type) 'keyword)))
-                        ir))
-         (marker (plist-get elem :gdocs-marker)))
-    (should marker)
-    (should (listp marker))
-    (should (eq (plist-get (car marker) :type) 'keyword))
-    (should (string= (plist-get (plist-get (car marker) :data) :key) "AUTHOR"))
-    (should (string= (plist-get (plist-get (car marker) :data) :value) "Pablo"))))
+(ert-deftest gdocs-convert-test-source-metadata-keywords-are-not-body-content ()
+  "Source metadata keywords are not emitted as visible Google Docs paragraphs."
+  (let ((ir (gdocs-convert-org-string-to-ir
+             "#+AUTHOR: Pablo\n#+DATE: <2026-07-12 Sun>\n#+LANGUAGE: en\n#+TITLE: Visible title")))
+    (should (= (length ir) 1))
+    (should (eq (plist-get (car ir) :style) 'title))
+    (should (equal (gdocs-convert--runs-to-plain-text
+                    (plist-get (car ir) :contents))
+                   "Visible title"))))
 
 ;; ---------------------------------------------------------------------------
 ;;; gdocs-convert--runs-to-plain-text

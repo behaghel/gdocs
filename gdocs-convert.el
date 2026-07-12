@@ -570,12 +570,13 @@ shared path; unsupported children fail closed before remote mutation."
                                    (plist-get b :begin)))))))
 
 (defun gdocs-convert--preservable-keyword-p (keyword)
-  "Return non-nil if KEYWORD is an org-only construct to preserve.
-Excludes TITLE which is handled separately."
-  (let ((key (org-element-property :key keyword)))
-    (and key
-         (not (string= key "TITLE"))
-         (member key '("AUTHOR" "DATE" "EMAIL" "LANGUAGE")))))
+  "Return non-nil if KEYWORD should be emitted into Google Docs content.
+Document metadata such as AUTHOR, DATE, EMAIL, and LANGUAGE is intentionally
+kept in Org source only.  Google Docs has no invisible document-level metadata
+slot that round-trips through body sync, so emitting these keywords as body
+paragraphs is more surprising than preserving them remotely."
+  (ignore keyword)
+  nil)
 
 ;; ---------------------------------------------------------------------------
 ;;; Headline -> IR
