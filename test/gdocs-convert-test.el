@@ -554,7 +554,7 @@
                     (paragraph
                      . ((elements
                          . ,(vector '((textRun . ((content . "Line one\n")
-                                                   (textStyle . ()))))))
+                                                   (textStyle . ((italic . t))))))))
                         (paragraphStyle
                          . ((namedStyleType . "NORMAL_TEXT"))))))
                   `((startIndex . 12)
@@ -562,7 +562,7 @@
                     (paragraph
                      . ((elements
                          . ,(vector '((textRun . ((content . "Line two\n")
-                                                   (textStyle . ()))))))
+                                                   (textStyle . ((italic . t))))))))
                         (paragraphStyle
                          . ((namedStyleType . "NORMAL_TEXT"))))))))
          (json `((body . ((content . ,body-elements)))

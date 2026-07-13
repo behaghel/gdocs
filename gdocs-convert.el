@@ -2156,6 +2156,12 @@ subsequent diffs treat the separator as part of the owning callout block."
           (setq remaining (cdr remaining)))))
     (nreverse result)))
 
+(defun gdocs-convert--strip-quote-visual-style (runs)
+  "Return RUNS without visual-only quote paragraph styling."
+  (mapcar (lambda (run)
+            (plist-put (copy-sequence run) :italic nil))
+          runs))
+
 (defun gdocs-convert--attach-quote-block-markers (ir)
   "Group consecutive marked quote-block paragraphs in IR."
   (let ((result nil)
@@ -2169,7 +2175,9 @@ subsequent diffs treat the separator as part of the owning callout block."
               (while (and remaining
                           (gdocs-convert--quote-block-paragraph-p
                            (car remaining)))
-                (push (plist-get (car remaining) :contents) paragraphs)
+                (push (gdocs-convert--strip-quote-visual-style
+                       (plist-get (car remaining) :contents))
+                      paragraphs)
                 (setq end (plist-get (car remaining) :doc-end))
                 (setq remaining (cdr remaining)))
               (let ((separator (gdocs-convert--consume-generated-separator
