@@ -3204,16 +3204,6 @@ inserted with `insertDate' and count as one UTF-16 model unit."
             style))
     (when-let ((indent-end (plist-get style-plist :indent-end)))
       (push `(indentEnd . ((magnitude . ,indent-end) (unit . "PT"))) style))
-    (when (plist-member style-plist :keep-lines-together)
-      (push `(keepLinesTogether . ,(if (plist-get style-plist :keep-lines-together)
-                                       t
-                                     :json-false))
-            style))
-    (when (plist-member style-plist :keep-with-next)
-      (push `(keepWithNext . ,(if (plist-get style-plist :keep-with-next)
-                                  t
-                                :json-false))
-            style))
     (if-let ((borders (plist-get style-plist :borders)))
         (setq style (append (gdocs-convert--paragraph-border-styles
                              borders style-plist)
