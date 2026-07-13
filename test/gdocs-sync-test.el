@@ -276,9 +276,9 @@ properties are preserved and revision ID is stored."
       (should (equal gdocs-sync--revision-id "rev-6")))))
 
 (ert-deftest gdocs-sync-test-pull-with-local-mods ()
-  "Three-way merge updates buffer when only remote changed.
-Tests the three-way merge path where local matches shadow (no
-local changes) but remote has new content."
+  "Pull replaces from remote when local content still matches shadow.
+When there are no local edits to preserve, pull avoids three-way merge so
+remote semantic changes cannot duplicate headings or other structural content."
   (gdocs-sync-test-with-org-buffer "Local content\n"
     (setq gdocs-sync--revision-id "rev-5")
     ;; Shadow matches local content (no local modifications)
@@ -292,15 +292,20 @@ local changes) but remote has new content."
                  (funcall callback (gdocs-test-sample-document-json))))
               ((symbol-function 'gdocs-convert-docs-json-to-ir)
                (lambda (_json)
-                 (list (list :type 'paragraph :style 'normal
+                 (list (list :type 'paragraph :style 'heading-1
                              :contents (list (list :text "Remote update"
                                                    :bold nil :italic nil
                                                    :underline nil
                                                    :strikethrough nil
                                                    :code nil :link nil))
-                             :id "elem-001")))))
+                             :id "elem-001"))))
+              ((symbol-function 'gdocs-sync--three-way-merge)
+               (lambda (_remote-ir)
+                 (error "Three-way merge should not run when local is unchanged")))
+              ((symbol-function 'gdocs--ensure-org-tag)
+               #'ignore))
       (gdocs-sync-pull)
-      (should (string-match-p "Remote update"
+      (should (string-match-p "\\* Remote update"
                                (buffer-substring-no-properties
                                 (point-min) (point-max))))
       (should (eq gdocs-sync--status 'synced))

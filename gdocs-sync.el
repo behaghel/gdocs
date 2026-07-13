@@ -598,13 +598,31 @@ on elements that were not changed remotely."
             ;; No shadow (first pull after link): full replacement
             (gdocs-sync--replace-buffer-content
              (gdocs-convert-ir-to-org remote-ir) revision-id)
-          ;; Have shadow: three-way merge
-          (let ((result (gdocs-sync--three-way-merge remote-ir)))
-            (if (plist-get result :has-conflicts)
-                (gdocs-sync--start-conflict-resolution
-                 (plist-get result :merged-org) revision-id)
+          ;; If local content still matches the shadow, no user edits need
+          ;; preserving.  Prefer a full remote render over three-way merge so
+          ;; pull-only semantic changes (e.g. Docs-created footnote labels or
+          ;; smart chips) cannot confuse LCS and duplicate structural content.
+          (if (gdocs-sync--local-unchanged-p)
               (gdocs-sync--replace-buffer-content
-               (plist-get result :merged-org) revision-id))))))))
+               (gdocs-convert-ir-to-org remote-ir) revision-id)
+            ;; Have shadow and local edits: three-way merge.
+            (let ((result (gdocs-sync--three-way-merge remote-ir)))
+              (if (plist-get result :has-conflicts)
+                  (gdocs-sync--start-conflict-resolution
+                   (plist-get result :merged-org) revision-id)
+                (gdocs-sync--replace-buffer-content
+                 (plist-get result :merged-org) revision-id)))))))))
+
+(defun gdocs-sync--local-unchanged-p ()
+  "Return non-nil if current buffer content matches the shadow IR."
+  (when gdocs-sync--shadow-ir
+    (let ((local-ir (gdocs-sync--filter-title
+                     (gdocs-convert-org-buffer-to-ir)))
+          (shadow-ir (gdocs-sync--filter-title
+                      (gdocs-sync--normalize-shadow-ir
+                       gdocs-sync--shadow-ir))))
+      (equal (gdocs-diff--element-keys local-ir)
+             (gdocs-diff--element-keys shadow-ir)))))
 
 (defun gdocs-sync--remote-unchanged-p (remote-ir)
   "Return non-nil if REMOTE-IR matches the shadow IR.

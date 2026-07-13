@@ -391,6 +391,28 @@
          (heading (car ir)))
     (should (eq (plist-get heading :style) 'heading-1))))
 
+(ert-deftest gdocs-convert-test-docs-json-preserves-heading-hierarchy ()
+  "Pulled Google Docs headings retain their Org hierarchy."
+  (cl-labels ((para (text style)
+                `((paragraph
+                   . ((elements
+                       . [((textRun . ((content . ,(concat text "\n"))
+                                       (textStyle . ()))) )])
+                      (paragraphStyle
+                       . ((namedStyleType . ,style))))))))
+    (let* ((json `((body . ((content . ,(vector
+                                         (para "Smoke protocol" "HEADING_1")
+                                         (para "Expected validation flow" "HEADING_2")
+                                         (para "High-value visual checks" "HEADING_2")
+                                         (para "Executive summary" "HEADING_1")))))))
+           (org (gdocs-convert-ir-to-org
+                 (gdocs-convert-docs-json-to-ir json))))
+      (should (string-match-p "^\\* Smoke protocol$" org))
+      (should (string-match-p "^\\*\\* Expected validation flow$" org))
+      (should (string-match-p "^\\*\\* High-value visual checks$" org))
+      (should (string-match-p "^\\* Executive summary$" org))
+      (should-not (string-match-p "^\\* Smoke protocol\\(?:.\\|\n\\)*^\\* Smoke protocol$" org)))))
+
 (ert-deftest gdocs-convert-test-docs-json-inline-image-preserves-uri ()
   "Google Docs inline images convert to image IR with source/content URIs."
   (let* ((json `((body . ((content
