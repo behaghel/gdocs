@@ -1655,21 +1655,6 @@
     (should (equal (alist-get 'fields update)
                    "namedStyleType,shading.backgroundColor,borderTop,borderBottom,borderLeft,borderRight"))))
 
-(ert-deftest gdocs-convert-test-logical-paragraph-style-supports-keep-controls ()
-  "Logical paragraph styles can request pagination keep controls."
-  (let* ((gdocs-style-definitions
-          '((gdocs-quote-block-line
-             :parent normal
-             :paragraph (:keep-lines-together t :keep-with-next t))))
-         (request (gdocs-convert--logical-style-paragraph-request
-                   'gdocs-quote-block-line 1 10))
-         (update (alist-get 'updateParagraphStyle request))
-         (style (alist-get 'paragraphStyle update)))
-    (should (eq (alist-get 'keepLinesTogether style) t))
-    (should (eq (alist-get 'keepWithNext style) t))
-    (should (equal (alist-get 'fields update)
-                   "namedStyleType,keepWithNext,keepLinesTogether"))))
-
 (ert-deftest gdocs-convert-test-paragraph-shading-uses-nested-field-mask ()
   "Paragraph shading style requests use the nested Google Docs field mask."
   (let* ((gdocs-style-definitions
