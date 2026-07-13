@@ -192,6 +192,11 @@ context."
   :type 'number
   :group 'gdocs)
 
+(defcustom gdocs-convert-native-date-elements t
+  "Whether Org timestamps should push as native Google Docs date elements."
+  :type 'boolean
+  :group 'gdocs)
+
 (defvar gdocs-convert-footnote-reference-handler nil
   "Function called for each semantic footnote reference during request generation.
 When non-nil, the function receives two arguments: the zero-width footnote RUN
@@ -1012,7 +1017,8 @@ not pushed to Google Docs."
         (month (org-element-property :month-start timestamp))
         (day (org-element-property :day-start timestamp)))
     (list (append (gdocs-convert--make-run raw inherited-props)
-                  (when (and year month day)
+                  (when (and gdocs-convert-native-date-elements
+                             year month day)
                     (list :date-element
                           (list :timestamp
                                 (format "%04d-%02d-%02dT00:00:00Z"
