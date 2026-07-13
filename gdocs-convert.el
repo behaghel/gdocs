@@ -1965,7 +1965,7 @@ like `body', `title', `lists', and `namedRanges'."
       (setq footnote-refs
             (append footnote-refs
                     (gdocs-convert--structural-element-footnote-refs
-                     structural-element)))
+                     structural-element markers)))
       (let ((ir (gdocs-convert--structural-element-to-ir
                  structural-element lists-map markers inline-objects))
             (si (alist-get 'startIndex structural-element))
@@ -2215,9 +2215,28 @@ subsequent diffs treat the separator as part of the owning callout block."
           (setq remaining (cdr remaining)))))
     (nreverse result)))
 
-(defun gdocs-convert--structural-element-footnote-refs (element)
+(defun gdocs-convert--footnote-label-marker (markers start end)
+  "Return Org footnote label marker overlapping START..END, or nil."
+  (seq-find (lambda (marker)
+              (and (eq (plist-get marker :type) 'footnote-label)
+                   (let ((marker-start (plist-get marker :start))
+                         (marker-end (plist-get marker :end)))
+                     (and marker-start marker-end start end
+                          (< marker-start end)
+                          (> marker-end start)))))
+            markers))
+
+(defun gdocs-convert--footnote-label-for-range (footnote-ref markers start end)
+  "Return Org label for FOOTNOTE-REF at START..END using MARKERS."
+  (or (plist-get (gdocs-convert--footnote-label-marker markers start end)
+                 :data)
+      (alist-get 'footnoteNumber footnote-ref)
+      (alist-get 'footnoteId footnote-ref)))
+
+(defun gdocs-convert--structural-element-footnote-refs (element markers)
   "Return footnote references found in Google Docs structural ELEMENT.
-Each returned plist has `:id' and `:label' keys."
+Each returned plist has `:id' and `:label' keys.  MARKERS can carry stable Org
+labels for native Google Docs footnote references."
   (let ((paragraph (alist-get 'paragraph element))
         (refs nil))
     (when paragraph
@@ -2225,15 +2244,19 @@ Each returned plist has `:id' and `:label' keys."
         (when-let* ((footnote-ref (alist-get 'footnoteReference el))
                     (footnote-id (alist-get 'footnoteId footnote-ref)))
           (push (list :id footnote-id
-                      :label (or (alist-get 'footnoteNumber footnote-ref)
-                                 footnote-id))
+                      :label (gdocs-convert--footnote-label-for-range
+                              footnote-ref markers
+                              (alist-get 'startIndex el)
+                              (alist-get 'endIndex el)))
                 refs))))
     (nreverse refs)))
 
-(defun gdocs-convert--docs-footnote-reference-to-run (footnote-ref)
-  "Convert Google Docs FOOTNOTE-REF to a zero-width IR footnote run."
-  (let ((label (or (alist-get 'footnoteNumber footnote-ref)
-                   (alist-get 'footnoteId footnote-ref))))
+(defun gdocs-convert--docs-footnote-reference-to-run
+    (footnote-ref &optional markers start end)
+  "Convert Google Docs FOOTNOTE-REF to a zero-width IR footnote run.
+MARKERS can carry stable Org labels for the reference at START..END."
+  (let ((label (gdocs-convert--footnote-label-for-range
+                footnote-ref markers start end)))
     (plist-put (gdocs-convert--make-plain-run "") :footnote-label label)))
 
 (defun gdocs-convert--docs-date-element-to-run (date-element)
@@ -2376,7 +2399,7 @@ named-range marker data.  START and END are document indices."
          (alignment (alist-get 'alignment style-obj))
          (bullet (alist-get 'bullet paragraph))
          (ir-style (gdocs-convert--docs-style-to-ir named-style))
-         (runs (gdocs-convert--docs-elements-to-runs elements))
+         (runs (gdocs-convert--docs-elements-to-runs elements markers))
          (trimmed (gdocs-convert--trim-trailing-newline-runs runs))
          (list-info (when bullet
                       (gdocs-convert--docs-bullet-to-list
@@ -2413,11 +2436,11 @@ named-range marker data.  START and END are document indices."
     ("HEADING_6" 'heading-6)
     (_ 'normal)))
 
-(defun gdocs-convert--docs-elements-to-runs (elements)
+(defun gdocs-convert--docs-elements-to-runs (elements &optional markers)
   "Convert Google Docs paragraph ELEMENTS to IR text runs.
-ELEMENTS may be a list or a vector.  Adjacent runs with
-identical formatting are merged, and edge whitespace on
-formatted runs is normalized."
+ELEMENTS may be a list or a vector.  MARKERS can carry stable Org labels for
+native Google Docs footnote references.  Adjacent runs with identical formatting
+are merged, and edge whitespace on formatted runs is normalized."
   (let ((runs nil))
     (seq-doseq (el elements)
       (let ((text-run (alist-get 'textRun el))
@@ -2427,7 +2450,10 @@ formatted runs is normalized."
          (text-run
           (push (gdocs-convert--docs-text-run-to-ir text-run) runs))
          (footnote-ref
-          (push (gdocs-convert--docs-footnote-reference-to-run footnote-ref)
+          (push (gdocs-convert--docs-footnote-reference-to-run
+                 footnote-ref markers
+                 (alist-get 'startIndex el)
+                 (alist-get 'endIndex el))
                 runs))
          (date-element
           (push (gdocs-convert--docs-date-element-to-run date-element)
@@ -2630,11 +2656,15 @@ may have trailing whitespace-only runs before it."
         (let* ((last-run (car (last result)))
                (text (plist-get last-run :text))
                (trimmed (s-trim-right text)))
-          (if (string-empty-p trimmed)
-              (setq result (butlast result))
+          (cond
+           ((plist-get last-run :footnote-label)
+            (setq done t))
+           ((string-empty-p trimmed)
+            (setq result (butlast result)))
+           (t
             (setcar (last result)
                     (plist-put (copy-sequence last-run) :text trimmed))
-            (setq done t))))
+            (setq done t)))))
       result)))
 
 (defun gdocs-convert--docs-bullet-to-list (bullet lists-map)

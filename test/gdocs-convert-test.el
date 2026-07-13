@@ -639,6 +639,45 @@
     (should (equal (gdocs-convert--ir-footnote-to-org footnote)
                    "[fn:1] Body."))))
 
+(ert-deftest gdocs-convert-test-docs-json-native-footnotes-preserve-org-labels ()
+  "Native footnote references use marker-owned Org labels when present."
+  (let* ((body-elements
+          (vector `((paragraph
+                     . ((elements
+                         . ,(vector '((startIndex . 5)
+                                      (endIndex . 6)
+                                      (footnoteReference
+                                       . ((footnoteId . "fn-a")
+                                          (footnoteNumber . "1")
+                                          (textStyle . ()))))))
+                        (paragraphStyle
+                         . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (footnote-content
+          (vector `((paragraph
+                     . ((elements
+                         . ,(vector '((textRun . ((content . "Body.\n")
+                                                   (textStyle . ()))))))
+                        (paragraphStyle
+                         . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (label-range '((startIndex . 5) (endIndex . 6)))
+         (named-ranges
+          (list (cons 'gdocs-org-marker:footnote-label:1:overview
+                      (list (cons 'namedRanges
+                                  (vector (list (cons 'ranges
+                                                      (vector label-range)))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (namedRanges . ,named-ranges)
+                 (footnotes
+                  . ((fn-a . ((footnoteId . "fn-a")
+                              (content . ,footnote-content)))))))
+         (ir (gdocs-convert-docs-json-to-ir json))
+         (paragraph (car ir))
+         (footnote (cadr ir)))
+    (should (equal (gdocs-convert--runs-to-org
+                    (plist-get paragraph :contents))
+                   "[fn:overview]"))
+    (should (equal (plist-get footnote :label) "overview"))))
+
 (ert-deftest gdocs-convert-test-ir-to-org-collects-footnotes-section ()
   "IR footnotes render once under a conventional Footnotes section."
   (let* ((ir (list (list :type 'paragraph
