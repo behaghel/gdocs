@@ -205,6 +205,13 @@ additional batchUpdate requests or nil.  This is an extension seam for callers
 that need native Google Docs footnotes, whose bodies must be inserted in a
 second batchUpdate after `createFootnote' returns segment IDs.")
 
+(defvar gdocs-convert-footnote-reference-text-function nil
+  "Function returning temporary body text for a semantic footnote reference.
+When non-nil, the function receives an Org footnote-reference object and should
+return text inserted into the body at the reference position.  Extension callers
+can use this to emit post-push anchor sentinels before replacing them with
+native Google Docs footnotes.")
+
 (defun gdocs-convert--read-file-property-gdocs-id (file-path)
   "Read GDOCS_DOCUMENT_ID from FILE-PATH's file-level property drawer.
 Reads only the head of the file (~1KB) and uses a regexp.
@@ -1051,9 +1058,14 @@ INHERITED-PROPS carries parent formatting."
   "Convert a FOOTNOTE-REFERENCE OBJECT to a zero-width semantic run.
 INHERITED-PROPS carries parent formatting.  The visible native footnote marker
 is produced by Google Docs, not by literal Org text."
-  (list (plist-put (gdocs-convert--make-run "" inherited-props)
-                   :footnote-label
-                   (org-element-property :label object))))
+  (let ((label (org-element-property :label object)))
+    (list (plist-put
+           (gdocs-convert--make-run
+            (if gdocs-convert-footnote-reference-text-function
+                (funcall gdocs-convert-footnote-reference-text-function object)
+              "")
+            inherited-props)
+           :footnote-label label))))
 
 (defun gdocs-convert--fallback-object-to-runs (object inherited-props)
   "Handle an unknown OBJECT type by interpreting it as text.

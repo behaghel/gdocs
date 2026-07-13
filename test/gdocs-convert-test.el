@@ -569,6 +569,17 @@
     (should (string= (s-trim org)
                      "#+BEGIN_QUOTE\nLine one\n\nLine two\n#+END_QUOTE"))))
 
+(ert-deftest gdocs-convert-test-footnote-reference-text-function-emits-anchor ()
+  "Footnote references can emit temporary body anchor text."
+  (let* ((gdocs-convert-footnote-reference-text-function
+          (lambda (_object) "⟦FN:one⟧"))
+         (ir (gdocs-convert-org-string-to-ir
+              "Text[fn:one]\n\n* Footnotes\n[fn:one] Body."))
+         (runs (plist-get (car ir) :contents)))
+    (should (equal (mapcar (lambda (run) (plist-get run :text)) runs)
+                   '("Text" "⟦FN:one⟧")))
+    (should (equal (plist-get (cadr runs) :footnote-label) "one"))))
+
 (ert-deftest gdocs-convert-test-docs-json-native-footnotes ()
   "Native Google Docs footnotes convert to Org references and definitions."
   (let* ((body-elements
