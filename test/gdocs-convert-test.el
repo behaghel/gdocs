@@ -944,6 +944,22 @@
                                      (location . ((index . 6))))))
                           requests))))
 
+(ert-deftest gdocs-convert-test-inactive-timestamp-emits-kind-marker ()
+  "Inactive Org timestamps are marked so date-chip pull preserves brackets."
+  (let* ((ir (gdocs-convert-org-string-to-ir "Date [2026-07-13 Mon] here."))
+         (requests (gdocs-convert-ir-to-docs-requests ir)))
+    (should (seq-some (lambda (request) (alist-get 'insertDate request))
+                      requests))
+    (should (seq-some
+             (lambda (request)
+               (let ((named-range (alist-get 'createNamedRange request)))
+                 (and named-range
+                      (equal (alist-get 'name named-range)
+                             "gdocs-org-marker:timestamp-kind:6:inactive")
+                      (equal (alist-get 'range named-range)
+                             '((startIndex . 6) (endIndex . 7))))))
+             requests))))
+
 (ert-deftest gdocs-convert-test-docs-json-date-element-to-org-timestamp ()
   "Google Docs date elements pull back as Org timestamps."
   (let* ((json '((body . ((content . [((startIndex . 1)
@@ -968,6 +984,37 @@
          (ir (gdocs-convert-docs-json-to-ir json)))
     (should (equal (gdocs-convert-ir-to-org ir)
                    "Due <2026-07-12 Sun> done.\n"))))
+
+(ert-deftest gdocs-convert-test-docs-json-inactive-date-element-to-org-timestamp ()
+  "Marked inactive Google Docs date elements pull back as inactive timestamps."
+  (let* ((date-range '((startIndex . 6) (endIndex . 7)))
+         (named-ranges
+          (list (cons 'gdocs-org-marker:timestamp-kind:6:inactive
+                      (list (cons 'namedRanges
+                                  (vector (list (cons 'ranges
+                                                      (vector date-range)))))))))
+         (json `((body . ((content . [((startIndex . 1)
+                                       (endIndex . 15)
+                                       (paragraph
+                                        . ((elements
+                                            . [((startIndex . 1)
+                                                (endIndex . 6)
+                                                (textRun . ((content . "Due ")
+                                                            (textStyle . ()))))
+                                               ((startIndex . 6)
+                                                (endIndex . 7)
+                                                (dateElement
+                                                 . ((dateElementProperties
+                                                     . ((timestamp . "2026-07-13T00:00:00Z")
+                                                        (dateFormat . "DATE_FORMAT_MONTH_DAY_YEAR_ABBREVIATED"))))))
+                                               ((startIndex . 7)
+                                                (endIndex . 15)
+                                                (textRun . ((content . " done.\n")
+                                                            (textStyle . ()))))]))))])))
+                 (namedRanges . ,named-ranges)))
+         (ir (gdocs-convert-docs-json-to-ir json)))
+    (should (equal (gdocs-convert-ir-to-org ir)
+                   "Due [2026-07-13 Mon] done.\n"))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Keyword markers

@@ -2259,17 +2259,41 @@ MARKERS can carry stable Org labels for the reference at START..END."
                 footnote-ref markers start end)))
     (plist-put (gdocs-convert--make-plain-run "") :footnote-label label)))
 
-(defun gdocs-convert--docs-date-element-to-run (date-element)
-  "Convert Google Docs DATE-ELEMENT to an Org timestamp run."
+(defun gdocs-convert--timestamp-kind-marker (markers start end)
+  "Return timestamp kind marker overlapping START..END, or nil."
+  (seq-find (lambda (marker)
+              (and (eq (plist-get marker :type) 'timestamp-kind)
+                   (let ((marker-start (plist-get marker :start))
+                         (marker-end (plist-get marker :end)))
+                     (and marker-start marker-end start end
+                          (< marker-start end)
+                          (> marker-end start)))))
+            markers))
+
+(defun gdocs-convert--timestamp-active-p (markers start end)
+  "Return non-nil when timestamp marker at START..END is active."
+  (not (equal (plist-get (gdocs-convert--timestamp-kind-marker
+                          markers start end)
+                         :data)
+              "inactive")))
+
+(defun gdocs-convert--docs-date-element-to-run
+    (date-element &optional markers start end)
+  "Convert Google Docs DATE-ELEMENT to an Org timestamp run.
+MARKERS can carry active/inactive Org timestamp kind for START..END."
   (let* ((props (alist-get 'dateElementProperties date-element))
          (timestamp (alist-get 'timestamp props))
-         (raw (gdocs-convert--docs-date-timestamp-to-org timestamp)))
+         (active (gdocs-convert--timestamp-active-p markers start end))
+         (raw (gdocs-convert--docs-date-timestamp-to-org
+               timestamp (if active 'active 'inactive))))
     (list :text raw
           :date-element (list :timestamp timestamp
-                              :raw raw))))
+                              :raw raw
+                              :active active))))
 
-(defun gdocs-convert--docs-date-timestamp-to-org (timestamp)
-  "Return an active Org timestamp string for Google Docs TIMESTAMP."
+(defun gdocs-convert--docs-date-timestamp-to-org (timestamp &optional kind)
+  "Return an Org timestamp string for Google Docs TIMESTAMP.
+KIND can be `active' or `inactive'; omitted KIND defaults to active."
   (if (and timestamp
            (string-match "\\`\\([0-9][0-9][0-9][0-9]\\)-\\([0-9][0-9]\\)-\\([0-9][0-9]\\)" timestamp))
       (let* ((year (string-to-number (match-string 1 timestamp)))
@@ -2277,8 +2301,11 @@ MARKERS can carry stable Org labels for the reference at START..END."
              (day (string-to-number (match-string 3 timestamp)))
              (time (encode-time 0 0 0 day month year t))
              (weekday (format-time-string "%a" time t)))
-        (format "<%04d-%02d-%02d %s>" year month day weekday))
-    "<1970-01-01 Thu>"))
+        (format "%s%04d-%02d-%02d %s%s"
+                (if (eq kind 'inactive) "[" "<")
+                year month day weekday
+                (if (eq kind 'inactive) "]" ">")))
+    (if (eq kind 'inactive) "[1970-01-01 Thu]" "<1970-01-01 Thu>")))
 
 (defun gdocs-convert--docs-footnote-content-to-runs (content)
   "Convert Google Docs footnote CONTENT to IR text runs."
@@ -2456,7 +2483,10 @@ are merged, and edge whitespace on formatted runs is normalized."
                  (alist-get 'endIndex el))
                 runs))
          (date-element
-          (push (gdocs-convert--docs-date-element-to-run date-element)
+          (push (gdocs-convert--docs-date-element-to-run
+                 date-element markers
+                 (alist-get 'startIndex el)
+                 (alist-get 'endIndex el))
                 runs)))))
     (gdocs-convert--normalize-run-whitespace
      (gdocs-convert--merge-adjacent-runs (nreverse runs)))))
@@ -3201,6 +3231,10 @@ inserted with `insertDate' and count as one UTF-16 model unit."
             (progn
               (push (gdocs-convert--make-insert-date-request date cursor)
                     requests)
+              (unless (plist-get date :active)
+                (push (gdocs-convert--make-timestamp-kind-marker-request
+                       date cursor)
+                      requests))
               (setq cursor (1+ cursor)))
           (let ((text (plist-get run :text)))
             (unless (string-empty-p text)
@@ -3211,6 +3245,15 @@ inserted with `insertDate' and count as one UTF-16 model unit."
       (push (gdocs-convert--make-insert-text-request "\n" cursor) requests)
       (list :requests (nreverse requests)
             :length (1+ (- cursor index))))))
+
+(defun gdocs-convert--make-timestamp-kind-marker-request (date index)
+  "Create a named range marker for inactive DATE at INDEX."
+  `((createNamedRange
+     . ((name . ,(format "gdocs-org-marker:timestamp-kind:%s:%s"
+                         index
+                         (if (plist-get date :active) "active" "inactive")))
+        (range . ((startIndex . ,index)
+                  (endIndex . ,(1+ index))))))))
 
 (defun gdocs-convert--make-insert-date-request (date index)
   "Create an insertDate request for DATE at INDEX."
