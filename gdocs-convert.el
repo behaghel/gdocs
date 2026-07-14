@@ -484,14 +484,24 @@ Returns a list of (:ir ELEMENT :begin POS) plists."
                       item list-type depth)))))
     result))
 
+(defun gdocs-convert--item-list-type (item fallback-type)
+  "Return list type for ITEM, falling back to FALLBACK-TYPE."
+  (let ((bullet (or (org-element-property :bullet item) "")))
+    (cond
+     ((org-element-property :checkbox item) 'check)
+     ((string-match-p "\\`[0-9]+[.)][[:space:]]+" bullet) 'number)
+     ((string-match-p "\\`[A-Za-z]+[.)][[:space:]]+" bullet) 'number)
+     (t fallback-type))))
+
 (defun gdocs-convert--item-positioned (item list-type depth)
   "Convert list ITEM to positioned IR entries.
 LIST-TYPE is `bullet', `number', or `check'.  DEPTH is the
 0-based nesting level.
 Returns a list of (:ir ELEMENT :begin POS) plists."
   (let* ((checkbox (org-element-property :checkbox item))
-         (effective-type (if checkbox 'check list-type))
+         (effective-type (gdocs-convert--item-list-type item list-type))
          (checked (eq checkbox 'on))
+         (partial (eq checkbox 'trans))
          (paragraph (org-element-map item 'paragraph #'identity nil t))
          (runs (when paragraph
                  (gdocs-convert--strip-continuation-indent
@@ -500,13 +510,18 @@ Returns a list of (:ir ELEMENT :begin POS) plists."
          (trimmed (gdocs-convert--trim-runs runs))
          (list-plist (append (list :type effective-type :level depth)
                              (when (eq effective-type 'check)
-                               (list :checked checked))))
-         (ir-element (list :type 'paragraph
-                           :style 'normal
-                           :list list-plist
-                           :contents (or trimmed
-                                         (list (gdocs-convert--make-plain-run "")))
-                           :id (gdocs-convert--next-id)))
+                               (list :checked checked :partial partial))))
+         (ir-element (append
+                      (list :type 'paragraph
+                            :style 'normal
+                            :list list-plist
+                            :contents (or trimmed
+                                          (list (gdocs-convert--make-plain-run "")))
+                            :id (gdocs-convert--next-id))
+                      (when partial
+                        (list :gdocs-marker
+                              (list (list :type 'task-state
+                                          :data "partial"))))))
          (result (list (list :ir ir-element
                              :begin (org-element-property :begin item)))))
     (dolist (child (org-element-contents item))
@@ -1666,9 +1681,10 @@ indent continuation lines to keep them inside the list item."
   (pcase type
     ('bullet "- ")
     ('number (format "%d. " (or (plist-get list-info :counter) 1)))
-    ('check (if (plist-get list-info :checked)
-                "- [X] "
-              "- [ ] "))))
+    ('check (cond
+             ((plist-get list-info :partial) "- [-] ")
+             ((plist-get list-info :checked) "- [X] ")
+             (t "- [ ] ")))))
 
 (defun gdocs-convert--format-src-block-from-lines (language lines)
   "Format a source block with LANGUAGE from code LINES."
@@ -2438,7 +2454,7 @@ named-range marker data.  START and END are document indices."
          (trimmed (gdocs-convert--trim-trailing-newline-runs runs))
          (list-info (when bullet
                       (gdocs-convert--docs-bullet-to-list
-                       bullet lists-map)))
+                       bullet lists-map markers start end)))
          (ir-alignment (gdocs-convert--docs-alignment-to-ir alignment)))
     (append (list :type 'paragraph
                   :style (if list-info 'normal ir-style)
@@ -2705,20 +2721,55 @@ may have trailing whitespace-only runs before it."
             (setq done t)))))
       result)))
 
-(defun gdocs-convert--docs-bullet-to-list (bullet lists-map)
+(defun gdocs-convert--task-state-marker (markers start end)
+  "Return task-state marker overlapping START..END, or nil."
+  (seq-find (lambda (marker)
+              (and (eq (plist-get marker :type) 'task-state)
+                   (let ((marker-start (plist-get marker :start))
+                         (marker-end (plist-get marker :end)))
+                     (and marker-start marker-end start end
+                          (< marker-start end)
+                          (> marker-end start)))))
+            markers))
+
+(defun gdocs-convert--docs-check-state (list-props nesting-level)
+  "Return checkbox state plist from LIST-PROPS at NESTING-LEVEL."
+  (let* ((nesting (alist-get 'listProperties list-props))
+         (levels (alist-get 'nestingLevels nesting))
+         (level-info (when (and levels (> (length levels) nesting-level))
+                       (aref levels nesting-level)))
+         (glyph-symbol (when level-info
+                         (alist-get 'glyphSymbol level-info))))
+    (cond
+     ((member glyph-symbol '("☑" "✓" "✔")) '(:checked t))
+     ((equal glyph-symbol "☒") '(:partial t))
+     (t '(:checked nil)))))
+
+(defun gdocs-convert--docs-bullet-to-list
+    (bullet lists-map &optional markers start end)
   "Convert a Google Docs BULLET object to an IR :list plist.
-LISTS-MAP is the document's lists property for type lookup.
-Computes the visual nesting level from the list definition's
-indentation, since Google Docs represents mixed-type nested lists
-as separate list objects with nestingLevel 0."
+LISTS-MAP is the document's lists property for type lookup.  MARKERS may carry
+Org task state for the paragraph at START..END.  Computes the visual nesting
+level from the list definition's indentation, since Google Docs represents
+mixed-type nested lists as separate list objects where the sub-list has
+nestingLevel 0."
   (let* ((list-id (alist-get 'listId bullet))
          (nesting-level (or (alist-get 'nestingLevel bullet) 0))
          (list-props (when list-id
                        (alist-get (intern list-id) lists-map)))
          (list-type (gdocs-convert--docs-list-type list-props nesting-level))
          (level (gdocs-convert--docs-visual-nesting-level
-                 list-props nesting-level)))
-    (list :type list-type :level level)))
+                 list-props nesting-level))
+         (task-state (plist-get (gdocs-convert--task-state-marker
+                                 markers start end)
+                                :data)))
+    (append (list :type list-type :level level)
+            (when (eq list-type 'check)
+              (let ((state (gdocs-convert--docs-check-state
+                            list-props nesting-level)))
+                (if (equal task-state "partial")
+                    '(:checked nil :partial t)
+                  state))))))
 
 (defun gdocs-convert--assign-list-counters (ir)
   "Assign sequential :counter values to numbered list items in IR.

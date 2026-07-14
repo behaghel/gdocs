@@ -188,6 +188,15 @@
     (should (eq (plist-get list-info :type) 'check))
     (should (plist-get list-info :checked))))
 
+(ert-deftest gdocs-convert-test-checkbox-partial ()
+  "Partial checkbox items preserve their transient state."
+  (let* ((ir (gdocs-convert-org-string-to-ir "- [-] Partial item"))
+         (elem (car ir))
+         (list-info (plist-get elem :list)))
+    (should (eq (plist-get list-info :type) 'check))
+    (should (plist-get list-info :partial))
+    (should (equal (gdocs-convert-ir-to-org ir) "- [-] Partial item\n"))))
+
 ;; ---------------------------------------------------------------------------
 ;;; Tables
 
@@ -2114,6 +2123,16 @@
                             `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 12) (endIndex . 17)))))))))))))
          (org (gdocs-convert-ir-to-org (gdocs-convert-docs-json-to-ir json))))
     (should (string-search "#+BEGIN_CALLOUT\n- parent\n  - child\n#+END_CALLOUT" org))))
+
+(ert-deftest gdocs-convert-test-callout-block-preserves-mixed-list-types ()
+  "Callout body extraction preserves adjacent bullet and ordered item markers."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+BEGIN_CALLOUT\n- bullet\n- bullet2\n\n1. one\n2. two\n#+END_CALLOUT"))
+         (body-elements (plist-get (car ir) :body-elements)))
+    (should (equal (mapcar (lambda (element)
+                             (plist-get (plist-get element :list) :type))
+                           body-elements)
+                   '(bullet bullet number number)))))
 
 (ert-deftest gdocs-convert-test-docs-json-marked-callout-numbered-list-block ()
   "Marked callout numbered list body paragraphs pull back as Org numbering."
