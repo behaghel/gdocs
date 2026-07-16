@@ -74,6 +74,7 @@ identical keys."
     ('page-break "page-break")
     ('image (gdocs-diff--image-key element))
     ('source-block (gdocs-diff--source-block-key element))
+    ('example-block (gdocs-diff--example-block-key element))
     ('quote-block (gdocs-diff--quote-block-key element))
     ('callout-block (gdocs-diff--callout-block-key element))
     ('footnote (gdocs-diff--footnote-key element))
@@ -105,6 +106,10 @@ Concatenates all cell text across all rows."
           (or (plist-get element :language) "")
           (or (plist-get element :style-revision) "")
           (s-join "\n" (plist-get element :lines))))
+
+(defun gdocs-diff--example-block-key (element)
+  "Compute a content key for example-block ELEMENT."
+  (format "example-block:%s" (s-join "\n" (plist-get element :lines))))
 
 (defun gdocs-diff--quote-block-key (element)
   "Compute a content key for quote-block ELEMENT."
@@ -334,6 +339,7 @@ the UTF-16 index where the first element begins (default 1)."
     ('page-break 1)
     ('image 1)
     ('source-block (gdocs-diff--source-block-utf16-length element))
+    ('example-block (gdocs-diff--example-block-utf16-length element))
     ('quote-block (gdocs-diff--quote-block-utf16-length element))
     ('callout-block (gdocs-diff--callout-block-utf16-length element))
     ;; Footnotes are inline references; their content lives in a
@@ -343,6 +349,13 @@ the UTF-16 index where the first element begins (default 1)."
 
 (defun gdocs-diff--source-block-utf16-length (element)
   "Compute UTF-16 length of source-block ELEMENT."
+  (apply #'+
+         (mapcar (lambda (line)
+                   (1+ (gdocs-convert--string-to-utf16-length line)))
+                 (or (plist-get element :lines) '("")))))
+
+(defun gdocs-diff--example-block-utf16-length (element)
+  "Compute UTF-16 length of example-block ELEMENT."
   (apply #'+
          (mapcar (lambda (line)
                    (1+ (gdocs-convert--string-to-utf16-length line)))

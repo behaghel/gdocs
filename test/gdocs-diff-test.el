@@ -99,6 +99,19 @@ ROWS is a list of lists of lists of run plists."
 
 ;;;; Element key tests
 
+(ert-deftest gdocs-diff-test-example-block-key-includes-lines ()
+  "Example block keys include their literal lines."
+  (should-not (equal (gdocs-diff--element-key
+                      (list :type 'example-block :lines '("one")))
+                     (gdocs-diff--element-key
+                      (list :type 'example-block :lines '("two"))))))
+
+(ert-deftest gdocs-diff-test-example-block-utf16-length ()
+  "Example block length includes one paragraph newline per line."
+  (should (= (gdocs-diff--element-utf16-length
+              (list :type 'example-block :lines '("one" "two")))
+             8)))
+
 (ert-deftest gdocs-diff-test-source-block-key-includes-style-revision ()
   "Source block style revisions can force block replacement."
   (let ((unstyled (list :type 'source-block

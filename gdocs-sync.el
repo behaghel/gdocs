@@ -852,7 +852,9 @@ heading line.  Includes a trailing newline."
 
 (defun gdocs-sync--block-element-p (element)
   "Return non-nil when ELEMENT should be separated as an Org block."
-  (memq (plist-get element :type) '(image table horizontal-rule)))
+  (memq (plist-get element :type)
+        '(image table horizontal-rule source-block example-block quote-block
+                callout-block)))
 
 (defun gdocs-sync--heading-element-p (element)
   "Return non-nil if ELEMENT is a heading."

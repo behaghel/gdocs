@@ -2263,6 +2263,54 @@
                                       "namedStyleType,spaceBelow"))))
                       requests))))
 
+(ert-deftest gdocs-convert-test-example-block-requests-create-markers ()
+  "Example block requests create marker ranges for semantic pull ownership."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+BEGIN_EXAMPLE\nplain\n  indented\n#+END_EXAMPLE"))
+         (requests (gdocs-convert-ir-to-docs-requests ir)))
+    (should (seq-some
+             (lambda (request)
+               (let ((range (alist-get 'createNamedRange request)))
+                 (and range
+                      (equal (alist-get 'name range)
+                             "gdocs-org-marker:example-block:elem-001:elem-001"))))
+             requests))))
+
+(ert-deftest gdocs-convert-test-docs-json-marked-example-block ()
+  "Marked example-block paragraphs pull back as an Org example block."
+  (cl-labels ((code-paragraph (start end content)
+                (list (cons 'startIndex start)
+                      (cons 'endIndex end)
+                      (cons 'paragraph
+                            (list
+                             (cons 'elements
+                                   (vector
+                                    (list (cons 'textRun
+                                                (list
+                                                 (cons 'content content)
+                                                 (cons 'textStyle
+                                                       '((weightedFontFamily
+                                                          . ((fontFamily . "Courier New"))))))))))
+                             (cons 'paragraphStyle
+                                   '((namedStyleType . "NORMAL_TEXT")))))))
+              (marker-entry (start end)
+                (cons (intern "gdocs-org-marker:example-block:elem-001:elem-001")
+                      (list (cons 'namedRanges
+                                  (vector
+                                   (list (cons 'ranges
+                                               (vector (list (cons 'startIndex start)
+                                                             (cons 'endIndex end)))))))))))
+    (let* ((body-elements (vector (code-paragraph 1 7 "plain\n")
+                                  (code-paragraph 7 18 "  indented\n")))
+           (named-ranges (list (marker-entry 1 6)
+                               (marker-entry 7 17)))
+           (json `((body . ((content . ,body-elements)))
+                   (namedRanges . ,named-ranges)))
+           (org (gdocs-convert-ir-to-org (gdocs-convert-docs-json-to-ir json))))
+      (should (string= (s-trim org)
+                       "#+BEGIN_EXAMPLE\nplain\n  indented\n#+END_EXAMPLE")))))
+
+
 (ert-deftest gdocs-convert-test-src-block-to-ir ()
   "A src block produces a semantic source-block IR element."
   (let* ((ir (gdocs-convert-org-string-to-ir
