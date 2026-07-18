@@ -327,6 +327,44 @@ properties are preserved and revision ID is stored."
       (ignore-errors (delete-file temp-file))
       (ignore-errors (delete-directory backup-dir t)))))
 
+(ert-deftest gdocs-sync-test-pull-aborts-semantic-auto-merge ()
+  "Pull refuses automatic three-way merge for semantic documents."
+  (gdocs-sync-test-with-org-buffer "* Heading\nLocal edit\n"
+    (let ((before (buffer-string)))
+      (setq gdocs-sync--revision-id "rev-1")
+      (setq gdocs-sync--shadow-ir
+            (gdocs-convert-org-string-to-ir "* Heading\nOriginal\n"))
+      (cl-letf (((symbol-function 'gdocs-convert-docs-json-to-ir)
+                 (lambda (_json)
+                   (gdocs-convert-org-string-to-ir "* Heading\nRemote edit\n")))
+                ((symbol-function 'gdocs-sync--three-way-merge)
+                 (lambda (_remote-ir)
+                   (error "semantic docs must not enter automatic merge"))))
+        (should-error
+         (gdocs-sync--apply-pull '((body . ((content . [])))) "rev-2")
+         :type 'user-error)
+        (should (equal before (buffer-string)))
+        (should (eq gdocs-sync--status 'conflict))))))
+
+(ert-deftest gdocs-sync-test-pull-still-merges-plain-paragraph-docs ()
+  "Pull can still use automatic merge for paragraph-only documents."
+  (gdocs-sync-test-with-org-buffer "Local edit\n"
+    (let ((merge-called nil)
+          (gdocs-pull-integrity-checks-enable nil))
+      (setq gdocs-sync--revision-id "rev-1")
+      (setq gdocs-sync--shadow-ir
+            (gdocs-convert-org-string-to-ir "Original\n"))
+      (cl-letf (((symbol-function 'gdocs-convert-docs-json-to-ir)
+                 (lambda (_json)
+                   (gdocs-convert-org-string-to-ir "Remote edit\n")))
+                ((symbol-function 'gdocs-sync--three-way-merge)
+                 (lambda (_remote-ir)
+                   (setq merge-called t)
+                   (list :merged-org "Merged text\n" :has-conflicts nil))))
+        (gdocs-sync--apply-pull '((body . ((content . [])))) "rev-2")
+        (should merge-called)
+        (should (string-match-p "Merged text" (buffer-string)))))))
+
 (ert-deftest gdocs-sync-test-pull-with-local-mods ()
   "Pull replaces from remote when local content still matches shadow.
 When there are no local edits to preserve, pull avoids three-way merge so

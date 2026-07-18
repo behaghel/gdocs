@@ -16,6 +16,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'gdocs-auth)
 (require 'gdocs-api)
 (require 'gdocs-convert)
@@ -618,6 +619,7 @@ on elements that were not changed remotely."
           (if (gdocs-sync--local-unchanged-p)
               (gdocs-sync--replace-buffer-content
                (gdocs-convert-ir-to-org remote-ir) revision-id)
+            (gdocs-sync--abort-unsafe-semantic-merge-if-needed remote-ir)
             ;; Have shadow and local edits: three-way merge.
             (let ((result (gdocs-sync--three-way-merge remote-ir)))
               (if (plist-get result :has-conflicts)
@@ -625,6 +627,30 @@ on elements that were not changed remotely."
                    (plist-get result :merged-org) revision-id)
                 (gdocs-sync--replace-buffer-content
                  (plist-get result :merged-org) revision-id)))))))))
+
+(defun gdocs-sync--semantic-ir-element-p (element)
+  "Return non-nil when ELEMENT is unsafe for automatic text merge."
+  (let ((type (plist-get element :type)))
+    (or (memq type '(table horizontal-rule page-break image source-block
+                           example-block quote-block callout-block footnote))
+        (and (eq type 'paragraph)
+             (or (not (eq (or (plist-get element :style) 'normal) 'normal))
+                 (plist-get element :list))))))
+
+(defun gdocs-sync--semantic-ir-p (ir)
+  "Return non-nil when IR contains rich semantic structure."
+  (seq-some #'gdocs-sync--semantic-ir-element-p
+            (gdocs-sync--filter-title ir)))
+
+(defun gdocs-sync--abort-unsafe-semantic-merge-if-needed (remote-ir)
+  "Abort automatic merge when local and remote semantic docs both changed."
+  (let ((local-ir (gdocs-convert-org-buffer-to-ir)))
+    (when (or (gdocs-sync--semantic-ir-p local-ir)
+              (gdocs-sync--semantic-ir-p remote-ir)
+              (gdocs-sync--semantic-ir-p gdocs-sync--shadow-ir))
+      (gdocs-sync--set-status 'conflict)
+      (user-error
+       "Google Docs pull aborted: semantic document has both local and remote changes; use debug pipeline or manual review instead of automatic merge"))))
 
 (defun gdocs-sync--local-unchanged-p ()
   "Return non-nil if current buffer content matches the shadow IR."
