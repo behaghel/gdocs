@@ -2404,6 +2404,35 @@
     (should (equal (alist-get 'fontFamily font) "Inter"))
     (should (= (alist-get 'weight font) 800))))
 
+(ert-deftest gdocs-convert-test-make-run-supports-logical-style-names ()
+  "Public run constructor supports reusable logical style names."
+  (let ((run (gdocs-convert-make-run "code" :style-names '(gdocs-code))))
+    (should (equal (plist-get run :text) "code"))
+    (should (equal (plist-get run :style-names) '(gdocs-code)))))
+
+(ert-deftest gdocs-convert-test-make-paragraph-supports-logical-style-name ()
+  "Public paragraph constructor supports reusable logical paragraph styles."
+  (let ((paragraph (gdocs-convert-make-paragraph
+                    (list (gdocs-convert-make-run "Caption"))
+                    :style-name 'gdocs-image-caption
+                    :id "caption-1")))
+    (should (eq (plist-get paragraph :type) 'paragraph))
+    (should (eq (plist-get paragraph :style-name) 'gdocs-image-caption))
+    (should (equal (plist-get paragraph :id) "caption-1"))))
+
+(ert-deftest gdocs-convert-test-logical-style-requests-can-target-segment ()
+  "Logical text style requests can target non-body segments."
+  (let ((requests (gdocs-convert-make-logical-style-requests
+                   'gdocs-code 1 5 1 5 "fn-1")))
+    (should (seq-some
+             (lambda (request)
+               (let ((range (alist-get 'range
+                                        (alist-get 'updateTextStyle request))))
+                 (equal range '((segmentId . "fn-1")
+                                (startIndex . 1)
+                                (endIndex . 5)))))
+             requests))))
+
 (ert-deftest gdocs-convert-test-text-style-requests-can-target-segment ()
   "Text style requests can target non-body segments such as footnotes."
   (let ((requests (gdocs-convert-make-text-style-requests

@@ -1089,6 +1089,27 @@ INHERITED-PROPS carries parent formatting."
     (when (and interpreted (not (string-empty-p interpreted)))
       (list (gdocs-convert--make-run interpreted inherited-props)))))
 
+(defun gdocs-convert-make-run (text &rest props)
+  "Create a reusable semantic text run for TEXT with PROPS.
+Supported PROPS include inline formatting flags like `:bold', `:italic',
+`:underline', `:strikethrough', `:link', and logical `:style-names'."
+  (gdocs-convert--make-run text props))
+
+(defun gdocs-convert-make-paragraph (contents &rest props)
+  "Create reusable semantic paragraph IR with CONTENTS and PROPS.
+PROPS may include `:style', `:style-name', `:list', `:gdocs-marker', and `:id'."
+  (append (list :type 'paragraph
+                :style (or (plist-get props :style) 'normal)
+                :contents contents)
+          (when (plist-member props :style-name)
+            (list :style-name (plist-get props :style-name)))
+          (when (plist-member props :list)
+            (list :list (plist-get props :list)))
+          (when (plist-member props :gdocs-marker)
+            (list :gdocs-marker (plist-get props :gdocs-marker)))
+          (when (plist-member props :id)
+            (list :id (plist-get props :id)))))
+
 (defun gdocs-convert--make-run (text props)
   "Create a text run plist for TEXT with formatting from PROPS."
   (list :text text
@@ -1206,13 +1227,13 @@ BASE-STYLE-first, BASE-STYLE-line, BASE-STYLE-last, and BASE-STYLE-single."
 CONTENTS is a run list, STYLE-BASE is the logical style family,
 MARKER is a marker plist, and INDEX/COUNT select first/line/last/single
 line style names."
-  (list :type 'paragraph
-        :style 'normal
-        :style-name (gdocs-convert--block-line-style-name
-                     style-base index count)
-        :contents contents
-        :gdocs-marker (list marker)
-        :id (plist-get element :id)))
+  (gdocs-convert-make-paragraph
+   contents
+   :style 'normal
+   :style-name (gdocs-convert--block-line-style-name
+                style-base index count)
+   :gdocs-marker (list marker)
+   :id (plist-get element :id)))
 
 (defun gdocs-convert--src-block-to-ir (src-block)
   "Convert a SRC-BLOCK to a semantic source-block IR element."
@@ -3303,16 +3324,24 @@ preservation."
             (range . ((startIndex . ,index)
                       (endIndex . ,(1+ index))))))))))
 
+(defun gdocs-convert-make-logical-style-requests
+    (style-name paragraph-start paragraph-end &optional text-start text-end segment-id)
+  "Create paragraph/text requests for logical STYLE-NAME.
+PARAGRAPH-START and PARAGRAPH-END target paragraph style in the body.  When
+TEXT-START and TEXT-END are non-nil, also create text style requests.  Optional
+SEGMENT-ID targets the text style request at a non-body segment."
+  (delq nil
+        (list (gdocs-convert--logical-style-paragraph-request
+               style-name paragraph-start paragraph-end)
+              (when (and text-start text-end)
+                (gdocs-convert--logical-style-text-request
+                 style-name text-start text-end segment-id)))))
+
 (defun gdocs-convert--caption-style-requests (paragraph-start paragraph-end
                                                 text-start text-end)
   "Create logical image-caption style requests for caption ranges."
-  (let ((paragraph-request
-         (gdocs-convert--logical-style-paragraph-request
-          'gdocs-image-caption paragraph-start paragraph-end))
-        (text-request
-         (gdocs-convert--logical-style-text-request
-          'gdocs-image-caption text-start text-end)))
-    (delq nil (list paragraph-request text-request))))
+  (gdocs-convert-make-logical-style-requests
+   'gdocs-image-caption paragraph-start paragraph-end text-start text-end))
 
 (defun gdocs-convert--make-image-caption-marker-requests (element text-start text-end)
   "Create semantic marker requests for image caption ELEMENT.
@@ -3713,14 +3742,15 @@ body are reset to their defaults by the Google Docs API."
   (gdocs-convert--logical-text-style-to-docs
    (plist-get (gdocs-convert--style-definition style-name) :text)))
 
-(defun gdocs-convert--logical-style-text-request (style-name start end)
-  "Return logical STYLE-NAME text style request from START to END."
+(defun gdocs-convert--logical-style-text-request (style-name start end
+                                                             &optional segment-id)
+  "Return logical STYLE-NAME text style request from START to END.
+When SEGMENT-ID is non-nil, target that non-body segment."
   (let ((style (gdocs-convert--logical-style-text-fields style-name)))
     (when style
       `((updateTextStyle
          . ((textStyle . ,style)
-            (range . ((startIndex . ,start)
-                      (endIndex . ,end)))
+            (range . ,(gdocs-convert--text-range start end segment-id))
             (fields . ,(gdocs-convert--style-fields-mask-from-alist
                         style))))))))
 
