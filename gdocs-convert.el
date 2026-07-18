@@ -2425,7 +2425,9 @@ INLINE-OBJECTS is the document's inline object metadata map."
    ((alist-get 'paragraph element)
     (let ((paragraph (alist-get 'paragraph element)))
       (or (gdocs-convert--docs-special-paragraph-elements
-           paragraph inline-objects)
+           paragraph inline-objects markers
+           (alist-get 'startIndex element)
+           (alist-get 'endIndex element))
           (gdocs-convert--docs-paragraph-to-ir
            paragraph lists-map markers
            (alist-get 'startIndex element)
@@ -2436,11 +2438,12 @@ INLINE-OBJECTS is the document's inline object metadata map."
     nil)
    (t nil)))
 
-(defun gdocs-convert--docs-special-paragraph-elements (paragraph
-                                                       &optional inline-objects)
+(defun gdocs-convert--docs-special-paragraph-elements
+    (paragraph &optional inline-objects markers start end)
   "Check PARAGRAPH for special elements like page breaks or images.
-INLINE-OBJECTS is the document's inline object metadata map.  Returns an IR
-element if found, nil otherwise."
+INLINE-OBJECTS is the document's inline object metadata map.  MARKERS contains
+named-range marker data for START to END.  Returns an IR element if found, nil
+otherwise."
   (let ((elements (alist-get 'elements paragraph)))
     (catch 'found
       (seq-doseq (el elements)
@@ -2452,11 +2455,20 @@ element if found, nil otherwise."
                                    (alist-get 'inlineObjectElement el))))
             (throw 'found
                    (gdocs-convert--docs-inline-object-to-image-ir
-                    obj-id inline-objects)))))
+                    obj-id inline-objects
+                    (gdocs-convert--markers-for-range markers start end))))))
       nil)))
 
-(defun gdocs-convert--docs-inline-object-to-image-ir (object-id inline-objects)
-  "Return image IR for inline image OBJECT-ID using INLINE-OBJECTS metadata."
+(defun gdocs-convert--image-source-marker (markers)
+  "Return image source marker from MARKERS, or nil."
+  (seq-find (lambda (marker)
+              (eq (plist-get marker :type) 'image-source))
+            markers))
+
+(defun gdocs-convert--docs-inline-object-to-image-ir
+    (object-id inline-objects &optional markers)
+  "Return image IR for inline image OBJECT-ID using INLINE-OBJECTS metadata.
+MARKERS may contain original Org source ownership metadata."
   (let* ((inline-object (and object-id
                              (alist-get (intern object-id) inline-objects)))
          (properties (alist-get 'inlineObjectProperties inline-object))
@@ -2464,11 +2476,16 @@ element if found, nil otherwise."
          (image-properties (alist-get 'imageProperties embedded-object))
          (content-uri (alist-get 'contentUri image-properties))
          (source-uri (alist-get 'sourceUri image-properties))
+         (source-marker (gdocs-convert--image-source-marker markers))
+         (original-path (and source-marker
+                             (url-unhex-string
+                              (or (plist-get source-marker :data) ""))))
          (title (alist-get 'title embedded-object))
          (description (alist-get 'description embedded-object)))
     (append (list :type 'image
                   :object-id object-id
                   :id (gdocs-convert--next-id))
+            (when original-path (list :path original-path))
             (when content-uri (list :content-uri content-uri))
             (when source-uri (list :source-uri source-uri))
             (when title (list :title title))
@@ -3253,6 +3270,8 @@ preservation."
              (image-req `((insertInlineImage
                            . ((uri . ,uri)
                               (location . ((index . ,index)))))))
+             (source-marker-req
+              (gdocs-convert--make-image-source-marker-request element index))
              (caption-req (when caption-text
                             (gdocs-convert--make-insert-text-request
                              caption-text caption-start)))
@@ -3265,11 +3284,24 @@ preservation."
                 (gdocs-convert--make-image-caption-marker-requests
                  element caption-text-start caption-text-end))))
         (list :requests (append (list image-req)
+                                (when source-marker-req (list source-marker-req))
                                 (when caption-req (list caption-req))
                                 caption-style-reqs
                                 caption-marker-reqs)
               :index (+ index 1 caption-len)))
     (list :requests nil :index index)))
+
+(defun gdocs-convert--make-image-source-marker-request (element index)
+  "Create semantic marker request for image source ELEMENT at INDEX."
+  (when-let* ((path (plist-get element :path)))
+    (let ((id (or (plist-get element :id)
+                  (plist-get element :object-id)
+                  (format "image-%s" index))))
+      `((createNamedRange
+         . ((name . ,(format "gdocs-org-marker:image-source:%s:%s"
+                             id (url-hexify-string path)))
+            (range . ((startIndex . ,index)
+                      (endIndex . ,(1+ index))))))))))
 
 (defun gdocs-convert--caption-style-requests (paragraph-start paragraph-end
                                                 text-start text-end)

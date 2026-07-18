@@ -453,6 +453,39 @@
     (should (equal (plist-get image :title) "Logo"))
     (should (equal (plist-get image :description) "Product logo"))))
 
+(ert-deftest gdocs-convert-test-docs-json-marked-image-source-preserves-path ()
+  "Marked inline images pull back using their original Org file path."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 2)
+                    (paragraph
+                     . ((elements
+                         . ,(vector '((inlineObjectElement
+                                      . ((inlineObjectId . "img-1"))))))
+                        (paragraphStyle
+                         . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (inlineObjects
+                  . ((img-1
+                      . ((inlineObjectProperties
+                          . ((embeddedObject
+                              . ((imageProperties
+                                  . ((contentUri
+                                      . "https://lh3.googleusercontent.com/image")
+                                     (sourceUri
+                                      . "https://drive.google.com/uc?id=1")))))))))))
+                 (namedRanges
+                  . ,(list
+                      (cons (intern "gdocs-org-marker:image-source:img-1:..%2Flogo.png")
+                            '((namedRanges
+                               . [((ranges . [((startIndex . 1)
+                                               (endIndex . 2))]))])))))))
+         (ir (gdocs-convert-docs-json-to-ir json))
+         (image (car ir))
+         (org (gdocs-convert-ir-to-org ir)))
+    (should (equal (plist-get image :path) "../logo.png"))
+    (should (string-match-p "\[\[file:../logo.png\]\]" org))))
+
 (ert-deftest gdocs-convert-test-docs-json-marked-image-caption ()
   "Marked caption paragraphs attach to preceding image IR on pull."
   (let* ((body-elements
@@ -1713,6 +1746,21 @@
                    '(((insertInlineImage
                        . ((uri . "https://example.invalid/logo.png")
                           (location . ((index . 12)))))))))))
+
+(ert-deftest gdocs-convert-test-image-ir-to-requests-marks-original-path ()
+  "Image requests mark the original Org path for pull ownership."
+  (let* ((result (gdocs-convert--image-to-requests
+                  (list :type 'image
+                        :id "img-1"
+                        :path "../logo.png"
+                        :uri "https://example.invalid/logo.png")
+                  12))
+         (requests (plist-get result :requests)))
+    (should (member '((createNamedRange
+                       . ((name . "gdocs-org-marker:image-source:img-1:..%2Flogo.png")
+                          (range . ((startIndex . 12)
+                                    (endIndex . 13))))))
+                    requests))))
 
 (ert-deftest gdocs-convert-test-captioned-image-ir-to-requests ()
   "Captioned image IR emits inline image plus visible caption text."
