@@ -275,6 +275,58 @@ properties are preserved and revision ID is stored."
                                 (point-min) (point-max))))
       (should (equal gdocs-sync--revision-id "rev-6")))))
 
+(ert-deftest gdocs-sync-test-pull-aborts-on-introduced-heading-duplicate ()
+  "Pull refuses to mutate when rendered Org suspiciously duplicates headings."
+  (gdocs-sync-test-with-org-buffer "* A\nBody\n* B\n"
+    (let ((before (buffer-string)))
+      (should-error
+       (gdocs-sync--replace-buffer-content "* A\nBody\n* A\nOther\n")
+       :type 'user-error)
+      (should (equal before (buffer-string))))))
+
+(ert-deftest gdocs-sync-test-pull-aborts-on-dropped-footnote-definition ()
+  "Pull refuses to mutate when a footnote definition would be lost."
+  (gdocs-sync-test-with-org-buffer "Paragraph[fn:a]\n\n[fn:a] Body\n"
+    (let ((before (buffer-string)))
+      (should-error
+       (gdocs-sync--replace-buffer-content "Paragraph[fn:a]\n")
+       :type 'user-error)
+      (should (equal before (buffer-string))))))
+
+(ert-deftest gdocs-sync-test-pull-aborts-on-dropped-task-state ()
+  "Pull refuses to mutate when checkbox task states would be lost."
+  (gdocs-sync-test-with-org-buffer "- [ ] Todo\n- [X] Done\n- [-] Partial\n"
+    (let ((before (buffer-string)))
+      (should-error
+       (gdocs-sync--replace-buffer-content "- Todo\n- Done\n- [ ] Partial\n")
+       :type 'user-error)
+      (should (equal before (buffer-string))))))
+
+(ert-deftest gdocs-sync-test-pull-writes-backup-before-successful-mutation ()
+  "Successful pull replacement writes a pre-mutation backup."
+  (let ((temp-file (make-temp-file "gdocs-pull-backup" nil ".org"))
+        (backup-dir (make-temp-file "gdocs-pull-backups" t)))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect temp-file)
+          (erase-buffer)
+          (org-mode)
+          (insert "Old content\n")
+          (setq gdocs-sync--document-id nil)
+          (let ((gdocs-pull-backup-directory backup-dir)
+                (gdocs-pull-integrity-checks-enable t))
+            (cl-letf (((symbol-function 'gdocs--ensure-org-tag) #'ignore))
+              (gdocs-sync--replace-buffer-content "New content\n"))
+            (should (string= (buffer-string) "New content\n"))
+            (let ((backups (directory-files backup-dir t "gdocs-pull-backup.*\\.org\\.gdocs-pull-backup")))
+              (should (= (length backups) 1))
+              (should (string= (with-temp-buffer
+                                 (insert-file-contents (car backups))
+                                 (buffer-string))
+                               "Old content\n"))))
+          (kill-buffer))
+      (ignore-errors (delete-file temp-file))
+      (ignore-errors (delete-directory backup-dir t)))))
+
 (ert-deftest gdocs-sync-test-pull-with-local-mods ()
   "Pull replaces from remote when local content still matches shadow.
 When there are no local edits to preserve, pull avoids three-way merge so

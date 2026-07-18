@@ -32,6 +32,19 @@
   :type 'directory
   :group 'gdocs)
 
+(defcustom gdocs-pull-integrity-checks-enable t
+  "Whether pull validates semantic Org integrity before mutating buffers.
+When enabled, pull fails closed if the rendered remote Org would drop or
+suspiciously duplicate high-value authored constructs such as headings,
+footnotes, typographic blocks, or task states."
+  :type 'boolean
+  :group 'gdocs)
+
+(defcustom gdocs-pull-backup-directory nil
+  "Directory for pre-pull buffer backups, or nil to place them next to files."
+  :type '(choice (const :tag "Next to source file" nil) directory)
+  :group 'gdocs)
+
 (defcustom gdocs-auto-push-on-save t
   "Whether to automatically push changes on save."
   :type 'boolean
@@ -635,6 +648,131 @@ markers do not cause false mismatches."
             (gdocs-sync--filter-title
              (gdocs-sync--normalize-shadow-ir gdocs-sync--shadow-ir))))))
 
+(defun gdocs-sync--org-semantic-inventory (org-string)
+  "Return a semantic safety inventory for ORG-STRING."
+  (with-temp-buffer
+    (org-mode)
+    (insert org-string)
+    (let ((tree (org-element-parse-buffer)))
+      (list
+       :headings
+       (org-element-map tree 'headline
+         (lambda (headline)
+           (format "%s:%s"
+                   (org-element-property :level headline)
+                   (org-element-property :raw-value headline))))
+       :footnote-definitions
+       (org-element-map tree 'footnote-definition
+         (lambda (definition)
+           (org-element-property :label definition)))
+       :tasks
+       (org-element-map tree 'item
+         (lambda (item)
+           (org-element-property :checkbox item)))
+       :blocks
+       (let ((counts nil))
+         (dolist (type '(quote-block src-block example-block special-block))
+           (push (cons type 0) counts))
+         (org-element-map tree '(quote-block src-block example-block special-block)
+           (lambda (block)
+             (let ((type (org-element-type block)))
+               (when (or (not (eq type 'special-block))
+                         (string= (org-element-property :type block) "CALLOUT"))
+                 (cl-incf (alist-get type counts))))))
+         counts)))))
+
+(defun gdocs-sync--counts (values)
+  "Return a hash table counting VALUES."
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (value values table)
+      (puthash value (1+ (gethash value table 0)) table))))
+
+(defun gdocs-sync--dropped-values-diagnostics (label old-values new-values)
+  "Return diagnostics for values under LABEL dropped from OLD-VALUES to NEW-VALUES."
+  (let ((old-counts (gdocs-sync--counts old-values))
+        (new-counts (gdocs-sync--counts new-values))
+        diagnostics)
+    (maphash (lambda (value old-count)
+               (let ((new-count (gethash value new-counts 0)))
+                 (when (< new-count old-count)
+                   (push (format "%s `%s' count dropped from %d to %d"
+                                 label value old-count new-count)
+                         diagnostics))))
+             old-counts)
+    diagnostics))
+
+(defun gdocs-sync--introduced-duplicate-heading-diagnostics (old-headings new-headings)
+  "Return diagnostics for suspicious heading duplicates introduced by pull."
+  (let ((old-counts (gdocs-sync--counts old-headings))
+        (new-counts (gdocs-sync--counts new-headings))
+        diagnostics)
+    (maphash (lambda (heading new-count)
+               (let ((old-count (gethash heading old-counts 0)))
+                 (when (and (> new-count 1) (> new-count old-count))
+                   (push (format "heading `%s' duplicated from %d to %d"
+                                 heading old-count new-count)
+                         diagnostics))))
+             new-counts)
+    diagnostics))
+
+(defun gdocs-sync--block-count-diagnostics (old-blocks new-blocks)
+  "Return diagnostics for semantic block counts dropped from OLD-BLOCKS to NEW-BLOCKS."
+  (let (diagnostics)
+    (dolist (entry old-blocks diagnostics)
+      (let* ((type (car entry))
+             (old-count (cdr entry))
+             (new-count (or (alist-get type new-blocks) 0)))
+        (when (< new-count old-count)
+          (push (format "%s count dropped from %d to %d"
+                        type old-count new-count)
+                diagnostics))))))
+
+(defun gdocs-sync--pull-integrity-diagnostics (old-org new-org)
+  "Return semantic integrity diagnostics for replacing OLD-ORG with NEW-ORG."
+  (let* ((old (gdocs-sync--org-semantic-inventory old-org))
+         (new (gdocs-sync--org-semantic-inventory new-org)))
+    (append
+     (gdocs-sync--introduced-duplicate-heading-diagnostics
+      (plist-get old :headings) (plist-get new :headings))
+     (gdocs-sync--dropped-values-diagnostics
+      "footnote definition"
+      (plist-get old :footnote-definitions)
+      (plist-get new :footnote-definitions))
+     (gdocs-sync--dropped-values-diagnostics
+      "task checkbox"
+      (plist-get old :tasks) (plist-get new :tasks))
+     (gdocs-sync--block-count-diagnostics
+      (plist-get old :blocks) (plist-get new :blocks)))))
+
+(defun gdocs-sync--validate-pull-replacement (org-string)
+  "Signal if replacing current buffer with ORG-STRING looks lossy."
+  (when gdocs-pull-integrity-checks-enable
+    (let* ((old-org (buffer-substring-no-properties (point-min) (point-max)))
+           (diagnostics (gdocs-sync--pull-integrity-diagnostics
+                         old-org org-string)))
+      (when diagnostics
+        (user-error "Google Docs pull aborted by semantic integrity checks: %s"
+                    (string-join (nreverse diagnostics) "; "))))))
+
+(defun gdocs-sync--pull-backup-file-name ()
+  "Return a backup file name for the current buffer before pull mutation."
+  (let* ((source (or buffer-file-name
+                    (expand-file-name (buffer-name) temporary-file-directory)))
+         (directory (or gdocs-pull-backup-directory
+                        (file-name-directory source)))
+         (base (file-name-nondirectory source)))
+    (expand-file-name
+     (format "%s.gdocs-pull-backup.%s"
+             base (format-time-string "%Y%m%dT%H%M%S%z"))
+     directory)))
+
+(defun gdocs-sync--write-pull-backup ()
+  "Write a pre-pull backup of the current buffer and return its path."
+  (let ((backup (gdocs-sync--pull-backup-file-name)))
+    (make-directory (file-name-directory backup) t)
+    (write-region (point-min) (point-max) backup nil 'silent)
+    backup))
+
 (defun gdocs-sync--install-content (org-string &optional revision-id)
   "Replace buffer content with ORG-STRING and update sync state.
 REVISION-ID, if non-nil, is stored as the current revision.
@@ -647,7 +785,8 @@ buffer."
         (saved-point (point)))
     (erase-buffer)
     (insert org-string)
-    (gdocs--ensure-org-tag)
+    (when (fboundp 'gdocs--ensure-org-tag)
+      (gdocs--ensure-org-tag))
     ;; Update buffer-local state before writing properties so
     ;; persist-properties sees the current values.
     (when revision-id
@@ -682,8 +821,10 @@ buffer."
 (defun gdocs-sync--replace-buffer-content (org-string &optional revision-id)
   "Replace buffer content with ORG-STRING and update the shadow IR.
 REVISION-ID, if non-nil, is stored as the current revision."
-  (gdocs-sync--install-content org-string revision-id)
-  (message "Pulled remote changes."))
+  (gdocs-sync--validate-pull-replacement org-string)
+  (let ((backup (gdocs-sync--write-pull-backup)))
+    (gdocs-sync--install-content org-string revision-id)
+    (message "Pulled remote changes. Backup: %s" backup)))
 
 (defun gdocs-sync--start-conflict-resolution (remote-org revision-id)
   "Begin merge resolution between local content and REMOTE-ORG.
@@ -1216,7 +1357,8 @@ is unused but accepted for API compatibility."
     (setq gdocs-sync--document-id doc-id)
     (setq gdocs-sync--account acct)
     (gdocs-sync--write-properties doc-id acct)
-    (gdocs--ensure-org-tag)
+    (when (fboundp 'gdocs--ensure-org-tag)
+      (gdocs--ensure-org-tag))
     (let ((before-save-hook nil)
           (after-save-hook nil))
       (save-buffer))
@@ -1226,7 +1368,8 @@ is unused but accepted for API compatibility."
   "Remove Google Docs link from the current buffer."
   (interactive)
   (gdocs-sync--remove-properties)
-  (gdocs--remove-org-tag)
+  (when (fboundp 'gdocs--remove-org-tag)
+    (gdocs--remove-org-tag))
   (gdocs-sync--clear-buffer-state)
   (let ((before-save-hook nil)
         (after-save-hook nil))
