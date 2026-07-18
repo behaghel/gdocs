@@ -422,6 +422,37 @@ properties are preserved and revision ID is stored."
       (ignore-errors (delete-file temp-file))
       (ignore-errors (delete-directory backup-dir t)))))
 
+(ert-deftest gdocs-sync-test-local-unchanged-uses-local-hash ()
+  "Local hash can prove unchanged even when shadow IR is normalized differently."
+  (gdocs-sync-test-with-org-buffer "* Heading\nBody[fn:a]\n\n* Footnotes\n\n[fn:a] Note\n"
+    (setq gdocs-sync--local-hash (gdocs-sync--current-local-hash))
+    (setq gdocs-sync--shadow-ir (gdocs-convert-org-string-to-ir "* Heading\nBody[fn:a]\n"))
+    (should (gdocs-sync--local-unchanged-p))))
+
+(ert-deftest gdocs-sync-test-local-hash-detects-user-edit ()
+  "Local hash detects real user edits after sync."
+  (gdocs-sync-test-with-org-buffer "* Heading\nBody\n"
+    (setq gdocs-sync--local-hash (gdocs-sync--current-local-hash))
+    (goto-char (point-max))
+    (insert "Local edit\n")
+    (should-not (gdocs-sync--local-hash-matches-p))))
+
+(ert-deftest gdocs-sync-test-remote-only-semantic-pull-uses-hash-not-merge ()
+  "Semantic remote-only pulls do not enter automatic merge when local hash matches."
+  (gdocs-sync-test-with-org-buffer "* Heading\nOld\n"
+    (let ((gdocs-pull-integrity-checks-enable t))
+      (setq gdocs-sync--local-hash (gdocs-sync--current-local-hash))
+      (setq gdocs-sync--shadow-ir (gdocs-convert-org-string-to-ir "Paragraph-only shadow\n"))
+      (cl-letf (((symbol-function 'gdocs-convert-docs-json-to-ir)
+                 (lambda (_json)
+                   (gdocs-convert-org-string-to-ir "* Heading\nNew\n")))
+                ((symbol-function 'gdocs-sync--three-way-merge)
+                 (lambda (_remote-ir)
+                   (error "remote-only semantic pull should not merge")))
+                ((symbol-function 'gdocs--ensure-org-tag) #'ignore))
+        (gdocs-sync--apply-pull '((body . ((content . [])))) "rev-2")
+        (should (string-match-p "New" (buffer-string)))))))
+
 (ert-deftest gdocs-sync-test-pull-aborts-semantic-auto-merge ()
   "Pull refuses automatic three-way merge for semantic documents."
   (gdocs-sync-test-with-org-buffer "* Heading\nLocal edit\n"

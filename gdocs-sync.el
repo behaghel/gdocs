@@ -75,6 +75,9 @@ that would destroy comments prompt for per-element confirmation."
 (defvar-local gdocs-sync--last-sync-time nil
   "ISO 8601 timestamp of the last sync.")
 
+(defvar-local gdocs-sync--local-hash nil
+  "Hash of the local Org buffer at the last successful sync.")
+
 (defvar-local gdocs-sync--push-in-progress nil
   "Non-nil when a push is currently in progress.")
 
@@ -228,6 +231,7 @@ before finalizing."
   (setq gdocs-sync--shadow-ir (gdocs-sync--normalize-shadow-ir current-ir))
   (gdocs-sync--update-revision-from-response response)
   (gdocs-sync--update-last-sync-time)
+  (setq gdocs-sync--local-hash (gdocs-sync--current-local-hash))
   (gdocs-sync--persist-properties)
   (when buffer-file-name
     (let ((gdocs-auto-push-on-save nil)
@@ -652,16 +656,36 @@ on elements that were not changed remotely."
       (user-error
        "Google Docs pull aborted: semantic document has both local and remote changes; use debug pipeline or manual review instead of automatic merge"))))
 
+(defun gdocs-sync--metadata-normalized-buffer-string ()
+  "Return current buffer text without volatile GDOCS metadata lines."
+  (let ((source (current-buffer)))
+    (with-temp-buffer
+      (insert-buffer-substring source)
+      (goto-char (point-min))
+      (while (re-search-forward "^[[:space:]]*:GDOCS_[^\n]*\n" nil t)
+        (replace-match ""))
+      (buffer-string))))
+
+(defun gdocs-sync--current-local-hash ()
+  "Return a stable hash for the current local Org buffer."
+  (secure-hash 'sha256 (gdocs-sync--metadata-normalized-buffer-string)))
+
+(defun gdocs-sync--local-hash-matches-p ()
+  "Return non-nil when current local content matches last sync hash."
+  (and gdocs-sync--local-hash
+       (equal gdocs-sync--local-hash (gdocs-sync--current-local-hash))))
+
 (defun gdocs-sync--local-unchanged-p ()
-  "Return non-nil if current buffer content matches the shadow IR."
-  (when gdocs-sync--shadow-ir
-    (let ((local-ir (gdocs-sync--filter-title
-                     (gdocs-convert-org-buffer-to-ir)))
-          (shadow-ir (gdocs-sync--filter-title
-                      (gdocs-sync--normalize-shadow-ir
-                       gdocs-sync--shadow-ir))))
-      (equal (gdocs-diff--element-keys local-ir)
-             (gdocs-diff--element-keys shadow-ir)))))
+  "Return non-nil if current buffer content matches the last synced state."
+  (or (gdocs-sync--local-hash-matches-p)
+      (when gdocs-sync--shadow-ir
+        (let ((local-ir (gdocs-sync--filter-title
+                         (gdocs-convert-org-buffer-to-ir)))
+              (shadow-ir (gdocs-sync--filter-title
+                          (gdocs-sync--normalize-shadow-ir
+                           gdocs-sync--shadow-ir))))
+          (equal (gdocs-diff--element-keys local-ir)
+                 (gdocs-diff--element-keys shadow-ir))))))
 
 (defun gdocs-sync--remote-unchanged-p (remote-ir)
   "Return non-nil if REMOTE-IR matches the shadow IR.
@@ -911,6 +935,7 @@ buffer."
     (when revision-id
       (setq gdocs-sync--revision-id revision-id))
     (gdocs-sync--update-last-sync-time)
+    (setq gdocs-sync--local-hash (secure-hash 'sha256 org-string))
     ;; Write all metadata to the file-level property drawer.
     (when doc-id
       (gdocs-sync--persist-properties))
@@ -1507,7 +1532,9 @@ also persisted when non-nil."
     (when gdocs-sync--revision-id
       (org-entry-put nil "GDOCS_REVISION_ID" gdocs-sync--revision-id))
     (when gdocs-sync--last-sync-time
-      (org-entry-put nil "GDOCS_LAST_SYNC" gdocs-sync--last-sync-time))))
+      (org-entry-put nil "GDOCS_LAST_SYNC" gdocs-sync--last-sync-time))
+    (when gdocs-sync--local-hash
+      (org-entry-put nil "GDOCS_LOCAL_HASH" gdocs-sync--local-hash))))
 
 (defun gdocs-sync--reset-element-cache ()
   "Fully reset the org-element cache for the current buffer.
@@ -1528,6 +1555,7 @@ changes buffer positions, which invalidates cached element
 boundaries and causes freezes in subsequent cache consumers
 \(e.g. `org-encrypt-entries' on `before-save-hook')."
   (when gdocs-sync--document-id
+    (setq gdocs-sync--local-hash (gdocs-sync--current-local-hash))
     (gdocs-sync--write-properties gdocs-sync--document-id
                                   (or gdocs-sync--account ""))
     (gdocs-sync--reset-element-cache)))
@@ -1539,7 +1567,8 @@ boundaries and causes freezes in subsequent cache consumers
     (org-entry-delete nil "GDOCS_DOCUMENT_ID")
     (org-entry-delete nil "GDOCS_ACCOUNT")
     (org-entry-delete nil "GDOCS_REVISION_ID")
-    (org-entry-delete nil "GDOCS_LAST_SYNC"))
+    (org-entry-delete nil "GDOCS_LAST_SYNC")
+    (org-entry-delete nil "GDOCS_LOCAL_HASH"))
   (gdocs-sync--reset-element-cache))
 
 (defun gdocs-sync--clear-buffer-state ()
@@ -1549,6 +1578,7 @@ boundaries and causes freezes in subsequent cache consumers
   (setq gdocs-sync--shadow-ir nil)
   (setq gdocs-sync--revision-id nil)
   (setq gdocs-sync--last-sync-time nil)
+  (setq gdocs-sync--local-hash nil)
   (setq gdocs-sync--push-in-progress nil)
   (setq gdocs-sync--push-queued nil)
   (gdocs-sync--set-status 'synced))
@@ -1600,7 +1630,9 @@ Otherwise return ID-OR-URL as-is."
     (when-let* ((rev (org-entry-get nil "GDOCS_REVISION_ID")))
       (setq gdocs-sync--revision-id rev))
     (when-let* ((ts (org-entry-get nil "GDOCS_LAST_SYNC")))
-      (setq gdocs-sync--last-sync-time ts))))
+      (setq gdocs-sync--last-sync-time ts))
+    (when-let* ((hash (org-entry-get nil "GDOCS_LOCAL_HASH")))
+      (setq gdocs-sync--local-hash hash))))
 
 ;;;; Title filtering
 
