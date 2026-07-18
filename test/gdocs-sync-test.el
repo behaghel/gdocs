@@ -310,6 +310,23 @@ properties are preserved and revision ID is stored."
        :type 'user-error)
       (should (equal before (buffer-string))))))
 
+(ert-deftest gdocs-sync-test-pull-aborts-on-footnote-rich-formatting-loss ()
+  "Pull refuses to mutate when footnote body rich formatting is lost."
+  (gdocs-sync-test-with-org-buffer "Paragraph[fn:a]\n\n[fn:a] /Italic/ *bold* ~code~\n"
+    (let ((before (buffer-string)))
+      (should-error
+       (gdocs-sync--replace-buffer-content "Paragraph[fn:a]\n\n[fn:a] Italic bold code\n")
+       :type 'user-error)
+      (should (equal before (buffer-string))))))
+
+(ert-deftest gdocs-sync-test-pull-allows-footnote-text-change-with-same-rich-shape ()
+  "Pull permits footnote text edits when rich formatting shape is stable."
+  (gdocs-sync-test-with-org-buffer "Paragraph[fn:a]\n\n[fn:a] /Old/\n"
+    (let ((gdocs-pull-backup-directory temporary-file-directory))
+      (cl-letf (((symbol-function 'gdocs--ensure-org-tag) #'ignore))
+        (gdocs-sync--replace-buffer-content "Paragraph[fn:a]\n\n[fn:a] /New/\n"))
+      (should (string-match-p "/New/" (buffer-string))))))
+
 (ert-deftest gdocs-sync-test-pull-aborts-on-dropped-task-state ()
   "Pull refuses to mutate when checkbox task states would be lost."
   (gdocs-sync-test-with-org-buffer "- [ ] Todo\n- [X] Done\n- [-] Partial\n"

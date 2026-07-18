@@ -699,6 +699,10 @@ markers do not cause false mismatches."
        (org-element-map tree 'footnote-definition
          (lambda (definition)
            (org-element-property :label definition)))
+       :footnote-structure
+       (org-element-map tree 'footnote-definition
+         (lambda (definition)
+           (gdocs-sync--footnote-structure-entry definition)))
        :tasks
        (org-element-map tree 'item
          (lambda (item)
@@ -718,6 +722,16 @@ markers do not cause false mismatches."
        (org-element-map tree '(quote-block src-block example-block special-block)
          (lambda (block)
            (gdocs-sync--org-block-structure-entry block)))))))
+
+(defun gdocs-sync--footnote-structure-entry (definition)
+  "Return a semantic structure entry for footnote DEFINITION."
+  (let ((label (org-element-property :label definition))
+        (rich-types nil))
+    (org-element-map definition
+        '(bold italic underline strike-through code verbatim link)
+      (lambda (object)
+        (push (org-element-type object) rich-types)))
+    (format "%s:%s" label (mapconcat #'symbol-name (nreverse rich-types) ","))))
 
 (defun gdocs-sync--block-line-count (value)
   "Return the line count for block VALUE."
@@ -798,6 +812,13 @@ markers do not cause false mismatches."
                   (string-join old-list " > ")
                   (string-join new-list " > ")))))
 
+(defun gdocs-sync--footnote-structure-diagnostics (old-footnotes new-footnotes)
+  "Return diagnostics when pull changes footnote body semantics."
+  (unless (equal old-footnotes new-footnotes)
+    (list (format "footnote structure changed from `%s' to `%s'"
+                  (string-join old-footnotes " > ")
+                  (string-join new-footnotes " > ")))))
+
 (defun gdocs-sync--block-count-diagnostics (old-blocks new-blocks)
   "Return diagnostics for semantic block counts dropped from OLD-BLOCKS to NEW-BLOCKS."
   (let (diagnostics)
@@ -832,6 +853,8 @@ markers do not cause false mismatches."
       "footnote definition"
       (plist-get old :footnote-definitions)
       (plist-get new :footnote-definitions))
+     (gdocs-sync--footnote-structure-diagnostics
+      (plist-get old :footnote-structure) (plist-get new :footnote-structure))
      (gdocs-sync--dropped-values-diagnostics
       "task checkbox"
       (plist-get old :tasks) (plist-get new :tasks))
