@@ -328,13 +328,13 @@
       (should (equal 0 gdocs-api--active-requests))
       (should (equal "" gdocs-api--modeline-string)))))
 
-(ert-deftest gdocs-api-test-upload-image-uses-binary-body-and-finally ()
-  "Image upload sends binary multipart data and clears progress via finalizer."
+(ert-deftest gdocs-api-test-upload-image-uses-curl-data-file ()
+  "Image upload sends multipart data through a curl data file."
   (let ((gdocs-api--active-requests 0)
         (gdocs-api--modeline-string "")
         (gdocs-accounts '(("acct")))
         (temp-file (make-temp-file "gdocs-test-img" nil ".png"))
-        captured-body-type captured-finally)
+        captured-command)
     (unwind-protect
         (progn
           (with-temp-file temp-file
@@ -342,17 +342,17 @@
           (cl-letf (((symbol-function 'gdocs-auth-get-access-token)
                      (lambda (_account callback &optional _errback)
                        (funcall callback "token")))
-                    ((symbol-function 'plz)
-                     (lambda (_method _url &rest args)
-                       (setq captured-body-type (plist-get args :body-type)
-                             captured-finally (plist-get args :finally)))))
+                    ((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (setq captured-command (plist-get args :command))
+                       'process)))
             (gdocs-api-upload-image temp-file #'ignore "acct")
-            (should (eq captured-body-type 'binary))
-            (should (equal 1 gdocs-api--active-requests))
-            (should (functionp captured-finally))
-            (funcall captured-finally)
-            (should (equal 0 gdocs-api--active-requests))
-            (should (equal "" gdocs-api--modeline-string))))
+            (should (member "--data-binary" captured-command))
+            (should (seq-some (lambda (arg)
+                                (string-prefix-p "@" arg))
+                              captured-command))
+            (should (equal 1 gdocs-api--active-requests))))
+      (gdocs-api--hide-progress)
       (delete-file temp-file))))
 
 ;;;; MIME type guessing

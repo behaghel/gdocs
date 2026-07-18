@@ -165,31 +165,70 @@ TOKEN is the OAuth access token.  FILE-PATH is the local file.
 MIME-TYPE is the file's MIME type.  METADATA is the JSON metadata
 string.  CALLBACK receives the parsed JSON response.  ACCOUNT is
 the account name for error reporting."
-  ;; Uploads go through plz directly (not gdocs-api--request) because
-  ;; multipart bodies cannot be transparently retried.  On failure,
-  ;; the error handler reports but does not retry.
-  ;; Generate a unique boundary unlikely to appear in the file content
-  (let* ((boundary (format "gdocs-boundary-%s" (sha1 (format "%s%s" file-path (float-time)))))
+  ;; Multipart uploads are sent with curl directly instead of through `plz'.
+  ;; `plz' feeds both its curl config and request body through stdin; Google
+  ;; Drive intermittently treats larger binary multipart payloads sent this way
+  ;; as truncated, reporting "Missing end boundary in multipart body."  Writing
+  ;; the exact multipart payload to a temp file and using `--data-binary @file'
+  ;; gives curl a stable byte stream and content length.
+  (let* ((boundary (format "gdocs-boundary-%s"
+                           (sha1 (format "%s%s" file-path (float-time)))))
          (body (gdocs-api--build-multipart-body
-                boundary metadata file-path mime-type)))
+                boundary metadata file-path mime-type))
+         (body-file (make-temp-file "gdocs-upload-body"))
+         (response-file (make-temp-file "gdocs-upload-response"))
+         (status-buffer (generate-new-buffer " *gdocs-upload-status*")))
+    (with-temp-file body-file
+      (set-buffer-multibyte nil)
+      (insert body))
     (gdocs-api--show-progress)
     (condition-case err
-        (plz 'post gdocs-api--drive-upload-url
-          :headers `(("Authorization" . ,(concat "Bearer " token))
-                     ("Content-Type" . ,(concat "multipart/related; boundary=" boundary)))
-          :body body
-          :body-type 'binary
-          :as #'json-read
-          :then callback
-          :else (lambda (err)
-                  ;; Pass max-retries as attempt to prevent retry — multipart
-                  ;; bodies cannot be transparently replayed.
-                  (gdocs-api--handle-error
-                   err 'post gdocs-api--drive-upload-url
-                   callback account nil gdocs-api--max-retries))
-          :finally #'gdocs-api--hide-progress)
+        (make-process
+         :name "gdocs-upload-image"
+         :buffer status-buffer
+         :coding 'utf-8
+         :connection-type 'pipe
+         :command (list plz-curl-program
+                        "--silent" "--show-error" "--location"
+                        "--request" "POST"
+                        "--header" (concat "Authorization: Bearer " token)
+                        "--header" (concat "Content-Type: multipart/related; boundary=" boundary)
+                        "--data-binary" (concat "@" body-file)
+                        "--output" response-file
+                        "--write-out" "%{http_code}"
+                        gdocs-api--drive-upload-url)
+         :sentinel
+         (lambda (process _event)
+           (when (memq (process-status process) '(exit signal))
+             (unwind-protect
+                 (let* ((curl-status (process-exit-status process))
+                        (http-status
+                         (with-current-buffer status-buffer
+                           (string-to-number (string-trim (buffer-string)))))
+                        (response-text
+                         (with-temp-buffer
+                           (when (file-readable-p response-file)
+                             (insert-file-contents response-file))
+                           (buffer-string))))
+                   (if (and (= curl-status 0)
+                            (<= 200 http-status 299))
+                       (funcall callback
+                                (if (string-empty-p response-text)
+                                    nil
+                                  (json-read-from-string response-text)))
+                     (error "Google API request failed: HTTP %s: %s"
+                            http-status response-text)))
+               (gdocs-api--hide-progress)
+               (when (buffer-live-p status-buffer)
+                 (kill-buffer status-buffer))
+               (ignore-errors (delete-file body-file))
+               (ignore-errors (delete-file response-file))))))
       (error
        (gdocs-api--hide-progress)
+       (when (buffer-live-p status-buffer)
+         (kill-buffer status-buffer))
+       (ignore-errors (delete-file body-file))
+       (ignore-errors (delete-file response-file))
        (signal (car err) (cdr err))))))
 
 (defun gdocs-api--build-multipart-body (boundary metadata file-path mime-type)
