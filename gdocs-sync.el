@@ -741,6 +741,13 @@ markers do not cause false mismatches."
              new-counts)
     diagnostics))
 
+(defun gdocs-sync--heading-outline-diagnostics (old-headings new-headings)
+  "Return diagnostics when pull would change authored heading outline."
+  (unless (equal old-headings new-headings)
+    (list (format "heading outline changed from `%s' to `%s'"
+                  (string-join old-headings " > ")
+                  (string-join new-headings " > ")))))
+
 (defun gdocs-sync--block-count-diagnostics (old-blocks new-blocks)
   "Return diagnostics for semantic block counts dropped from OLD-BLOCKS to NEW-BLOCKS."
   (let (diagnostics)
@@ -758,6 +765,8 @@ markers do not cause false mismatches."
   (let* ((old (gdocs-sync--org-semantic-inventory old-org))
          (new (gdocs-sync--org-semantic-inventory new-org)))
     (append
+     (gdocs-sync--heading-outline-diagnostics
+      (plist-get old :headings) (plist-get new :headings))
      (gdocs-sync--introduced-duplicate-heading-diagnostics
       (plist-get old :headings) (plist-get new :headings))
      (gdocs-sync--dropped-values-diagnostics

@@ -284,6 +284,23 @@ properties are preserved and revision ID is stored."
        :type 'user-error)
       (should (equal before (buffer-string))))))
 
+(ert-deftest gdocs-sync-test-pull-aborts-on-heading-outline-change ()
+  "Pull refuses to mutate when rendered Org changes authored heading outline."
+  (gdocs-sync-test-with-org-buffer "* A\n** B\nText\n* C\n"
+    (let ((before (buffer-string)))
+      (should-error
+       (gdocs-sync--replace-buffer-content "* A\n* B\nText\n* C\n")
+       :type 'user-error)
+      (should (equal before (buffer-string))))))
+
+(ert-deftest gdocs-sync-test-pull-allows-body-change-with-same-heading-outline ()
+  "Pull permits body edits when the authored heading outline is stable."
+  (gdocs-sync-test-with-org-buffer "* A\nOld text\n** B\nMore\n"
+    (let ((gdocs-pull-backup-directory temporary-file-directory))
+      (cl-letf (((symbol-function 'gdocs--ensure-org-tag) #'ignore))
+        (gdocs-sync--replace-buffer-content "* A\nNew text\n** B\nMore\n"))
+      (should (string-match-p "New text" (buffer-string))))))
+
 (ert-deftest gdocs-sync-test-pull-aborts-on-dropped-footnote-definition ()
   "Pull refuses to mutate when a footnote definition would be lost."
   (gdocs-sync-test-with-org-buffer "Paragraph[fn:a]\n\n[fn:a] Body\n"
@@ -369,7 +386,7 @@ properties are preserved and revision ID is stored."
   "Pull replaces from remote when local content still matches shadow.
 When there are no local edits to preserve, pull avoids three-way merge so
 remote semantic changes cannot duplicate headings or other structural content."
-  (gdocs-sync-test-with-org-buffer "Local content\n"
+  (gdocs-sync-test-with-org-buffer "* Heading\nLocal content\n"
     (setq gdocs-sync--revision-id "rev-5")
     ;; Shadow matches local content (no local modifications)
     (setq gdocs-sync--shadow-ir (gdocs-convert-org-buffer-to-ir))
@@ -382,20 +399,14 @@ remote semantic changes cannot duplicate headings or other structural content."
                  (funcall callback (gdocs-test-sample-document-json))))
               ((symbol-function 'gdocs-convert-docs-json-to-ir)
                (lambda (_json)
-                 (list (list :type 'paragraph :style 'heading-1
-                             :contents (list (list :text "Remote update"
-                                                   :bold nil :italic nil
-                                                   :underline nil
-                                                   :strikethrough nil
-                                                   :code nil :link nil))
-                             :id "elem-001"))))
+                 (gdocs-convert-org-string-to-ir "* Heading\nRemote update\n")))
               ((symbol-function 'gdocs-sync--three-way-merge)
                (lambda (_remote-ir)
                  (error "Three-way merge should not run when local is unchanged")))
               ((symbol-function 'gdocs--ensure-org-tag)
                #'ignore))
       (gdocs-sync-pull)
-      (should (string-match-p "\\* Remote update"
+      (should (string-match-p "Remote update"
                                (buffer-substring-no-properties
                                 (point-min) (point-max))))
       (should (eq gdocs-sync--status 'synced))
