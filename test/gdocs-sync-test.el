@@ -345,6 +345,41 @@ properties are preserved and revision ID is stored."
         (gdocs-sync--replace-buffer-content "- Changed\n- [ ] Todo changed\n  1. Nested changed\n"))
       (should (string-match-p "Todo changed" (buffer-string))))))
 
+(ert-deftest gdocs-sync-test-pull-aborts-on-quote-paragraph-merge ()
+  "Pull refuses to mutate when quote block paragraphs are merged."
+  (gdocs-sync-test-with-org-buffer "#+BEGIN_QUOTE\nOne\n\nTwo\n#+END_QUOTE\n"
+    (let ((before (buffer-string)))
+      (should-error
+       (gdocs-sync--replace-buffer-content "#+BEGIN_QUOTE\nOne\nTwo\n#+END_QUOTE\n")
+       :type 'user-error)
+      (should (equal before (buffer-string))))))
+
+(ert-deftest gdocs-sync-test-pull-aborts-on-source-language-loss ()
+  "Pull refuses to mutate when source block language is lost."
+  (gdocs-sync-test-with-org-buffer "#+BEGIN_SRC emacs-lisp\n(message \"x\")\n#+END_SRC\n"
+    (let ((before (buffer-string)))
+      (should-error
+       (gdocs-sync--replace-buffer-content "#+BEGIN_SRC\n(message \"x\")\n#+END_SRC\n")
+       :type 'user-error)
+      (should (equal before (buffer-string))))))
+
+(ert-deftest gdocs-sync-test-pull-aborts-on-example-line-loss ()
+  "Pull refuses to mutate when example block lines are lost."
+  (gdocs-sync-test-with-org-buffer "#+BEGIN_EXAMPLE\none\ntwo\n#+END_EXAMPLE\n"
+    (let ((before (buffer-string)))
+      (should-error
+       (gdocs-sync--replace-buffer-content "#+BEGIN_EXAMPLE\none\n#+END_EXAMPLE\n")
+       :type 'user-error)
+      (should (equal before (buffer-string))))))
+
+(ert-deftest gdocs-sync-test-pull-allows-block-text-change-with-same-shape ()
+  "Pull permits block text edits when semantic block shape is stable."
+  (gdocs-sync-test-with-org-buffer "#+BEGIN_QUOTE\nOne\n\nTwo\n#+END_QUOTE\n"
+    (let ((gdocs-pull-backup-directory temporary-file-directory))
+      (cl-letf (((symbol-function 'gdocs--ensure-org-tag) #'ignore))
+        (gdocs-sync--replace-buffer-content "#+BEGIN_QUOTE\nChanged\n\nTwo\n#+END_QUOTE\n"))
+      (should (string-match-p "Changed" (buffer-string))))))
+
 (ert-deftest gdocs-sync-test-pull-writes-backup-before-successful-mutation ()
   "Successful pull replacement writes a pre-mutation backup."
   (let ((temp-file (make-temp-file "gdocs-pull-backup" nil ".org"))

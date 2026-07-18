@@ -713,7 +713,42 @@ markers do not cause false mismatches."
                (when (or (not (eq type 'special-block))
                          (string= (org-element-property :type block) "CALLOUT"))
                  (cl-incf (alist-get type counts))))))
-         counts)))))
+         counts)
+       :block-structure
+       (org-element-map tree '(quote-block src-block example-block special-block)
+         (lambda (block)
+           (gdocs-sync--org-block-structure-entry block)))))))
+
+(defun gdocs-sync--block-line-count (value)
+  "Return the line count for block VALUE."
+  (length (split-string (string-trim-right (or value "")) "\n")))
+
+(defun gdocs-sync--org-block-structure-entry (block)
+  "Return a semantic structure entry for Org BLOCK, or nil."
+  (let ((type (org-element-type block)))
+    (pcase type
+      ('quote-block
+       (format "quote:%d"
+               (length (seq-filter
+                        (lambda (child)
+                          (eq (org-element-type child) 'paragraph))
+                        (org-element-contents block)))))
+      ('src-block
+       (format "src:%s:%d"
+               (or (org-element-property :language block) "")
+               (gdocs-sync--block-line-count
+                (org-element-property :value block))))
+      ('example-block
+       (format "example:%d"
+               (gdocs-sync--block-line-count
+                (org-element-property :value block))))
+      ('special-block
+       (when (string= (org-element-property :type block) "CALLOUT")
+         (format "callout:%d"
+                 (length (seq-filter
+                          (lambda (child)
+                            (memq (org-element-type child) '(paragraph item plain-list)))
+                          (org-element-contents block)))))))))
 
 (defun gdocs-sync--counts (values)
   "Return a hash table counting VALUES."
@@ -775,6 +810,13 @@ markers do not cause false mismatches."
                         type old-count new-count)
                 diagnostics))))))
 
+(defun gdocs-sync--block-structure-diagnostics (old-blocks new-blocks)
+  "Return diagnostics when pull changes semantic block shape."
+  (unless (equal old-blocks new-blocks)
+    (list (format "block structure changed from `%s' to `%s'"
+                  (string-join (delq nil old-blocks) " > ")
+                  (string-join (delq nil new-blocks) " > ")))))
+
 (defun gdocs-sync--pull-integrity-diagnostics (old-org new-org)
   "Return semantic integrity diagnostics for replacing OLD-ORG with NEW-ORG."
   (let* ((old (gdocs-sync--org-semantic-inventory old-org))
@@ -794,7 +836,9 @@ markers do not cause false mismatches."
       "task checkbox"
       (plist-get old :tasks) (plist-get new :tasks))
      (gdocs-sync--block-count-diagnostics
-      (plist-get old :blocks) (plist-get new :blocks)))))
+      (plist-get old :blocks) (plist-get new :blocks))
+     (gdocs-sync--block-structure-diagnostics
+      (plist-get old :block-structure) (plist-get new :block-structure)))))
 
 (defun gdocs-sync--validate-pull-replacement (org-string)
   "Signal if replacing current buffer with ORG-STRING looks lossy."
