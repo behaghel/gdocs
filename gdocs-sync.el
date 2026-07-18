@@ -687,6 +687,14 @@ markers do not cause false mismatches."
            (format "%s:%s"
                    (org-element-property :level headline)
                    (org-element-property :raw-value headline))))
+       :list-structure
+       (org-element-map tree 'item
+         (lambda (item)
+           (let* ((lists (org-element-lineage item '(plain-list) t))
+                  (parent-list (car lists))
+                  (type (org-element-property :type parent-list))
+                  (checkbox (org-element-property :checkbox item)))
+             (format "%d:%s:%s" (length lists) type checkbox))))
        :footnote-definitions
        (org-element-map tree 'footnote-definition
          (lambda (definition)
@@ -748,6 +756,13 @@ markers do not cause false mismatches."
                   (string-join old-headings " > ")
                   (string-join new-headings " > ")))))
 
+(defun gdocs-sync--list-structure-diagnostics (old-list new-list)
+  "Return diagnostics when pull would change authored list structure."
+  (unless (equal old-list new-list)
+    (list (format "list structure changed from `%s' to `%s'"
+                  (string-join old-list " > ")
+                  (string-join new-list " > ")))))
+
 (defun gdocs-sync--block-count-diagnostics (old-blocks new-blocks)
   "Return diagnostics for semantic block counts dropped from OLD-BLOCKS to NEW-BLOCKS."
   (let (diagnostics)
@@ -769,6 +784,8 @@ markers do not cause false mismatches."
       (plist-get old :headings) (plist-get new :headings))
      (gdocs-sync--introduced-duplicate-heading-diagnostics
       (plist-get old :headings) (plist-get new :headings))
+     (gdocs-sync--list-structure-diagnostics
+      (plist-get old :list-structure) (plist-get new :list-structure))
      (gdocs-sync--dropped-values-diagnostics
       "footnote definition"
       (plist-get old :footnote-definitions)

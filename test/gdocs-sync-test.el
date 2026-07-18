@@ -319,6 +319,32 @@ properties are preserved and revision ID is stored."
        :type 'user-error)
       (should (equal before (buffer-string))))))
 
+(ert-deftest gdocs-sync-test-pull-aborts-on-dropped-list-item ()
+  "Pull refuses to mutate when a list item disappears."
+  (gdocs-sync-test-with-org-buffer "- One\n- Two\n  - Nested\n"
+    (let ((before (buffer-string)))
+      (should-error
+       (gdocs-sync--replace-buffer-content "- One\n  - Nested\n")
+       :type 'user-error)
+      (should (equal before (buffer-string))))))
+
+(ert-deftest gdocs-sync-test-pull-aborts-on-list-nesting-drift ()
+  "Pull refuses to mutate when list nesting changes."
+  (gdocs-sync-test-with-org-buffer "- One\n  - Nested\n"
+    (let ((before (buffer-string)))
+      (should-error
+       (gdocs-sync--replace-buffer-content "- One\n- Nested\n")
+       :type 'user-error)
+      (should (equal before (buffer-string))))))
+
+(ert-deftest gdocs-sync-test-pull-allows-list-text-change-with-same-structure ()
+  "Pull permits list item text edits when structure and task state are stable."
+  (gdocs-sync-test-with-org-buffer "- One\n- [ ] Todo\n  1. Nested\n"
+    (let ((gdocs-pull-backup-directory temporary-file-directory))
+      (cl-letf (((symbol-function 'gdocs--ensure-org-tag) #'ignore))
+        (gdocs-sync--replace-buffer-content "- Changed\n- [ ] Todo changed\n  1. Nested changed\n"))
+      (should (string-match-p "Todo changed" (buffer-string))))))
+
 (ert-deftest gdocs-sync-test-pull-writes-backup-before-successful-mutation ()
   "Successful pull replacement writes a pre-mutation backup."
   (let ((temp-file (make-temp-file "gdocs-pull-backup" nil ".org"))
