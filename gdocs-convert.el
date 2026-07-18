@@ -3134,9 +3134,8 @@ owned chrome via `gdocs-convert--consume-generated-separator'."
                         index count)))
          (source-paragraph (if (and (listp body) (plist-get body :type))
                                (copy-sequence body)
-                             (list :type 'paragraph
-                                   :style 'normal
-                                   :contents body)))
+                             (gdocs-convert-make-paragraph
+                              body :style 'normal)))
          (list-info (plist-get source-paragraph :list))
          (paragraph (if (and (eq role 'body) list-info)
                         (gdocs-convert--callout-render-list-paragraph
