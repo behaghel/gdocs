@@ -3624,9 +3624,17 @@ The handler receives each zero-width footnote run and its exact body index."
       1
     (gdocs-convert--string-to-utf16-length (or (plist-get run :text) ""))))
 
-(defun gdocs-convert--make-text-style-requests (runs start-index)
+(defun gdocs-convert--text-range (start end &optional segment-id)
+  "Return a Google Docs text range from START to END.
+When SEGMENT-ID is non-nil, target that segment instead of the body."
+  (append (when segment-id (list (cons 'segmentId segment-id)))
+          (list (cons 'startIndex start)
+                (cons 'endIndex end))))
+
+(defun gdocs-convert-make-text-style-requests (runs start-index &optional segment-id)
   "Create updateTextStyle requests for formatted RUNS starting at START-INDEX.
-Each run that has any formatting generates a request."
+Each run that has any formatting generates a request.  When SEGMENT-ID is
+non-nil, requests target that document segment, such as a native footnote."
   (let ((requests nil)
         (index start-index))
     (dolist (run runs)
@@ -3636,13 +3644,17 @@ Each run that has any formatting generates a request."
         (when (and style-fields (> len 0))
           (push `((updateTextStyle
                    . ((textStyle . ,style-fields)
-                      (range . ((startIndex . ,index)
-                                (endIndex . ,end)))
+                      (range . ,(gdocs-convert--text-range
+                                  index end segment-id))
                       (fields . ,(gdocs-convert--style-fields-mask
                                   style-fields)))))
                 requests))
         (setq index end)))
     (nreverse requests)))
+
+(defun gdocs-convert--make-text-style-requests (runs start-index)
+  "Create updateTextStyle requests for formatted RUNS starting at START-INDEX."
+  (gdocs-convert-make-text-style-requests runs start-index))
 
 (defun gdocs-convert--make-text-style-reset-request (start end)
   "Create an updateTextStyle request that resets formatting from START to END.

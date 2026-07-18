@@ -2404,6 +2404,16 @@
     (should (equal (alist-get 'fontFamily font) "Inter"))
     (should (= (alist-get 'weight font) 800))))
 
+(ert-deftest gdocs-convert-test-text-style-requests-can-target-segment ()
+  "Text style requests can target non-body segments such as footnotes."
+  (let ((requests (gdocs-convert-make-text-style-requests
+                   (list (list :text "code" :style-names '(gdocs-code)))
+                   1 "fn-1")))
+    (should (equal (alist-get 'range (alist-get 'updateTextStyle (car requests)))
+                   '((segmentId . "fn-1")
+                     (startIndex . 1)
+                     (endIndex . 5))))))
+
 (ert-deftest gdocs-convert-test-code-style-policy-is-overridable ()
   "Logical code style can be changed without changing code semantics."
   (let* ((gdocs-style-definitions
