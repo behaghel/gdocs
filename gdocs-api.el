@@ -60,6 +60,23 @@ condition instead of signaling."
                       :account account
                       :on-error on-error))
 
+(defun gdocs-api--empty-delete-content-range-p (request)
+  "Return non-nil when REQUEST has an empty deleteContentRange."
+  (when-let* ((delete (alist-get 'deleteContentRange request))
+              (range (alist-get 'range delete))
+              (start (alist-get 'startIndex range))
+              (end (alist-get 'endIndex range)))
+    (<= end start)))
+
+(defun gdocs-api--validate-batch-requests (requests)
+  "Fail locally when REQUESTS contain invalid no-op mutations."
+  (let ((index 0))
+    (dolist (request requests)
+      (when (gdocs-api--empty-delete-content-range-p request)
+        (error "Invalid local Google Docs request[%d].deleteContentRange: %S"
+               index request))
+      (setq index (1+ index)))))
+
 (defun gdocs-api-batch-update (document-id requests callback
                                            &optional account on-error)
   "Send a batchUpdate to DOCUMENT-ID with REQUESTS.
@@ -67,6 +84,7 @@ REQUESTS is a list of request alists.  CALLBACK is called with
 the parsed JSON response.  ACCOUNT is an optional account name.
 ON-ERROR, if non-nil, is called with the error condition instead
 of signaling; use this to clean up async state on failure."
+  (gdocs-api--validate-batch-requests requests)
   (gdocs-api--request 'post
                       (concat gdocs-api--docs-base-url
                               "/" document-id ":batchUpdate")

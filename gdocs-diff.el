@@ -53,7 +53,8 @@ Operations: :keep, :delete, :insert, :modify."
 OLD-IR and NEW-IR are the element lists.  DIFF-OPS is the output
 of `gdocs-diff-compute-operations'.  START-INDEX is the UTF-16
 index where the first element begins (default 1)."
-  (gdocs-diff--generate-requests old-ir new-ir diff-ops (or start-index 1)))
+  (gdocs-diff--filter-invalid-requests
+   (gdocs-diff--generate-requests old-ir new-ir diff-ops (or start-index 1))))
 
 (defun gdocs-diff--non-empty-delete-request-p (request)
   "Return non-nil if REQUEST is a non-empty deleteContentRange request."

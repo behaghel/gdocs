@@ -20,6 +20,22 @@
 (require 'cl-lib)
 (require 'plz)
 
+;;;; Request validation
+
+(ert-deftest gdocs-api-test-validate-batch-rejects-empty-delete ()
+  "Batch request validation fails before sending empty deletes to Google."
+  (should-error
+   (gdocs-api--validate-batch-requests
+    '(((deleteContentRange
+        . ((range . ((startIndex . 4) (endIndex . 4))))))))))
+
+(ert-deftest gdocs-api-test-validate-batch-allows-non-empty-delete ()
+  "Batch request validation accepts non-empty deletes."
+  (should-not
+   (gdocs-api--validate-batch-requests
+    '(((deleteContentRange
+        . ((range . ((startIndex . 4) (endIndex . 5))))))))))
+
 ;;;; Header building
 
 (ert-deftest gdocs-api-test-build-headers-get-request ()
