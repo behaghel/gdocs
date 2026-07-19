@@ -48,6 +48,18 @@
 
 ;;;; Public API — Google Docs
 
+(defvar gdocs-api-debug-batch-update-file
+  (expand-file-name "gdocs-last-batch-update.json" temporary-file-directory)
+  "File where the last Docs batchUpdate payload is written for debugging.")
+
+(defun gdocs-api--record-batch-update (document-id requests)
+  "Record DOCUMENT-ID and REQUESTS for post-mortem debugging."
+  (when gdocs-api-debug-batch-update-file
+    (with-temp-file gdocs-api-debug-batch-update-file
+      (insert (json-encode `((documentId . ,document-id)
+                             (requestCount . ,(length requests))
+                             (requests . ,requests)))))))
+
 (defun gdocs-api-get-document (document-id callback &optional account on-error)
   "Fetch a Google Docs document by DOCUMENT-ID.
 CALLBACK is called with the parsed JSON document structure.
@@ -84,6 +96,7 @@ REQUESTS is a list of request alists.  CALLBACK is called with
 the parsed JSON response.  ACCOUNT is an optional account name.
 ON-ERROR, if non-nil, is called with the error condition instead
 of signaling; use this to clean up async state on failure."
+  (gdocs-api--record-batch-update document-id requests)
   (gdocs-api--validate-batch-requests requests)
   (gdocs-api--request 'post
                       (concat gdocs-api--docs-base-url

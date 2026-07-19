@@ -22,6 +22,22 @@
 
 ;;;; Request validation
 
+(ert-deftest gdocs-api-test-record-batch-update-writes-debug-payload ()
+  "Batch update recording writes the last request payload for debugging."
+  (let ((gdocs-api-debug-batch-update-file
+         (make-temp-file "gdocs-batch-debug" nil ".json")))
+    (unwind-protect
+        (progn
+          (gdocs-api--record-batch-update
+           "doc-1" '(((insertText . ((text . "x")
+                                      (location . ((index . 1))))))))
+          (let ((payload (with-temp-buffer
+                           (insert-file-contents gdocs-api-debug-batch-update-file)
+                           (json-read-from-string (buffer-string)))))
+            (should (equal (alist-get 'documentId payload) "doc-1"))
+            (should (= (alist-get 'requestCount payload) 1))))
+      (delete-file gdocs-api-debug-batch-update-file))))
+
 (ert-deftest gdocs-api-test-validate-batch-rejects-empty-delete ()
   "Batch request validation fails before sending empty deletes to Google."
   (should-error
