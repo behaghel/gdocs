@@ -58,6 +58,17 @@ that would destroy comments prompt for per-element confirmation."
   :type 'boolean
   :group 'gdocs)
 
+;;;; Options
+
+(defcustom gdocs-sync-enable-list-nesting-fixup nil
+  "Non-nil enables the destructive post-push list nesting fixup pass.
+This pass rewrites list bullets after push to repair Google Docs nesting, but it
+can also leak list formatting into adjacent headings, images, and captions.  It
+is disabled by default; semantic list-state markers preserve pull fidelity
+without remote structural rewrites."
+  :type 'boolean
+  :group 'gdocs)
+
 ;;;; Buffer-local variables
 
 (defvar-local gdocs-sync--shadow-ir nil
@@ -225,9 +236,9 @@ the shadow."
 (defun gdocs-sync--handle-push-success (current-ir response)
   "Update sync state after a successful push.
 CURRENT-IR is the IR that was pushed.  RESPONSE is the API
-response alist.  When the pushed IR contains nested list items
+response alist.  When enabled and the pushed IR contains nested list items
 \(level > 0), triggers a post-push fixup to correct nesting
-before finalizing."
+before finalizing.  Table width fixups still run independently."
   (setq gdocs-sync--shadow-ir (gdocs-sync--normalize-shadow-ir current-ir))
   (gdocs-sync--update-revision-from-response response)
   (gdocs-sync--update-last-sync-time)
@@ -238,10 +249,11 @@ before finalizing."
           (before-save-hook nil)
           (after-save-hook nil))
       (save-buffer)))
-  (if (or (gdocs-sync--ir-has-nested-lists-p current-ir)
+  (if (or (and gdocs-sync-enable-list-nesting-fixup
+               (gdocs-sync--ir-has-nested-lists-p current-ir))
           (gdocs-sync--ir-has-tables-p current-ir))
-      ;; Nested lists or tables need a fixup pass — keep
-      ;; push-in-progress until the fixup completes.
+      ;; Optional nested-list repair and table width updates run as a second
+      ;; pass — keep push-in-progress until the fixup completes.
       (gdocs-sync--begin-list-nesting-fixup current-ir)
     (gdocs-sync--finalize-push)))
 
@@ -346,8 +358,9 @@ freshly fetched document with current paragraph ranges."
          (remote-filtered (gdocs-sync--filter-empty-paragraphs
                            (gdocs-sync--filter-title remote-ir)))
          (local-filtered (gdocs-sync--filter-title local-ir))
-         (nesting-reqs (gdocs-sync--compute-nesting-fixup-requests
-                       local-filtered remote-filtered))
+         (nesting-reqs (when gdocs-sync-enable-list-nesting-fixup
+                         (gdocs-sync--compute-nesting-fixup-requests
+                          local-filtered remote-filtered)))
          (table-reqs (gdocs-sync--compute-table-width-fixup-requests
                       local-filtered json))
          (requests (append nesting-reqs table-reqs)))

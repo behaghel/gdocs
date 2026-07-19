@@ -1601,7 +1601,8 @@ serialization is handled separately by `gdocs-sync--serialize-push'."
   (gdocs-sync-test-with-org-buffer "- Item\n  - Sub-item\n"
     (let ((batch-calls nil)
           (get-doc-count 0)
-          (gdocs-preserve-comments nil))
+          (gdocs-preserve-comments nil)
+          (gdocs-sync-enable-list-nesting-fixup t))
       (cl-letf (((symbol-function 'gdocs-api-get-document)
                  (lambda (_doc-id callback &optional _account _on-error)
                    (setq get-doc-count (1+ get-doc-count))
