@@ -511,20 +511,23 @@ Returns a list of (:ir ELEMENT :begin POS) plists."
          (list-plist (append (list :type effective-type :level depth)
                              (when (eq effective-type 'check)
                                (list :checked checked :partial partial))))
+         (markers (append
+                   (list (list :type 'list-state
+                               :data (format "%s:%d" effective-type depth)))
+                   (when checkbox
+                     (list (list :type 'task-state
+                                 :data (pcase checkbox
+                                         ('on "on")
+                                         ('trans "partial")
+                                         (_ "off")))))))
          (ir-element (append
                       (list :type 'paragraph
                             :style 'normal
                             :list list-plist
                             :contents (or trimmed
                                           (list (gdocs-convert--make-plain-run "")))
-                            :id (gdocs-convert--next-id))
-                      (when checkbox
-                        (list :gdocs-marker
-                              (list (list :type 'task-state
-                                          :data (pcase checkbox
-                                                  ('on "on")
-                                                  ('trans "partial")
-                                                  (_ "off"))))))))
+                            :id (gdocs-convert--next-id)
+                            :gdocs-marker markers)))
          (result (list (list :ir ir-element
                              :begin (org-element-property :begin item)))))
     (dolist (child (org-element-contents item))
@@ -2864,16 +2867,31 @@ may have trailing whitespace-only runs before it."
             (setq done t)))))
       result)))
 
-(defun gdocs-convert--task-state-marker (markers start end)
-  "Return task-state marker overlapping START..END, or nil."
+(defun gdocs-convert--range-marker (markers marker-type start end)
+  "Return MARKER-TYPE marker from MARKERS overlapping START..END, or nil."
   (seq-find (lambda (marker)
-              (and (eq (plist-get marker :type) 'task-state)
+              (and (eq (plist-get marker :type) marker-type)
                    (let ((marker-start (plist-get marker :start))
                          (marker-end (plist-get marker :end)))
                      (and marker-start marker-end start end
                           (< marker-start end)
                           (> marker-end start)))))
             markers))
+
+(defun gdocs-convert--task-state-marker (markers start end)
+  "Return task-state marker overlapping START..END, or nil."
+  (gdocs-convert--range-marker markers 'task-state start end))
+
+(defun gdocs-convert--list-state-marker (markers start end)
+  "Return list-state marker overlapping START..END, or nil."
+  (gdocs-convert--range-marker markers 'list-state start end))
+
+(defun gdocs-convert--list-state-data (data)
+  "Return list plist decoded from list-state DATA."
+  (when data
+    (pcase-let* ((`(,type ,level) (s-split ":" data)))
+      (list :type (intern type)
+            :level (string-to-number level)))))
 
 (defun gdocs-convert--docs-check-state (list-props nesting-level)
   "Return checkbox state plist from LIST-PROPS at NESTING-LEVEL."
@@ -2909,8 +2927,14 @@ has nestingLevel 0."
          (task-state (plist-get (gdocs-convert--task-state-marker
                                  markers start end)
                                 :data))
-         (effective-type (if task-state 'check list-type)))
-    (append (list :type effective-type :level level)
+         (list-state (gdocs-convert--list-state-data
+                      (plist-get (gdocs-convert--list-state-marker
+                                  markers start end)
+                                 :data)))
+         (effective-type (or (plist-get list-state :type)
+                             (if task-state 'check list-type)))
+         (effective-level (or (plist-get list-state :level) level)))
+    (append (list :type effective-type :level effective-level)
             (when (eq effective-type 'check)
               (cond
                ((equal task-state "partial") '(:checked nil :partial t))

@@ -202,10 +202,28 @@
   (let* ((ir (gdocs-convert-org-string-to-ir
               "- [ ] Todo\n- [X] Done\n- [-] Partial"))
          (states (mapcar (lambda (element)
-                           (plist-get (car (plist-get element :gdocs-marker))
-                                      :data))
+                           (plist-get
+                            (seq-find (lambda (marker)
+                                        (eq (plist-get marker :type)
+                                            'task-state))
+                                      (plist-get element :gdocs-marker))
+                            :data))
                          ir)))
     (should (equal states '("off" "on" "partial")))))
+
+(ert-deftest gdocs-convert-test-list-items-carry-list-state-markers ()
+  "List items carry stable type and nesting markers for pull restoration."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "- Parent\n  - Child\n1. Ordered"))
+         (states (mapcar (lambda (element)
+                           (plist-get
+                            (seq-find (lambda (marker)
+                                        (eq (plist-get marker :type)
+                                            'list-state))
+                                      (plist-get element :gdocs-marker))
+                            :data))
+                         ir)))
+    (should (equal states '("bullet:0" "bullet:1" "number:0")))))
 
 (ert-deftest gdocs-convert-test-docs-paragraph-indent-restores-list-nesting ()
   "Paragraph indentation restores nesting when list definitions omit it."
@@ -233,6 +251,18 @@
                        bullet lists-map nil 1 5)))
       (should (eq (plist-get list-info :type) 'check))
       (should-not (plist-get list-info :checked)))))
+
+(ert-deftest gdocs-convert-test-list-state-marker-restores-nesting-on-pull ()
+  "List-state markers restore nesting even if Docs reports flat indentation."
+  (let* ((list-props '((listProperties . ((nestingLevels . [((glyphSymbol . "•"))])))))
+         (lists-map `((list-1 . ,list-props)))
+         (bullet '((listId . "list-1") (nestingLevel . 0)))
+         (markers '((:type list-state :id "elem-1" :data "bullet:1"
+                           :start 1 :end 5)))
+         (list-info (gdocs-convert--docs-bullet-to-list
+                     bullet lists-map markers 1 5)))
+    (should (eq (plist-get list-info :type) 'bullet))
+    (should (= (plist-get list-info :level) 1))))
 
 (ert-deftest gdocs-convert-test-task-state-marker-forces-check-list-on-pull ()
   "Task-state markers restore Org checkboxes even if Docs list glyph is plain."
