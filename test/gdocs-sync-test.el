@@ -336,6 +336,24 @@ properties are preserved and revision ID is stored."
        :type 'user-error)
       (should (equal before (buffer-string))))))
 
+(ert-deftest gdocs-sync-test-list-structure-entry-is-actionable ()
+  "List structure entries show type, zero-based nesting, and task state."
+  (gdocs-sync-test-with-org-buffer "- One\n  - Nested\n- [ ] Todo\n"
+    (let ((entries (plist-get
+                    (gdocs-sync--org-semantic-inventory (buffer-string))
+                    :list-structure)))
+      (should (equal entries
+                     '("unordered@0:plain"
+                       "unordered@1:plain"
+                       "unordered@0:off"))))))
+
+(ert-deftest gdocs-sync-test-list-structure-diagnostic-is-actionable ()
+  "List structure diagnostics report counts and first difference."
+  (should (equal (gdocs-sync--list-structure-diagnostics
+                  '("unordered@0:plain" "unordered@1:plain")
+                  '("unordered@0:plain" "unordered@0:plain"))
+                 '("list structure changed: count 2 -> 2; first difference at item 2: `unordered@1:plain' -> `unordered@0:plain'"))))
+
 (ert-deftest gdocs-sync-test-pull-aborts-on-dropped-list-item ()
   "Pull refuses to mutate when a list item disappears."
   (gdocs-sync-test-with-org-buffer "- One\n- Two\n  - Nested\n"

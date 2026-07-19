@@ -712,13 +712,7 @@ markers do not cause false mismatches."
                    (org-element-property :level headline)
                    (org-element-property :raw-value headline))))
        :list-structure
-       (org-element-map tree 'item
-         (lambda (item)
-           (let* ((lists (org-element-lineage item '(plain-list) t))
-                  (parent-list (car lists))
-                  (type (org-element-property :type parent-list))
-                  (checkbox (org-element-property :checkbox item)))
-             (format "%d:%s:%s" (length lists) type checkbox))))
+       (org-element-map tree 'item #'gdocs-sync--list-structure-entry)
        :footnote-definitions
        (org-element-map tree 'footnote-definition
          (lambda (definition)
@@ -746,6 +740,18 @@ markers do not cause false mismatches."
        (org-element-map tree '(quote-block src-block example-block special-block)
          (lambda (block)
            (gdocs-sync--org-block-structure-entry block)))))))
+
+(defun gdocs-sync--list-structure-entry (item)
+  "Return a semantic structure entry for Org list ITEM."
+  (let* ((lineage (org-element-lineage item))
+         (lists (seq-filter (lambda (element)
+                              (eq (org-element-type element) 'plain-list))
+                            lineage))
+         (parent-list (car lists))
+         (type (or (org-element-property :type parent-list) 'unknown))
+         (level (max 0 (1- (length lists))))
+         (checkbox (or (org-element-property :checkbox item) 'plain)))
+    (format "%s@%d:%s" type level checkbox)))
 
 (defun gdocs-sync--footnote-structure-entry (definition)
   "Return a semantic structure entry for footnote DEFINITION."
@@ -829,12 +835,35 @@ markers do not cause false mismatches."
                   (string-join old-headings " > ")
                   (string-join new-headings " > ")))))
 
+(defun gdocs-sync--first-sequence-difference (old new)
+  "Return the first differing index between OLD and NEW, or nil."
+  (let ((index 0)
+        found)
+    (while (and (not found) (or old new))
+      (unless (equal (car old) (car new))
+        (setq found index))
+      (setq old (cdr old)
+            new (cdr new)
+            index (1+ index)))
+    found))
+
+(defun gdocs-sync--format-structure-diff (label old new)
+  "Return an actionable structure diff message for LABEL, OLD, and NEW."
+  (let ((first-diff (gdocs-sync--first-sequence-difference old new)))
+    (format "%s changed: count %d -> %d%s"
+            label (length old) (length new)
+            (if first-diff
+                (format "; first difference at item %d: `%s' -> `%s'"
+                        (1+ first-diff)
+                        (or (nth first-diff old) "<missing>")
+                        (or (nth first-diff new) "<missing>"))
+              ""))))
+
 (defun gdocs-sync--list-structure-diagnostics (old-list new-list)
   "Return diagnostics when pull would change authored list structure."
   (unless (equal old-list new-list)
-    (list (format "list structure changed from `%s' to `%s'"
-                  (string-join old-list " > ")
-                  (string-join new-list " > ")))))
+    (list (gdocs-sync--format-structure-diff
+           "list structure" old-list new-list))))
 
 (defun gdocs-sync--footnote-structure-diagnostics (old-footnotes new-footnotes)
   "Return diagnostics when pull changes footnote body semantics."
@@ -857,10 +886,11 @@ markers do not cause false mismatches."
 
 (defun gdocs-sync--block-structure-diagnostics (old-blocks new-blocks)
   "Return diagnostics when pull changes semantic block shape."
-  (unless (equal old-blocks new-blocks)
-    (list (format "block structure changed from `%s' to `%s'"
-                  (string-join (delq nil old-blocks) " > ")
-                  (string-join (delq nil new-blocks) " > ")))))
+  (let ((old-blocks (delq nil old-blocks))
+        (new-blocks (delq nil new-blocks)))
+    (unless (equal old-blocks new-blocks)
+      (list (gdocs-sync--format-structure-diff
+             "block structure" old-blocks new-blocks)))))
 
 (defun gdocs-sync--pull-integrity-diagnostics (old-org new-org)
   "Return semantic integrity diagnostics for replacing OLD-ORG with NEW-ORG."
