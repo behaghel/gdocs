@@ -864,11 +864,15 @@ objects."
     (_ (gdocs-convert--fallback-object-to-runs object inherited-props))))
 
 (defun gdocs-convert--string-to-run (text inherited-props)
-  "Create a text run list from plain TEXT string with INHERITED-PROPS."
+  "Create a text run list from plain TEXT string with INHERITED-PROPS.
+Org plain text strings may contain soft source line wraps inside a paragraph.
+Normalize those to spaces before pushing to Google Docs; literal Org line-break
+objects are handled separately and still emit newlines."
   (if (string-empty-p text)
       nil
     (list (gdocs-convert--make-run
-           (substring-no-properties text) inherited-props))))
+           (string-replace "\n" " " (substring-no-properties text))
+           inherited-props))))
 
 (defun gdocs-convert--markup-to-runs (object inherited-props formatting-key)
   "Convert a markup OBJECT (bold, italic, etc.) to text runs.
@@ -1568,12 +1572,16 @@ collected at the end under a conventional `* Footnotes' section."
   (and (eq (plist-get element :type) 'paragraph)
        (gdocs-convert--example-block-data element)))
 
+(defun gdocs-convert--quote-block-marker (element)
+  "Return the quote-block marker on ELEMENT, or nil."
+  (seq-find (lambda (marker)
+              (eq (plist-get marker :type) 'quote-block))
+            (plist-get element :gdocs-marker)))
+
 (defun gdocs-convert--quote-block-paragraph-p (element)
   "Return non-nil if ELEMENT is a marked quote-block paragraph."
   (and (eq (plist-get element :type) 'paragraph)
-       (seq-some (lambda (marker)
-                   (eq (plist-get marker :type) 'quote-block))
-                 (plist-get element :gdocs-marker))))
+       (gdocs-convert--quote-block-marker element)))
 
 (defun gdocs-convert--all-code-paragraph-p (element)
   "Return non-nil if ELEMENT is a normal paragraph with all-code runs.
@@ -2173,6 +2181,7 @@ subsequent diffs treat the separator as part of the owning callout block."
                    (type (plist-get data :type))
                    (title (plist-get data :title))
                    (paragraphs nil)
+                   (last-body-marker-id nil)
                    (start (plist-get element :doc-start))
                    end)
               (while (and remaining
@@ -2188,9 +2197,27 @@ subsequent diffs treat the separator as part of the owning callout block."
                                'callout-body)
                            (not (gdocs-convert--empty-paragraph-p
                                  (car remaining))))
-                  (push (gdocs-convert--restore-callout-list-element
-                         (car remaining))
-                        paragraphs))
+                  (let* ((marker (gdocs-convert--callout-marker (car remaining)))
+                         (marker-id (plist-get marker :id))
+                         (restored (gdocs-convert--restore-callout-list-element
+                                    (car remaining))))
+                    (if (and paragraphs
+                             marker-id
+                             (equal marker-id last-body-marker-id)
+                             (not (plist-get restored :list))
+                             (not (plist-get (car paragraphs) :list))
+                             (gdocs-convert--soft-wrap-continuation-p
+                              (plist-get restored :contents)))
+                        (let ((merged (copy-sequence (car paragraphs))))
+                          (plist-put
+                           merged :contents
+                           (gdocs-convert--merge-adjacent-runs
+                            (append (plist-get (car paragraphs) :contents)
+                                    (list (gdocs-convert--make-plain-run " "))
+                                    (plist-get restored :contents))))
+                          (setcar paragraphs merged))
+                      (push restored paragraphs))
+                    (setq last-body-marker-id marker-id)))
                 (setq end (plist-get (car remaining) :doc-end))
                 (setq remaining (cdr remaining)))
               (let ((separator (gdocs-convert--consume-generated-separator
@@ -2220,6 +2247,14 @@ subsequent diffs treat the separator as part of the owning callout block."
             (plist-put (copy-sequence run) :italic nil))
           runs))
 
+(defun gdocs-convert--soft-wrap-continuation-p (runs)
+  "Return non-nil when RUNS look like a split soft-wrapped paragraph line."
+  (let ((text (string-trim-left (gdocs-convert--runs-to-plain-text runs))))
+    (and (not (string-empty-p text))
+         (let ((first (aref text 0)))
+           (or (and (>= first ?a) (<= first ?z))
+               (member first '(?, ?. ?\; ?: ?\) ?\] ?\})))))))
+
 (defun gdocs-convert--attach-quote-block-markers (ir)
   "Group consecutive marked quote-block paragraphs in IR."
   (let ((result nil)
@@ -2228,15 +2263,30 @@ subsequent diffs treat the separator as part of the owning callout block."
       (let ((element (car remaining)))
         (if (gdocs-convert--quote-block-paragraph-p element)
             (let ((paragraphs nil)
+                  (last-marker-id nil)
                   (start (plist-get element :doc-start))
                   end)
               (while (and remaining
                           (gdocs-convert--quote-block-paragraph-p
                            (car remaining)))
                 (unless (gdocs-convert--empty-paragraph-p (car remaining))
-                  (push (gdocs-convert--strip-quote-visual-style
-                         (plist-get (car remaining) :contents))
-                        paragraphs))
+                  (let* ((marker (gdocs-convert--quote-block-marker
+                                  (car remaining)))
+                         (marker-id (plist-get marker :id))
+                         (runs (gdocs-convert--strip-quote-visual-style
+                                (plist-get (car remaining) :contents))))
+                    (if (and paragraphs
+                             marker-id
+                             (equal marker-id last-marker-id)
+                             (gdocs-convert--soft-wrap-continuation-p runs))
+                        (setcar paragraphs
+                                (gdocs-convert--merge-adjacent-runs
+                                 (append (car paragraphs)
+                                         (list (gdocs-convert--make-plain-run
+                                                " "))
+                                         runs)))
+                      (push runs paragraphs))
+                    (setq last-marker-id marker-id)))
                 (setq end (plist-get (car remaining) :doc-end))
                 (setq remaining (cdr remaining)))
               (let ((separator (gdocs-convert--consume-generated-separator

@@ -264,6 +264,15 @@
 ;; ---------------------------------------------------------------------------
 ;;; Block quotes
 
+(ert-deftest gdocs-convert-test-soft-newline-normalized-in-paragraph ()
+  "Soft source line wraps inside Org paragraphs push as spaces, not new paragraphs."
+  (let* ((ir (gdocs-convert-org-string-to-ir "Wrapped\nparagraph"))
+         (paragraph (car ir)))
+    (should (eq (plist-get paragraph :type) 'paragraph))
+    (should (equal (mapcar (lambda (run) (plist-get run :text))
+                           (plist-get paragraph :contents))
+                   '("Wrapped paragraph")))))
+
 (ert-deftest gdocs-convert-test-quote-block ()
   "A quote block produces semantic quote-block IR."
   (let* ((ir (gdocs-convert-org-string-to-ir
@@ -588,6 +597,35 @@
     (should (eq (plist-get (car ir) :type) 'quote-block))
     (should (= (plist-get (car ir) :doc-end) 9))))
 
+(ert-deftest gdocs-convert-test-docs-json-marked-quote-block-merges-same-marker ()
+  "Quote paragraphs split by an Org soft newline merge when sharing a marker id."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 5)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "One\n")
+                                                            (textStyle . ((italic . t))))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 5)
+                    (endIndex . 9)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "two\n")
+                                                            (textStyle . ((italic . t))))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (namedRanges
+                  . ,(list
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001")
+                            `((namedRanges
+                               . ,(vector `((ranges
+                                             . ,(vector '((startIndex . 1)
+                                                          (endIndex . 8)))))))))))))
+         (block (car (gdocs-convert-docs-json-to-ir json))))
+    (should (eq (plist-get block :type) 'quote-block))
+    (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
+                           (plist-get block :paragraphs))
+                   '("One two")))))
+
 (ert-deftest gdocs-convert-test-docs-json-marked-quote-block-ignores-empty-chrome ()
   "Marked empty quote paragraphs are treated as visual chrome, not content."
   (let* ((body-elements
@@ -616,6 +654,16 @@
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 1)
+                                                          (endIndex . 4)))))))))
+                      (cons (intern "gdocs-org-marker:quote-block:elem-002")
+                            `((namedRanges
+                               . ,(vector `((ranges
+                                             . ,(vector '((startIndex . 5)
+                                                          (endIndex . 6)))))))))
+                      (cons (intern "gdocs-org-marker:quote-block:elem-003")
+                            `((namedRanges
+                               . ,(vector `((ranges
+                                             . ,(vector '((startIndex . 6)
                                                           (endIndex . 9)))))))))))))
          (block (car (gdocs-convert-docs-json-to-ir json))))
     (should (eq (plist-get block :type) 'quote-block))
@@ -2282,6 +2330,40 @@
                             `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 5) (endIndex . 12)))))))))))))
          (org (gdocs-convert-ir-to-org (gdocs-convert-docs-json-to-ir json))))
     (should (string-search "#+BEGIN_CALLOUT\n- one\n- two\n#+END_CALLOUT" org))))
+
+(ert-deftest gdocs-convert-test-docs-json-marked-callout-merges-soft-wrap ()
+  "Callout body paragraphs split by an Org soft newline merge by marker id."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 8)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Info\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 8)
+                    (endIndex . 17)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Wrapped\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 17)
+                    (endIndex . 28)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "continuation\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (namedRanges
+                  . ,(list
+                      (cons (intern "gdocs-org-marker:callout-label:elem-001:info:")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 1) (endIndex . 7)))))))))
+                      (cons (intern "gdocs-org-marker:callout-body:elem-001:info:")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 8) (endIndex . 27)))))))))))))
+         (block (car (gdocs-convert-docs-json-to-ir json))))
+    (should (eq (plist-get block :type) 'callout-block))
+    (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
+                           (plist-get block :paragraphs))
+                   '("Wrapped continuation")))))
 
 (ert-deftest gdocs-convert-test-docs-json-marked-callout-ignores-empty-chrome ()
   "Marked empty callout body paragraphs are visual chrome, not content."
