@@ -518,10 +518,13 @@ Returns a list of (:ir ELEMENT :begin POS) plists."
                             :contents (or trimmed
                                           (list (gdocs-convert--make-plain-run "")))
                             :id (gdocs-convert--next-id))
-                      (when partial
+                      (when checkbox
                         (list :gdocs-marker
                               (list (list :type 'task-state
-                                          :data "partial"))))))
+                                          :data (pcase checkbox
+                                                  ('on "on")
+                                                  ('trans "partial")
+                                                  (_ "off"))))))))
          (result (list (list :ir ir-element
                              :begin (org-element-property :begin item)))))
     (dolist (child (org-element-contents item))
@@ -2881,8 +2884,10 @@ may have trailing whitespace-only runs before it."
          (glyph-symbol (when level-info
                          (alist-get 'glyphSymbol level-info))))
     (cond
-     ((member glyph-symbol '("☑" "✓" "✔")) '(:checked t))
-     ((equal glyph-symbol "☒") '(:partial t))
+     ((member glyph-symbol gdocs-convert--checked-checkbox-glyphs)
+      '(:checked t))
+     ((member glyph-symbol gdocs-convert--partial-checkbox-glyphs)
+      '(:partial t))
      (t '(:checked nil)))))
 
 (defun gdocs-convert--docs-bullet-to-list
@@ -2902,14 +2907,16 @@ nestingLevel 0."
                  list-props nesting-level))
          (task-state (plist-get (gdocs-convert--task-state-marker
                                  markers start end)
-                                :data)))
-    (append (list :type list-type :level level)
-            (when (eq list-type 'check)
-              (let ((state (gdocs-convert--docs-check-state
-                            list-props nesting-level)))
-                (if (equal task-state "partial")
-                    '(:checked nil :partial t)
-                  state))))))
+                                :data))
+         (effective-type (if task-state 'check list-type)))
+    (append (list :type effective-type :level level)
+            (when (eq effective-type 'check)
+              (cond
+               ((equal task-state "partial") '(:checked nil :partial t))
+               ((equal task-state "on") '(:checked t :partial nil))
+               ((equal task-state "off") '(:checked nil :partial nil))
+               (t (gdocs-convert--docs-check-state
+                   list-props nesting-level)))))))
 
 (defun gdocs-convert--assign-list-counters (ir)
   "Assign sequential :counter values to numbered list items in IR.
@@ -2983,11 +2990,26 @@ adds 36pt, starting at 18pt for level 0."
         'number)
        (t 'bullet)))))
 
+(defconst gdocs-convert--unchecked-checkbox-glyphs
+  '("☐" "□" "❏" "❑" "◻" "⬜")
+  "Google Docs glyph symbols observed for unchecked checklist items.")
+
+(defconst gdocs-convert--checked-checkbox-glyphs
+  '("☑" "✓" "✔")
+  "Google Docs glyph symbols observed for checked checklist items.")
+
+(defconst gdocs-convert--partial-checkbox-glyphs
+  '("☒")
+  "Google Docs glyph symbols observed for partial checklist items.")
+
 (defun gdocs-convert--checkbox-glyph-p (glyph-type glyph-symbol)
   "Return non-nil if GLYPH-TYPE or GLYPH-SYMBOL indicates a checkbox."
   (or (equal glyph-type "CHECKBOX")
       (and glyph-symbol
-           (member glyph-symbol '("☐" "☑" "✓" "✔" "☒")))))
+           (member glyph-symbol
+                   (append gdocs-convert--unchecked-checkbox-glyphs
+                           gdocs-convert--checked-checkbox-glyphs
+                           gdocs-convert--partial-checkbox-glyphs)))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Named range markers

@@ -197,6 +197,47 @@
     (should (plist-get list-info :partial))
     (should (equal (gdocs-convert-ir-to-org ir) "- [-] Partial item\n"))))
 
+(ert-deftest gdocs-convert-test-checkbox-items-carry-task-state-markers ()
+  "All checkbox items carry stable task-state markers for pull restoration."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "- [ ] Todo\n- [X] Done\n- [-] Partial"))
+         (states (mapcar (lambda (element)
+                           (plist-get (car (plist-get element :gdocs-marker))
+                                      :data))
+                         ir)))
+    (should (equal states '("off" "on" "partial")))))
+
+(ert-deftest gdocs-convert-test-docs-unchecked-box-glyphs-pull-as-tasks ()
+  "Unchecked Google Docs checklist glyph variants pull back as Org tasks."
+  (dolist (glyph gdocs-convert--unchecked-checkbox-glyphs)
+    (let* ((list-props `((listProperties
+                          . ((nestingLevels
+                              . [((glyphSymbol . ,glyph)
+                                   (indentFirstLine
+                                    . ((magnitude . 18) (unit . "PT"))))])))))
+           (lists-map `((list-1 . ,list-props)))
+           (bullet '((listId . "list-1") (nestingLevel . 0)))
+           (list-info (gdocs-convert--docs-bullet-to-list
+                       bullet lists-map nil 1 5)))
+      (should (eq (plist-get list-info :type) 'check))
+      (should-not (plist-get list-info :checked)))))
+
+(ert-deftest gdocs-convert-test-task-state-marker-forces-check-list-on-pull ()
+  "Task-state markers restore Org checkboxes even if Docs list glyph is plain."
+  (let* ((list-props '((listProperties
+                        . ((nestingLevels
+                            . [((glyphType . "DECIMAL")
+                                 (indentFirstLine
+                                  . ((magnitude . 18) (unit . "PT"))))])))))
+         (lists-map `((list-1 . ,list-props)))
+         (bullet '((listId . "list-1") (nestingLevel . 0)))
+         (markers '((:type task-state :id "elem-1" :data "on"
+                           :start 1 :end 5)))
+         (list-info (gdocs-convert--docs-bullet-to-list
+                     bullet lists-map markers 1 5)))
+    (should (eq (plist-get list-info :type) 'check))
+    (should (plist-get list-info :checked))))
+
 ;; ---------------------------------------------------------------------------
 ;;; Tables
 
