@@ -207,6 +207,18 @@
                          ir)))
     (should (equal states '("off" "on" "partial")))))
 
+(ert-deftest gdocs-convert-test-docs-paragraph-indent-restores-list-nesting ()
+  "Paragraph indentation restores nesting when list definitions omit it."
+  (let* ((list-props '((listProperties . ((nestingLevels . [((glyphSymbol . "•"))])))))
+         (lists-map `((list-1 . ,list-props)))
+         (bullet '((listId . "list-1") (nestingLevel . 0)))
+         (paragraph-style '((indentStart . ((magnitude . 72) (unit . "PT")))
+                            (indentFirstLine . ((magnitude . 54) (unit . "PT")))))
+         (list-info (gdocs-convert--docs-bullet-to-list
+                     bullet lists-map nil 1 5 paragraph-style)))
+    (should (eq (plist-get list-info :type) 'bullet))
+    (should (= (plist-get list-info :level) 1))))
+
 (ert-deftest gdocs-convert-test-docs-unchecked-box-glyphs-pull-as-tasks ()
   "Unchecked Google Docs checklist glyph variants pull back as Org tasks."
   (dolist (glyph gdocs-convert--unchecked-checkbox-glyphs)

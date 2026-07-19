@@ -2597,7 +2597,7 @@ named-range marker data.  START and END are document indices."
          (trimmed (gdocs-convert--trim-trailing-newline-runs runs))
          (list-info (when bullet
                       (gdocs-convert--docs-bullet-to-list
-                       bullet lists-map markers start end)))
+                       bullet lists-map markers start end style-obj)))
          (ir-alignment (gdocs-convert--docs-alignment-to-ir alignment)))
     (append (list :type 'paragraph
                   :style (if list-info 'normal ir-style)
@@ -2891,20 +2891,21 @@ may have trailing whitespace-only runs before it."
      (t '(:checked nil)))))
 
 (defun gdocs-convert--docs-bullet-to-list
-    (bullet lists-map &optional markers start end)
+    (bullet lists-map &optional markers start end paragraph-style)
   "Convert a Google Docs BULLET object to an IR :list plist.
 LISTS-MAP is the document's lists property for type lookup.  MARKERS may carry
-Org task state for the paragraph at START..END.  Computes the visual nesting
-level from the list definition's indentation, since Google Docs represents
-mixed-type nested lists as separate list objects where the sub-list has
-nestingLevel 0."
+Org task state for the paragraph at START..END.  PARAGRAPH-STYLE is used as a
+fallback for visual nesting when the list definition omits indentation.
+Computes the visual nesting level from indentation, since Google Docs
+represents mixed-type nested lists as separate list objects where the sub-list
+has nestingLevel 0."
   (let* ((list-id (alist-get 'listId bullet))
          (nesting-level (or (alist-get 'nestingLevel bullet) 0))
          (list-props (when list-id
                        (alist-get (intern list-id) lists-map)))
          (list-type (gdocs-convert--docs-list-type list-props nesting-level))
          (level (gdocs-convert--docs-visual-nesting-level
-                 list-props nesting-level))
+                 list-props nesting-level paragraph-style))
          (task-state (plist-get (gdocs-convert--task-state-marker
                                  markers start end)
                                 :data))
@@ -2943,31 +2944,46 @@ in level, type, or a non-list element resets the counter."
 The first-line indent is half this value (18pt) less, leaving
 room for the bullet glyph.")
 
-(defun gdocs-convert--docs-visual-nesting-level (list-props nesting-level)
-  "Compute the visual nesting level from LIST-PROPS at NESTING-LEVEL.
-Google Docs encodes mixed-type nested lists (e.g. numbered sub-items
-under a bullet parent) as separate list objects where the sub-list
-has nestingLevel 0 despite being visually nested.  The true depth is
-recoverable from the list definition's indentFirstLine: each level
-adds 36pt, starting at 18pt for level 0."
-  (if (null list-props)
-      nesting-level
-    (let* ((nesting (alist-get 'listProperties list-props))
-           (levels (alist-get 'nestingLevels nesting))
-           (level-info (when (and levels (> (length levels) nesting-level))
-                         (aref levels nesting-level)))
-           (indent-first
-            (when level-info
-              (alist-get 'magnitude
-                         (alist-get 'indentFirstLine level-info)))))
-      (if indent-first
-          ;; indentFirstLine = bullet glyph position, half an indent less
-          ;; than the continuation-line margin.  Recover the nesting level
-          ;; by inverting: level = (indent - half-indent) / indent-per-level.
-          (let ((half-indent (/ (float gdocs-convert--list-indent-pt) 2)))
-            (max 0 (round (/ (- indent-first half-indent)
-                             (float gdocs-convert--list-indent-pt)))))
-        nesting-level))))
+(defun gdocs-convert--dimension-magnitude (object field)
+  "Return numeric magnitude for FIELD on Google Docs style OBJECT."
+  (alist-get 'magnitude (alist-get field object)))
+
+(defun gdocs-convert--nesting-level-from-indent (indent-first indent-start)
+  "Return visual nesting level from INDENT-FIRST or INDENT-START."
+  (cond
+   (indent-first
+    ;; indentFirstLine = bullet glyph position, half an indent less than the
+    ;; continuation-line margin.  Recover the nesting level by inverting:
+    ;; level = (indent - half-indent) / indent-per-level.
+    (let ((half-indent (/ (float gdocs-convert--list-indent-pt) 2)))
+      (max 0 (round (/ (- indent-first half-indent)
+                       (float gdocs-convert--list-indent-pt))))))
+   (indent-start
+    ;; Fallback: indentStart = continuation margin = (level + 1) * indent.
+    (max 0 (1- (round (/ indent-start
+                         (float gdocs-convert--list-indent-pt))))))))
+
+(defun gdocs-convert--docs-visual-nesting-level
+    (list-props nesting-level &optional paragraph-style)
+  "Compute the visual nesting level for NESTING-LEVEL.
+LIST-PROPS is preferred, but PARAGRAPH-STYLE is used as a fallback when Google
+Docs omits indentation from the list definition.  Google Docs encodes mixed-type
+nested lists as separate list objects where the sub-list has nestingLevel 0
+ despite being visually nested."
+  (let* ((nesting (alist-get 'listProperties list-props))
+         (levels (alist-get 'nestingLevels nesting))
+         (level-info (when (and levels (> (length levels) nesting-level))
+                       (aref levels nesting-level)))
+         (indent-first (or (gdocs-convert--dimension-magnitude
+                            level-info 'indentFirstLine)
+                           (gdocs-convert--dimension-magnitude
+                            paragraph-style 'indentFirstLine)))
+         (indent-start (or (gdocs-convert--dimension-magnitude
+                            level-info 'indentStart)
+                           (gdocs-convert--dimension-magnitude
+                            paragraph-style 'indentStart))))
+    (or (gdocs-convert--nesting-level-from-indent indent-first indent-start)
+        nesting-level)))
 
 (defun gdocs-convert--docs-list-type (list-props nesting-level)
   "Determine the IR list type from Google Docs LIST-PROPS at NESTING-LEVEL."
