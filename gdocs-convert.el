@@ -2182,10 +2182,12 @@ subsequent diffs treat the separator as part of the owning callout block."
                                  (equal data
                                         (gdocs-convert--callout-marker-data
                                          candidate-marker)))))
-                (when (eq (plist-get (gdocs-convert--callout-marker
-                                      (car remaining))
-                                     :type)
-                          'callout-body)
+                (when (and (eq (plist-get (gdocs-convert--callout-marker
+                                           (car remaining))
+                                          :type)
+                               'callout-body)
+                           (not (gdocs-convert--empty-paragraph-p
+                                 (car remaining))))
                   (push (gdocs-convert--restore-callout-list-element
                          (car remaining))
                         paragraphs))
@@ -2231,9 +2233,10 @@ subsequent diffs treat the separator as part of the owning callout block."
               (while (and remaining
                           (gdocs-convert--quote-block-paragraph-p
                            (car remaining)))
-                (push (gdocs-convert--strip-quote-visual-style
-                       (plist-get (car remaining) :contents))
-                      paragraphs)
+                (unless (gdocs-convert--empty-paragraph-p (car remaining))
+                  (push (gdocs-convert--strip-quote-visual-style
+                         (plist-get (car remaining) :contents))
+                        paragraphs))
                 (setq end (plist-get (car remaining) :doc-end))
                 (setq remaining (cdr remaining)))
               (let ((separator (gdocs-convert--consume-generated-separator

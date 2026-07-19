@@ -588,6 +588,41 @@
     (should (eq (plist-get (car ir) :type) 'quote-block))
     (should (= (plist-get (car ir) :doc-end) 9))))
 
+(ert-deftest gdocs-convert-test-docs-json-marked-quote-block-ignores-empty-chrome ()
+  "Marked empty quote paragraphs are treated as visual chrome, not content."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 5)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "One\n")
+                                                            (textStyle . ((italic . t))))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 5)
+                    (endIndex . 6)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "\n")
+                                                            (textStyle . ((italic . t))))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 6)
+                    (endIndex . 10)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Two\n")
+                                                            (textStyle . ((italic . t))))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (namedRanges
+                  . ,(list
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001")
+                            `((namedRanges
+                               . ,(vector `((ranges
+                                             . ,(vector '((startIndex . 1)
+                                                          (endIndex . 9)))))))))))))
+         (block (car (gdocs-convert-docs-json-to-ir json))))
+    (should (eq (plist-get block :type) 'quote-block))
+    (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
+                           (plist-get block :paragraphs))
+                   '("One" "Two")))))
+
 (ert-deftest gdocs-convert-test-docs-json-marked-quote-block ()
   "Marked quote-block paragraphs pull back to Org quote blocks."
   (let* ((body-elements
@@ -2247,6 +2282,40 @@
                             `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 5) (endIndex . 12)))))))))))))
          (org (gdocs-convert-ir-to-org (gdocs-convert-docs-json-to-ir json))))
     (should (string-search "#+BEGIN_CALLOUT\n- one\n- two\n#+END_CALLOUT" org))))
+
+(ert-deftest gdocs-convert-test-docs-json-marked-callout-ignores-empty-chrome ()
+  "Marked empty callout body paragraphs are visual chrome, not content."
+  (let* ((body-elements
+          (vector `((startIndex . 1)
+                    (endIndex . 8)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Info\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 8)
+                    (endIndex . 9)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))
+                  `((startIndex . 9)
+                    (endIndex . 15)
+                    (paragraph
+                     . ((elements . ,(vector '((textRun . ((content . "Body.\n")
+                                                            (textStyle . ()))))))
+                        (paragraphStyle . ((namedStyleType . "NORMAL_TEXT"))))))))
+         (json `((body . ((content . ,body-elements)))
+                 (namedRanges
+                  . ,(list
+                      (cons (intern "gdocs-org-marker:callout-label:elem-001:info:")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 1) (endIndex . 7)))))))))
+                      (cons (intern "gdocs-org-marker:callout-body:elem-001:info:")
+                            `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 8) (endIndex . 14)))))))))))))
+         (block (car (gdocs-convert-docs-json-to-ir json))))
+    (should (eq (plist-get block :type) 'callout-block))
+    (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
+                           (plist-get block :paragraphs))
+                   '("Body.")))))
 
 (ert-deftest gdocs-convert-test-docs-json-marked-callout-block ()
   "Marked callout label/body paragraphs pull back to Org callouts."
