@@ -99,6 +99,20 @@ ROWS is a list of lists of lists of run plists."
 
 ;;;; Element key tests
 
+(ert-deftest gdocs-diff-test-filters-empty-delete-requests ()
+  "Generated request batches never send empty deleteContentRange requests."
+  (should (equal (gdocs-diff--filter-invalid-requests
+                  '(((deleteContentRange
+                      . ((range . ((startIndex . 7) (endIndex . 7))))))
+                    ((deleteContentRange
+                      . ((range . ((startIndex . 7) (endIndex . 8))))))
+                    ((insertText . ((text . "x")
+                                    (location . ((index . 7))))))))
+                 '(((deleteContentRange
+                     . ((range . ((startIndex . 7) (endIndex . 8))))))
+                   ((insertText . ((text . "x")
+                                   (location . ((index . 7))))))))))
+
 (ert-deftest gdocs-diff-test-example-block-key-includes-lines ()
   "Example block keys include their literal lines."
   (should-not (equal (gdocs-diff--element-key
@@ -191,6 +205,32 @@ ROWS is a list of lists of lists of run plists."
                                        '(:code t :style-names (gdocs-code)))))))
     (should-not (equal (gdocs-diff--element-key plain-code)
                        (gdocs-diff--element-key styled-code)))))
+
+(ert-deftest gdocs-diff-test-marker-only-modification-does-not-delete-text ()
+  "Adding semantic markers emits named ranges without empty text deletes."
+  (let* ((old (gdocs-diff-test--make-paragraph "p1" "Todo"))
+         (new (append (gdocs-diff-test--make-paragraph "p1" "Todo")
+                      (list :gdocs-marker
+                            '((:type task-state :data "off")
+                              (:type list-state :data "check:0")))))
+         (requests (gdocs-diff-generate (list old) (list new) 1)))
+    (should-not (seq-some (lambda (request)
+                            (alist-get 'deleteContentRange request))
+                          requests))
+    (should (= (length (seq-filter (lambda (request)
+                                     (alist-get 'createNamedRange request))
+                                   requests))
+               2))))
+
+(ert-deftest gdocs-diff-test-paragraph-key-includes-markers ()
+  "Semantic paragraph markers are meaningful in diff keys."
+  (let ((plain (gdocs-diff-test--make-paragraph "p1" "Todo"))
+        (marked (append (gdocs-diff-test--make-paragraph "p1" "Todo")
+                        (list :gdocs-marker
+                              '((:type task-state :data "off")
+                                (:type list-state :data "check:0"))))))
+    (should-not (equal (gdocs-diff--element-key plain)
+                       (gdocs-diff--element-key marked)))))
 
 (ert-deftest gdocs-diff-test-paragraph-key-includes-footnote-runs ()
   "Zero-width footnote reference runs are semantically meaningful in diff keys."

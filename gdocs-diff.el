@@ -36,7 +36,8 @@ unchanged elements.  START-INDEX is the UTF-16 index where the
 first element begins in the document (default 1).  This should
 account for title elements or other content that precedes the IR."
   (let ((diff-ops (gdocs-diff-compute-operations old-ir new-ir)))
-    (gdocs-diff-generate-from-ops old-ir new-ir diff-ops start-index)))
+    (gdocs-diff--filter-invalid-requests
+     (gdocs-diff-generate-from-ops old-ir new-ir diff-ops start-index))))
 
 (defun gdocs-diff-compute-operations (old-ir new-ir)
   "Compute diff operations between OLD-IR and NEW-IR.
@@ -53,6 +54,23 @@ OLD-IR and NEW-IR are the element lists.  DIFF-OPS is the output
 of `gdocs-diff-compute-operations'.  START-INDEX is the UTF-16
 index where the first element begins (default 1)."
   (gdocs-diff--generate-requests old-ir new-ir diff-ops (or start-index 1)))
+
+(defun gdocs-diff--non-empty-delete-request-p (request)
+  "Return non-nil if REQUEST is a non-empty deleteContentRange request."
+  (let* ((delete (alist-get 'deleteContentRange request))
+         (range (alist-get 'range delete))
+         (start (alist-get 'startIndex range))
+         (end (alist-get 'endIndex range)))
+    (and start end (< start end))))
+
+(defun gdocs-diff--valid-request-p (request)
+  "Return non-nil if REQUEST is valid enough to send to Docs."
+  (or (not (alist-get 'deleteContentRange request))
+      (gdocs-diff--non-empty-delete-request-p request)))
+
+(defun gdocs-diff--filter-invalid-requests (requests)
+  "Drop nil and invalid no-op REQUESTS before batchUpdate."
+  (seq-filter #'gdocs-diff--valid-request-p (delq nil requests)))
 
 ;; ---------------------------------------------------------------------------
 ;;; Element keys
@@ -80,16 +98,34 @@ identical keys."
     ('footnote (gdocs-diff--footnote-key element))
     (_ (format "unknown:%s" (plist-get element :type)))))
 
+(defun gdocs-diff--marker-key (element)
+  "Return a stable key fragment for semantic markers on ELEMENT."
+  (mapconcat (lambda (marker)
+               (format "%s:%s"
+                       (plist-get marker :type)
+                       (or (plist-get marker :data) "")))
+             (sort (copy-sequence (plist-get element :gdocs-marker))
+                   (lambda (a b)
+                     (string< (format "%s:%s"
+                                      (plist-get a :type)
+                                      (or (plist-get a :data) ""))
+                              (format "%s:%s"
+                                      (plist-get b :type)
+                                      (or (plist-get b :data) "")))))
+             ";"))
+
 (defun gdocs-diff--paragraph-key (element)
   "Compute a content key for a paragraph ELEMENT.
-Includes type, style, list info, and full run details."
+Includes type, style, list info, semantic markers, and full run details."
   (let ((style (symbol-name (or (plist-get element :style) 'normal)))
         (style-name (symbol-name (or (plist-get element :style-name) 'none)))
         (text (gdocs-convert--runs-to-plain-text (plist-get element :contents)))
         (formatting (gdocs-diff--runs-formatting-key
                      (plist-get element :contents)))
-        (list-key (gdocs-diff--list-key (plist-get element :list))))
-    (format "paragraph:%s:%s:%s:%s:%s" style style-name list-key formatting text)))
+        (list-key (gdocs-diff--list-key (plist-get element :list)))
+        (marker-key (gdocs-diff--marker-key element)))
+    (format "paragraph:%s:%s:%s:%s:%s:%s"
+            style style-name list-key marker-key formatting text)))
 
 (defun gdocs-diff--table-key (element)
   "Compute a content key for a table ELEMENT.
@@ -570,6 +606,8 @@ RANGE is a (START . END) cons.  Returns a plist with
 :delete-reqs, :insert-reqs, and :style-reqs."
   (let ((result
          (cond
+          ((gdocs-diff--only-marker-changed-p old-elem new-elem)
+           (gdocs-diff--marker-only-modification new-elem range))
           ((gdocs-diff--only-style-changed-p old-elem new-elem)
            (gdocs-diff--style-only-modification old-elem new-elem range))
           ((gdocs-diff--only-formatting-changed-p old-elem new-elem)
@@ -610,6 +648,34 @@ RANGE is a (START . END) cons.  Returns a plist with
          (eq (plist-get old-list :type) (plist-get new-list :type))
          (= (or (plist-get old-list :level) 0)
             (or (plist-get new-list :level) 0)))))
+
+(defun gdocs-diff--same-paragraph-shape-p (old-elem new-elem)
+  "Return non-nil if OLD-ELEM and NEW-ELEM have same paragraph shape."
+  (and (gdocs-diff--same-text-paragraphs-p old-elem new-elem)
+       (equal (plist-get old-elem :style) (plist-get new-elem :style))
+       (equal (plist-get old-elem :style-name)
+              (plist-get new-elem :style-name))
+       (equal (gdocs-diff--runs-formatting-key
+               (plist-get old-elem :contents))
+              (gdocs-diff--runs-formatting-key
+               (plist-get new-elem :contents)))
+       (equal (gdocs-diff--list-key (plist-get old-elem :list))
+              (gdocs-diff--list-key (plist-get new-elem :list)))))
+
+(defun gdocs-diff--only-marker-changed-p (old-elem new-elem)
+  "Return non-nil if only semantic paragraph markers differ."
+  (and (gdocs-diff--same-paragraph-shape-p old-elem new-elem)
+       (not (equal (gdocs-diff--marker-key old-elem)
+                   (gdocs-diff--marker-key new-elem)))))
+
+(defun gdocs-diff--marker-only-modification (new-elem range)
+  "Generate marker requests for NEW-ELEM at RANGE."
+  (let ((start (car range))
+        (end (cdr range)))
+    (list :delete-reqs nil
+          :insert-reqs nil
+          :style-reqs (gdocs-convert--make-marker-requests
+                       new-elem start end))))
 
 (defun gdocs-diff--only-style-changed-p (old-elem new-elem)
   "Return non-nil if only the paragraph style differs between elements."
