@@ -225,6 +225,26 @@
                          ir)))
     (should (equal states '("bullet:0" "bullet:1" "number:0")))))
 
+(ert-deftest gdocs-convert-test-mixed-checkbox-list-preserves-plain-bullets ()
+  "Plain sibling bullets in mixed checkbox lists do not become unchecked tasks."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "- Plain bullet\n- [ ] Task\n- Another plain bullet"))
+         (types (mapcar (lambda (element)
+                          (plist-get (plist-get element :list) :type))
+                        ir))
+         (states (mapcar (lambda (element)
+                           (plist-get
+                            (seq-find (lambda (marker)
+                                        (eq (plist-get marker :type)
+                                            'list-state))
+                                      (plist-get element :gdocs-marker))
+                            :data))
+                         ir)))
+    (should (equal types '(bullet check bullet)))
+    (should (equal states '("bullet:0" "check:0" "bullet:0")))
+    (should (equal (gdocs-convert-ir-to-org ir)
+                   "- Plain bullet\n- [ ] Task\n- Another plain bullet\n"))))
+
 (ert-deftest gdocs-convert-test-docs-paragraph-indent-restores-list-nesting ()
   "Paragraph indentation restores nesting when list definitions omit it."
   (let* ((list-props '((listProperties . ((nestingLevels . [((glyphSymbol . "•"))])))))
@@ -333,6 +353,24 @@
       (should (alist-get 'tableStartLocation req))
       (should (alist-get 'columnIndices req))
       (should (alist-get 'tableColumnProperties req)))))
+
+(ert-deftest gdocs-convert-test-table-cell-run-formatting-requests ()
+  "Table cell requests reapply semantic formatting after cell style reset."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "| Name | Notes |\n|---+---|\n| Beta | *Bold* note |"))
+         (requests (gdocs-convert-ir-to-docs-requests ir))
+         (text-style-reqs
+          (cl-remove-if-not
+           (lambda (request)
+             (alist-get 'updateTextStyle request))
+           requests)))
+    (should
+     (seq-some
+      (lambda (request)
+        (let* ((payload (alist-get 'updateTextStyle request))
+               (style (alist-get 'textStyle payload)))
+          (eq (alist-get 'bold style) t)))
+      text-style-reqs))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Horizontal rules
@@ -475,6 +513,7 @@
     (let ((para (nth 1 ir)))
       (should (eq (plist-get para :type) 'paragraph))
       (should (eq (plist-get para :style) 'normal))
+      (should (eq (plist-get para :style-name) 'gdocs-body))
       (should (string= (plist-get (car (plist-get para :contents)) :text)
                         "Hello")))))
 
@@ -490,7 +529,8 @@
                                     . ((namedStyleType . "HEADING_1"))))))])))))
          (ir (gdocs-convert-docs-json-to-ir json))
          (heading (car ir)))
-    (should (eq (plist-get heading :style) 'heading-1))))
+    (should (eq (plist-get heading :style) 'heading-1))
+    (should (eq (plist-get heading :style-name) 'gdocs-heading-1))))
 
 (ert-deftest gdocs-convert-test-docs-json-preserves-heading-hierarchy ()
   "Pulled Google Docs headings retain their Org hierarchy."
@@ -1279,6 +1319,18 @@
     (should (string-match-p "  - Child item" result))
     (should (string-match-p "    - Grandchild item" result))
     (should (string-match-p "Paragraph\\." result))))
+
+(ert-deftest gdocs-convert-test-ir-to-org-keeps-blank-after-heading-before-list ()
+  "A section that starts with a list keeps a blank line after its heading."
+  (let ((ir (list (list :type 'paragraph
+                        :style 'heading-1
+                        :contents (list (list :text "Section")))
+                  (list :type 'paragraph
+                        :style 'normal
+                        :list (list :type 'bullet :level 0)
+                        :contents (list (list :text "First item"))))))
+    (should (equal (gdocs-convert-ir-to-org ir)
+                   "* Section\n\n- First item\n"))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Property drawer reader
@@ -2093,19 +2145,12 @@
     (should (string-search "- one with /emphasis/\n- two" org))
     (should (string-search "Outro with [[https://example.com][link]]." org))))
 
-(ert-deftest gdocs-convert-test-callout-block-preserves-nested-list ()
-  "Canonical CALLOUT blocks preserve nested list body elements."
-  (let* ((ir (gdocs-convert-org-string-to-ir
-              "#+ATTR_CALLOUT: :type tip\n#+BEGIN_CALLOUT\n- parent\n  - child\n- sibling\n#+END_CALLOUT"))
-         (block (car ir))
-         (body-elements (plist-get block :body-elements))
-         (org (gdocs-convert-ir-to-org ir)))
-    (should (= (length body-elements) 3))
-    (should (equal (plist-get (nth 0 body-elements) :list)
-                   '(:type bullet :level 0)))
-    (should (equal (plist-get (nth 1 body-elements) :list)
-                   '(:type bullet :level 1)))
-    (should (string-search "#+BEGIN_CALLOUT\n- parent\n  - child\n- sibling\n#+END_CALLOUT" org))))
+(ert-deftest gdocs-convert-test-callout-block-rejects-nested-list ()
+  "Canonical CALLOUT blocks fail closed on nested list body elements."
+  (should-error
+   (gdocs-convert-org-string-to-ir
+    "#+ATTR_CALLOUT: :type tip\n#+BEGIN_CALLOUT\n- parent\n  - child\n- sibling\n#+END_CALLOUT")
+   :type 'user-error))
 
 (ert-deftest gdocs-convert-test-callout-block-preserves-ordered-list ()
   "Canonical CALLOUT blocks preserve ordered list body elements."
@@ -2155,7 +2200,7 @@
    :type 'user-error))
 
 (ert-deftest gdocs-convert-test-callout-block-requests-mark-list-body ()
-  "Callout list body requests keep native bullets and reset indentation."
+  "Callout list body requests keep native bullets and reset top-level indentation."
   (let* ((ir (gdocs-convert-org-string-to-ir
               "#+ATTR_CALLOUT: :type tip\n#+BEGIN_CALLOUT\n- one\n- two\n#+END_CALLOUT"))
          (requests (gdocs-convert-ir-to-docs-requests ir)))
@@ -2186,6 +2231,17 @@
                                (alist-get 'indentStart style)
                                (alist-get 'indentFirstLine style))))
                       requests))))
+
+(ert-deftest gdocs-convert-test-callout-list-uses-merged-bullet-request ()
+  "Flat callout list items use one merged native list request."
+  (let* ((ir (gdocs-convert-org-string-to-ir
+              "#+ATTR_CALLOUT: :type tip\n#+BEGIN_CALLOUT\n- parent\n- sibling\n#+END_CALLOUT"))
+         (requests (gdocs-convert-ir-to-docs-requests ir))
+         (bullet-requests
+          (seq-filter (lambda (request)
+                        (alist-get 'createParagraphBullets request))
+                      requests)))
+    (should (= (length bullet-requests) 1))))
 
 (ert-deftest gdocs-convert-test-callout-block-requests-mark-label-and-body ()
   "Callout requests include generated label and body markers."

@@ -115,6 +115,56 @@ comments; now it always diffs against the fetched remote document."
         (should diff-called)
         (should (eq gdocs-sync--status 'synced))))))
 
+(ert-deftest gdocs-sync-test-aborts-broad-semantic-push-with-local-edits ()
+  "Broad semantic diffs after local edits abort before remote mutation."
+  (gdocs-sync-test-with-org-buffer "* Heading\nChanged\n"
+    (let ((gdocs-sync-semantic-push-request-limit 2))
+      (gdocs-sync--set-status 'pushing)
+      (setq gdocs-sync--push-in-progress t)
+      (should-error
+       (gdocs-sync--abort-unsafe-semantic-push-if-needed
+        (gdocs-convert-org-buffer-to-ir)
+        '(((insertText . ((text . "a"))))
+          ((insertText . ((text . "b"))))
+          ((insertText . ((text . "c")))))))
+      (should (eq gdocs-sync--status 'conflict))
+      (should-not gdocs-sync--push-in-progress))))
+
+(ert-deftest gdocs-sync-test-comment-aware-push-aborts-broad-semantic-diff ()
+  "Comment-preserving push also aborts broad semantic diffs before mutation."
+  (gdocs-sync-test-with-org-buffer "* Heading\nChanged\n"
+    (let ((gdocs-sync-semantic-push-request-limit 2)
+          (batch-called nil)
+          (local-ir (gdocs-convert-org-buffer-to-ir))
+          (remote-ir (list (list :type 'paragraph :style 'heading-1
+                                 :contents (list (list :text "Heading"))))))
+      (cl-letf (((symbol-function 'gdocs-diff-generate-from-ops)
+                 (lambda (&rest _)
+                   '(((insertText . ((text . "a"))))
+                     ((insertText . ((text . "b"))))
+                     ((insertText . ((text . "c")))))))
+                ((symbol-function 'gdocs-api-batch-update)
+                 (lambda (&rest _)
+                   (setq batch-called t))))
+        (setq gdocs-sync--push-in-progress t)
+        (should-error
+         (gdocs-sync--push-with-comment-protection
+          local-ir local-ir remote-ir nil 1 (current-buffer) nil))
+        (should-not batch-called)
+        (should (eq gdocs-sync--status 'conflict))))))
+
+(ert-deftest gdocs-sync-test-push-local-hash-match-skips-remote-fetch ()
+  "An unchanged buffer with a persisted local hash does not fetch or mutate."
+  (gdocs-sync-test-with-org-buffer "Hello world\n"
+    (let ((api-called nil)
+          (gdocs-sync--local-hash (gdocs-sync--current-local-hash)))
+      (cl-letf (((symbol-function 'gdocs-api-get-document)
+                 (lambda (&rest _)
+                   (setq api-called t))))
+        (gdocs-sync-push)
+        (should-not api-called)
+        (should (eq gdocs-sync--status 'synced))))))
+
 (ert-deftest gdocs-sync-test-push-no-changes ()
   "No changes detected results in no API call."
   (gdocs-sync-test-with-org-buffer "Hello world\n"
@@ -454,6 +504,16 @@ properties are preserved and revision ID is stored."
     (goto-char (point-max))
     (insert "Local edit\n")
     (should-not (gdocs-sync--local-hash-matches-p))))
+
+(ert-deftest gdocs-sync-test-local-hash-ignores-new-gdocs-only-drawer ()
+  "Local hash remains stable when sync metadata creates its property drawer."
+  (gdocs-sync-test-with-org-buffer "#+TITLE: Smoke\n\n* Heading\nBody\n"
+    (let ((before (gdocs-sync--current-local-hash)))
+      (goto-char (point-min))
+      (org-entry-put nil "GDOCS_DOCUMENT_ID" "doc-1")
+      (org-entry-put nil "GDOCS_ACCOUNT" "acct")
+      (org-entry-put nil "GDOCS_LOCAL_HASH" before)
+      (should (equal before (gdocs-sync--current-local-hash))))))
 
 (ert-deftest gdocs-sync-test-remote-only-semantic-pull-uses-hash-not-merge ()
   "Semantic remote-only pulls do not enter automatic merge when local hash matches."

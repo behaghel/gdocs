@@ -115,12 +115,37 @@ identical keys."
                                       (or (plist-get b :data) "")))))
              ";"))
 
+(defun gdocs-diff--run-semantic-text (run)
+  "Return semantic text contribution for RUN."
+  (cond
+   ((plist-get run :date-element)
+    (let ((date (plist-get run :date-element)))
+      (format "@date(%s:%s)"
+              (plist-get date :timestamp)
+              (if (plist-get date :active) "active" "inactive"))))
+   ((plist-get run :footnote-label)
+    (format "@footnote(%s)" (plist-get run :footnote-label)))
+   (t (or (plist-get run :text) ""))))
+
+(defun gdocs-diff--runs-semantic-text (runs)
+  "Return stable semantic text for RUNS.
+When native date chips or footnote references are present, Google Docs may split
+or trim adjacent whitespace around the non-text element.  Collapse whitespace in
+that case while keeping a semantic token for the element itself."
+  (let ((text (mapconcat #'gdocs-diff--run-semantic-text runs "")))
+    (if (seq-some (lambda (run)
+                    (or (plist-get run :date-element)
+                        (plist-get run :footnote-label)))
+                  runs)
+        (string-trim (replace-regexp-in-string "[[:space:]]+" " " text))
+      text)))
+
 (defun gdocs-diff--paragraph-key (element)
   "Compute a content key for a paragraph ELEMENT.
 Includes type, style, list info, semantic markers, and full run details."
   (let ((style (symbol-name (or (plist-get element :style) 'normal)))
         (style-name (symbol-name (or (plist-get element :style-name) 'none)))
-        (text (gdocs-convert--runs-to-plain-text (plist-get element :contents)))
+        (text (gdocs-diff--runs-semantic-text (plist-get element :contents)))
         (formatting (gdocs-diff--runs-formatting-key
                      (plist-get element :contents)))
         (list-key (gdocs-diff--list-key (plist-get element :list)))
@@ -176,11 +201,16 @@ Concatenates all cell text across all rows."
                      "\n\n")))
 
 (defun gdocs-diff--image-key (element)
-  "Compute a content key for an image ELEMENT."
-  (format "image:%s:%s:%s:%s"
-          (or (plist-get element :object-id) "")
-          (or (plist-get element :path) "")
-          (or (plist-get element :source-uri) "")
+  "Compute a content key for an image ELEMENT.
+When an Org source `:path' marker is present, treat that path plus caption as
+semantic identity and ignore Google-assigned object IDs and transient image
+URIs.  This keeps create/fetch stable after native image insertion."
+  (format "image:%s:%s"
+          (or (plist-get element :path)
+              (plist-get element :source-uri)
+              (plist-get element :content-uri)
+              (plist-get element :object-id)
+              "")
           (or (plist-get element :caption) "")))
 
 (defun gdocs-diff--footnote-key (element)
@@ -189,9 +219,25 @@ Concatenates all cell text across all rows."
         (text (gdocs-convert--runs-to-plain-text (plist-get element :contents))))
     (format "footnote:%s:%s" label text)))
 
+(defun gdocs-diff--normalized-runs-for-key (runs)
+  "Return RUNS merged for formatting-key comparison."
+  (let (result)
+    (dolist (run runs (nreverse result))
+      (if (and result
+               (equal (gdocs-diff--run-formatting-key (car result))
+                      (gdocs-diff--run-formatting-key run)))
+          (plist-put (car result) :text
+                     (concat (or (plist-get (car result) :text) "")
+                             (or (plist-get run :text) "")))
+        (push (copy-sequence run) result)))))
+
 (defun gdocs-diff--runs-formatting-key (runs)
-  "Produce a string capturing the formatting of each run in RUNS."
-  (mapconcat #'gdocs-diff--run-formatting-key runs ";"))
+  "Produce a string capturing the formatting of each run in RUNS.
+Adjacent runs with identical semantic formatting are normalized first, because
+Google Docs often splits whitespace into separate text runs after fetch."
+  (mapconcat #'gdocs-diff--run-formatting-key
+             (gdocs-diff--normalized-runs-for-key runs)
+             ";"))
 
 (defun gdocs-diff--run-formatting-key (run)
   "Produce a formatting fingerprint string for RUN."
@@ -205,6 +251,11 @@ Concatenates all cell text across all rows."
               (format "Y(%s)" (mapconcat #'symbol-name style-names ","))
             "")
           (if (plist-get run :link) (format "L(%s)" (plist-get run :link)) "")
+          (if-let* ((date (plist-get run :date-element)))
+              (format "D(%s:%s)"
+                      (plist-get date :timestamp)
+                      (if (plist-get date :active) "active" "inactive"))
+            "")
           (if (plist-get run :footnote-label)
               (format "F(%s)" (plist-get run :footnote-label))
             "")))
@@ -509,19 +560,10 @@ START-INDEX is the UTF-16 index where the first element begins."
                         :reqs reqs)
                   groups)))))
     ;; Insertions
-    (dolist (op diff-ops)
-      (when (eq (plist-get op :op) 'insert)
-        (let* ((ni (plist-get op :new-index))
-               (element (nth ni new-ir))
-               (insert-index (gdocs-diff--insertion-point
-                              op diff-ops old-indices start-index))
-               (result (gdocs-convert--ir-element-to-requests
-                        element insert-index)))
-          (push (list :index insert-index
-                      :sort-phase gdocs-diff--sort-phase-insert
-                      :new-index ni
-                      :reqs (plist-get result :requests))
-                groups))))
+    (dolist (group (gdocs-diff--insertion-groups
+                    diff-ops new-ir old-indices start-index))
+      (push (plist-put group :sort-phase gdocs-diff--sort-phase-insert)
+            groups))
     ;; Sort groups for correct index stability:
     ;; 1. Descending by index — process from end to start so earlier
     ;;    indices are not shifted by later operations.
@@ -569,6 +611,41 @@ START-INDEX is the UTF-16 index where the first element begins."
 
 ;; ---------------------------------------------------------------------------
 ;;; Insertion requests
+
+(defun gdocs-diff--insertion-groups (diff-ops new-ir old-indices start-index)
+  "Return insertion request groups for DIFF-OPS.
+Multiple elements inserted at the same document index are emitted as one
+contiguous block: each element is converted at the index where it will live
+after preceding inserts in that block.  This avoids applying styles or bullets
+to stale same-index ranges before later inserts shift the document."
+  (let ((by-index (make-hash-table :test 'eql))
+        groups)
+    (dolist (op diff-ops)
+      (when (eq (plist-get op :op) 'insert)
+        (let ((insert-index (gdocs-diff--insertion-point
+                             op diff-ops old-indices start-index)))
+          (push op (gethash insert-index by-index)))))
+    (maphash
+     (lambda (insert-index ops)
+       (let ((cursor insert-index)
+             requests
+             (max-new-index -1))
+         (dolist (op (sort ops (lambda (a b)
+                                 (< (plist-get a :new-index)
+                                    (plist-get b :new-index)))))
+           (let* ((ni (plist-get op :new-index))
+                  (element (nth ni new-ir))
+                  (result (gdocs-convert--ir-element-to-requests
+                           element cursor)))
+             (setq requests (append requests (plist-get result :requests))
+                   cursor (plist-get result :index)
+                   max-new-index (max max-new-index ni))))
+         (push (list :index insert-index
+                     :new-index max-new-index
+                     :reqs requests)
+               groups)))
+     by-index)
+    groups))
 
 (defun gdocs-diff--insertion-point (op diff-ops old-indices start-index)
   "Determine the document index at which to insert for OP.
@@ -638,8 +715,8 @@ RANGE is a (START . END) cons.  Returns a plist with
   "Return non-nil if OLD-ELEM and NEW-ELEM are paragraphs with identical text."
   (and (eq (plist-get old-elem :type) 'paragraph)
        (eq (plist-get new-elem :type) 'paragraph)
-       (equal (gdocs-convert--runs-to-plain-text (plist-get old-elem :contents))
-              (gdocs-convert--runs-to-plain-text (plist-get new-elem :contents)))))
+       (equal (gdocs-diff--runs-semantic-text (plist-get old-elem :contents))
+              (gdocs-diff--runs-semantic-text (plist-get new-elem :contents)))))
 
 (defun gdocs-diff--same-list-p (old-elem new-elem)
   "Return non-nil if both elements are list items of the same type and level."

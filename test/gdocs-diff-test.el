@@ -301,6 +301,21 @@ ROWS is a list of lists of lists of run plists."
                      (gdocs-diff--element-key
                       (gdocs-diff-test--make-image "img-1" "Logo")))))
 
+(ert-deftest gdocs-diff-test-image-key-prefers-org-source-path ()
+  "Image key ignores transient Google object IDs when source path is marked."
+  (let ((local (list :type 'image
+                     :path "img/logo.png"
+                     :source-uri "https://drive.google.com/uc?id=local"
+                     :caption "Logo"))
+        (remote (list :type 'image
+                      :path "img/logo.png"
+                      :object-id "kix.generated"
+                      :source-uri "https://drive.google.com/uc?id=remote"
+                      :content-uri "https://lh7.example/generated"
+                      :caption "Logo")))
+    (should (equal (gdocs-diff--element-key local)
+                   (gdocs-diff--element-key remote)))))
+
 (ert-deftest gdocs-diff-test-element-key-table ()
   "Table key includes cell contents."
   (let* ((runs (list (gdocs-diff-test--plain-run "cell1")))
@@ -344,6 +359,41 @@ ROWS is a list of lists of lists of run plists."
     (should (cl-some (lambda (req)
                        (alist-get 'deleteContentRange req))
                      result))))
+
+(ert-deftest gdocs-diff-test-same-index-inserts-use-contiguous-ranges ()
+  "Multiple inserts before one anchor are laid out contiguously before styling."
+  (let* ((old-ir (list (gdocs-diff-test--make-paragraph "anchor" "Anchor")))
+         (heading (gdocs-diff-test--make-paragraph "h" "Heading" 'heading-2))
+         (body (gdocs-diff-test--make-paragraph "p" "Body"))
+         (new-ir (list heading body (car old-ir)))
+         (result (gdocs-diff-generate old-ir new-ir))
+         (insert-requests (seq-filter (lambda (req)
+                                        (alist-get 'insertText req))
+                                      result))
+         (style-requests (seq-filter
+                          (lambda (req)
+                            (let* ((update (alist-get 'updateParagraphStyle req))
+                                   (style (alist-get 'paragraphStyle update)))
+                              (alist-get 'namedStyleType style)))
+                          result)))
+    (should (= (alist-get 'index (alist-get 'location
+                                            (alist-get 'insertText
+                                                       (nth 0 insert-requests))))
+               1))
+    (should (= (alist-get 'index (alist-get 'location
+                                            (alist-get 'insertText
+                                                       (nth 1 insert-requests))))
+               9))
+    (let* ((heading-range (alist-get 'range
+                                     (alist-get 'updateParagraphStyle
+                                                (nth 0 style-requests))))
+           (body-range (alist-get 'range
+                                  (alist-get 'updateParagraphStyle
+                                             (nth 1 style-requests)))))
+      (should (= (alist-get 'startIndex heading-range) 1))
+      (should (= (alist-get 'endIndex heading-range) 8))
+      (should (= (alist-get 'startIndex body-range) 9))
+      (should (= (alist-get 'endIndex body-range) 13)))))
 
 (ert-deftest gdocs-diff-test-modify-text ()
   "Text change generates delete + insert requests."
@@ -1091,20 +1141,27 @@ should both anchor to the modify and stack in forward order."
          (old-ir (list pA pB pC))
          (new-ir (list pA pB2 pD pE pC))
          (result (gdocs-diff-generate old-ir new-ir))
-         ;; Both D and E should be inserted at B's old range end (12).
-         (insert-reqs
-          (cl-remove-if-not
+         (delta-req
+          (cl-find-if
            (lambda (req)
              (let ((it (alist-get 'insertText req)))
-               (and it (let ((text (alist-get 'text it)))
-                         (or (string-match-p "delta" text)
-                             (string-match-p "epsilon" text))))))
+               (and it (string-match-p "delta" (alist-get 'text it)))))
+           result))
+         (epsilon-req
+          (cl-find-if
+           (lambda (req)
+             (let ((it (alist-get 'insertText req)))
+               (and it (string-match-p "epsilon" (alist-get 'text it)))))
            result)))
-    (should (= (length insert-reqs) 2))
-    ;; Both insert at B's old end (12), not A's end (7).
-    (dolist (req insert-reqs)
-      (let ((loc (alist-get 'location (alist-get 'insertText req))))
-        (should (= (alist-get 'index loc) 12))))))
+    ;; D anchors at B's old end (12), not A's end (7); E is emitted after D's
+    ;; inserted text so later styling requests cannot drift onto the wrong
+    ;; paragraph.
+    (should (= (alist-get 'index (alist-get 'location
+                                            (alist-get 'insertText delta-req)))
+               12))
+    (should (= (alist-get 'index (alist-get 'location
+                                            (alist-get 'insertText epsilon-req)))
+               18))))
 
 (ert-deftest gdocs-diff-test-insert-in-gap-with-delete-and-modify ()
   "Insert after a gap containing both deletes and a modify.

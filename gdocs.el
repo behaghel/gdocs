@@ -244,6 +244,7 @@ to move the document into."
                (setq gdocs-sync--account account)
                (gdocs-sync--update-last-sync-time)
                (gdocs--ensure-org-tag)
+               (setq gdocs-sync--local-hash (gdocs-sync--current-local-hash))
                (gdocs-sync--persist-properties)
                (let ((gdocs-auto-push-on-save nil)
                      (before-save-hook nil)

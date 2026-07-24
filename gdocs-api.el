@@ -52,13 +52,46 @@
   (expand-file-name "gdocs-last-batch-update.json" temporary-file-directory)
   "File where the last Docs batchUpdate payload is written for debugging.")
 
+(defvar gdocs-api-debug-batch-update-history-directory
+  (expand-file-name "gdocs-batch-updates" temporary-file-directory)
+  "Directory where all Docs batchUpdate payloads are written for debugging.
+Set to nil to disable history recording and keep only
+`gdocs-api-debug-batch-update-file'.")
+
+(defvar gdocs-api--debug-batch-update-sequence 0
+  "Monotonic sequence number for debug batchUpdate history files.")
+
+(defun gdocs-api--batch-update-debug-payload (document-id requests)
+  "Return debug payload for DOCUMENT-ID and REQUESTS."
+  `((documentId . ,document-id)
+    (requestCount . ,(length requests))
+    (requestKinds . ,(vconcat
+                      (mapcar (lambda (request)
+                                (symbol-name (caar request)))
+                              requests)))
+    (requests . ,requests)))
+
+(defun gdocs-api--record-batch-update-history (payload)
+  "Record batchUpdate PAYLOAD in the history directory."
+  (when gdocs-api-debug-batch-update-history-directory
+    (make-directory gdocs-api-debug-batch-update-history-directory t)
+    (setq gdocs-api--debug-batch-update-sequence
+          (1+ gdocs-api--debug-batch-update-sequence))
+    (let ((file (expand-file-name
+                 (format "%s-%03d.json"
+                         (format-time-string "%Y%m%dT%H%M%S%3N")
+                         gdocs-api--debug-batch-update-sequence)
+                 gdocs-api-debug-batch-update-history-directory)))
+      (with-temp-file file
+        (insert (json-encode payload))))))
+
 (defun gdocs-api--record-batch-update (document-id requests)
   "Record DOCUMENT-ID and REQUESTS for post-mortem debugging."
-  (when gdocs-api-debug-batch-update-file
-    (with-temp-file gdocs-api-debug-batch-update-file
-      (insert (json-encode `((documentId . ,document-id)
-                             (requestCount . ,(length requests))
-                             (requests . ,requests)))))))
+  (let ((payload (gdocs-api--batch-update-debug-payload document-id requests)))
+    (when gdocs-api-debug-batch-update-file
+      (with-temp-file gdocs-api-debug-batch-update-file
+        (insert (json-encode payload))))
+    (gdocs-api--record-batch-update-history payload)))
 
 (defun gdocs-api-get-document (document-id callback &optional account on-error)
   "Fetch a Google Docs document by DOCUMENT-ID.

@@ -69,6 +69,14 @@ without remote structural rewrites."
   :type 'boolean
   :group 'gdocs)
 
+(defcustom gdocs-sync-semantic-push-request-limit 100
+  "Maximum normal push request count for semantic documents.
+A larger request set usually means local Org and remote Google Docs IR are not
+comparable enough for safe incremental mutation.  Abort before remote mutation
+instead of risking style or list absorption.  Set to nil to disable this guard."
+  :type '(choice (const :tag "Disable guard" nil) integer)
+  :group 'gdocs)
+
 ;;;; Buffer-local variables
 
 (defvar-local gdocs-sync--shadow-ir nil
@@ -118,30 +126,32 @@ ensuring same-document heading links resolve to anchored URLs."
   (unless gdocs-sync--document-id
     (user-error "Buffer is not linked to a Google Doc"))
   (unless (gdocs-sync--serialize-push)
-    (setq gdocs-sync--push-in-progress t)
-    (gdocs-sync--set-status 'pushing)
-    (let ((buf (current-buffer))
-          (doc-id gdocs-sync--document-id)
-          (acct gdocs-sync--account))
-      (gdocs-api-get-document
-       doc-id
-       (lambda (json)
-         (condition-case err
-             (with-current-buffer buf
-               (gdocs-convert--cache-heading-ids doc-id json)
-               (let* ((link-ctx (gdocs-sync--make-link-context))
-                      (gdocs-convert--link-context link-ctx)
-                      (current-ir (gdocs-convert-org-buffer-to-ir)))
-                 (gdocs-sync--push-incremental
-                  current-ir buf link-ctx json)))
-           ((error quit)
-            (if (buffer-live-p buf)
-                (with-current-buffer buf
-                  (gdocs-sync--handle-push-error err))
-              (message "Push failed: %s"
-                       (error-message-string err))))))
-       acct
-       (gdocs-sync--make-push-error-callback buf)))))
+    (if (gdocs-sync--local-hash-matches-p)
+        (gdocs-sync--push-no-changes (current-buffer))
+      (setq gdocs-sync--push-in-progress t)
+      (gdocs-sync--set-status 'pushing)
+      (let ((buf (current-buffer))
+            (doc-id gdocs-sync--document-id)
+            (acct gdocs-sync--account))
+        (gdocs-api-get-document
+         doc-id
+         (lambda (json)
+           (condition-case err
+               (with-current-buffer buf
+                 (gdocs-convert--cache-heading-ids doc-id json)
+                 (let* ((link-ctx (gdocs-sync--make-link-context))
+                        (gdocs-convert--link-context link-ctx)
+                        (current-ir (gdocs-convert-org-buffer-to-ir)))
+                   (gdocs-sync--push-incremental
+                    current-ir buf link-ctx json)))
+             ((error quit)
+              (if (buffer-live-p buf)
+                  (with-current-buffer buf
+                    (gdocs-sync--handle-push-error err))
+                (message "Push failed: %s"
+                         (error-message-string err))))))
+         acct
+         (gdocs-sync--make-push-error-callback buf))))))
 
 (defun gdocs-sync--serialize-push ()
   "If a push is already in progress, queue this one.
@@ -183,6 +193,8 @@ for accurate UTF-16 indices."
       ;; Standard flow: compute diff and push
       (let ((requests (gdocs-diff-generate
                        remote-filtered local-filtered start-index)))
+        (gdocs-sync--abort-unsafe-semantic-push-if-needed
+         local-filtered requests)
         (if (null requests)
             (gdocs-sync--push-no-changes buf)
           (gdocs-api-batch-update
@@ -198,6 +210,17 @@ BUF is the originating buffer."
     (setq gdocs-sync--push-in-progress nil)
     (gdocs-sync--set-status 'synced)
     (message "No changes to push")))
+
+(defun gdocs-sync--abort-unsafe-semantic-push-if-needed (local-ir requests)
+  "Abort unsafe semantic push of LOCAL-IR when REQUESTS look too broad."
+  (when (and gdocs-sync-semantic-push-request-limit
+             (gdocs-sync--semantic-ir-p local-ir)
+             (> (length requests) gdocs-sync-semantic-push-request-limit))
+    (setq gdocs-sync--push-in-progress nil)
+    (gdocs-sync--set-status 'conflict)
+    (user-error
+     "Google Docs push aborted: semantic diff produced %d requests (limit %d); run debug pipeline before mutating remote"
+     (length requests) gdocs-sync-semantic-push-request-limit)))
 
 (defun gdocs-sync--make-push-callback (current-ir buf link-ctx)
   "Return a callback for a push API response.
@@ -670,12 +693,20 @@ on elements that were not changed remotely."
        "Google Docs pull aborted: semantic document has both local and remote changes; use debug pipeline or manual review instead of automatic merge"))))
 
 (defun gdocs-sync--metadata-normalized-buffer-string ()
-  "Return current buffer text without volatile GDOCS metadata lines."
+  "Return current buffer text without volatile GDOCS metadata.
+When a sync first links a file, `org-entry-put' may create a property drawer
+that contains only GDOCS metadata.  Drop that now-empty drawer too so the hash
+matches before and after metadata persistence."
   (let ((source (current-buffer)))
     (with-temp-buffer
       (insert-buffer-substring source)
       (goto-char (point-min))
       (while (re-search-forward "^[[:space:]]*:GDOCS_[^\n]*\n" nil t)
+        (replace-match ""))
+      (goto-char (point-min))
+      (while (re-search-forward
+              "^[ \t]*:PROPERTIES:[ \t]*\n[ \t]*:END:[ \t]*\n?"
+              nil t)
         (replace-match ""))
       (buffer-string))))
 
@@ -1270,6 +1301,8 @@ context."
          (requests (gdocs-diff-generate-from-ops
                     remote-filtered local-filtered
                     filtered-ops start-index)))
+    (gdocs-sync--abort-unsafe-semantic-push-if-needed
+     local-filtered requests)
     (if (null requests)
         (gdocs-sync--push-no-changes buf)
       (gdocs-api-batch-update
