@@ -1547,7 +1547,8 @@ collected at the end under a conventional `* Footnotes' section."
             (push (format "#+BEGIN_EXAMPLE\n%s\n#+END_EXAMPLE"
                           (s-join "\n" (nreverse code-lines)))
                   parts)
-            (setq prev-type 'paragraph)
+            (setq prev-element (list :type 'example-block)
+                  prev-type 'example-block)
             (setq list-counter 0 prev-list-level nil)))
          ;; Normal element
          (t
@@ -1629,15 +1630,20 @@ already round-trip via named ranges."
 
 (defun gdocs-convert--needs-blank-line-p (previous element)
   "Return non-nil if a blank line is needed before ELEMENT.
-PREVIOUS is the previous IR element.  In particular, keep a blank line after Org
-headings even when the section starts with a list; otherwise a later parse can
+PREVIOUS is the previous IR element.  Separate semantic blocks and list
+boundaries while keeping consecutive list items compact.  Keep a blank line
+after headings even when a section starts with a list, so a later parse cannot
 merge the heading text into that list item."
   (when previous
     (let ((previous-type (plist-get previous :type))
           (previous-style (plist-get previous :style))
           (type (plist-get element :type))
-          (list-info (plist-get element :list)))
-      (or (and (eq previous-type 'paragraph)
+          (list-info (plist-get element :list))
+          (block-types '(source-block example-block quote-block callout-block)))
+      (or (memq previous-type block-types)
+          (memq type block-types)
+          (and list-info (not (plist-get previous :list)))
+          (and (eq previous-type 'paragraph)
                (gdocs-convert--heading-style-p previous-style))
           (eq type 'table)
           (eq type 'horizontal-rule)

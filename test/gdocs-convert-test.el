@@ -1332,6 +1332,38 @@
     (should (equal (gdocs-convert-ir-to-org ir)
                    "* Section\n\n- First item\n"))))
 
+(ert-deftest gdocs-convert-test-round-trip-keeps-structural-blank-separators ()
+  "Paragraphs, lists, and semantic blocks retain readable Org separation."
+  (let* ((source (concat "* Example\n\nFirst paragraph.\n\nSecond paragraph.\n\n"
+                         "- Before block\n- Same list\n\n"
+                         "#+begin_src python\nprint(1)\n#+end_src\n\n"
+                         "#+begin_quote\nQuoted text.\n#+end_quote\n\n"
+                         "#+begin_example\nLiteral text.\n\nStill literal.\n#+end_example\n\n"
+                         "- After block\n  - Nested item\n\nFinal paragraph.\n"))
+         (expected (concat "* Example\n\nFirst paragraph.\n\nSecond paragraph.\n\n"
+                           "- Before block\n- Same list\n\n"
+                           "#+BEGIN_SRC python\nprint(1)\n#+END_SRC\n\n"
+                           "#+BEGIN_QUOTE\nQuoted text.\n#+END_QUOTE\n\n"
+                           "#+BEGIN_EXAMPLE\nLiteral text.\n\nStill literal.\n#+END_EXAMPLE\n\n"
+                           "- After block\n  - Nested item\n\nFinal paragraph.\n"))
+         (result (gdocs-convert-ir-to-org (gdocs-convert-org-string-to-ir source))))
+    (should (equal expected result))
+    (should (equal result
+                   (gdocs-convert-ir-to-org (gdocs-convert-org-string-to-ir result))))))
+
+(ert-deftest gdocs-convert-test-code-paragraph-group-separated-from-following-list ()
+  "Legacy code paragraphs stay grouped and separated from the next list."
+  (let ((ir '((:type paragraph :style normal :contents ((:text "one" :code t)))
+              (:type paragraph :style normal :contents ((:text "two" :code t)))
+              (:type paragraph :style normal :list (:type bullet :level 0)
+                     :contents ((:text "Item one")))
+              (:type paragraph :style normal :list (:type bullet :level 1)
+                     :contents ((:text "Nested item")))
+              (:type paragraph :style normal :list (:type bullet :level 0)
+                     :contents ((:text "Item two"))))))
+    (should (equal (gdocs-convert-ir-to-org ir)
+                   "#+BEGIN_EXAMPLE\none\ntwo\n#+END_EXAMPLE\n\n- Item one\n  - Nested item\n- Item two\n"))))
+
 ;; ---------------------------------------------------------------------------
 ;;; Property drawer reader
 
