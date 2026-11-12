@@ -23,6 +23,8 @@
 (require 'org-element)
 (require 'ox)
 (require 'url-util)
+(require 'gdocs-styles)
+(require 'gdocs-convert-headings)
 
 ;; ---------------------------------------------------------------------------
 ;;; ID generation
@@ -94,103 +96,6 @@ Used during org-to-IR link resolution to append heading anchors.")
   "Session cache: doc-id -> alist of ((heading-id . heading-text) ...).
 Reverse mapping of `gdocs-convert--heading-cache', used during
 IR-to-org conversion to resolve heading anchors back to text.")
-
-(defcustom gdocs-style-definitions
-  '((gdocs-code
-     :text (:monospace t))
-    (gdocs-source-block
-     :parent normal)
-    (gdocs-source-block-first
-     :parent normal)
-    (gdocs-source-block-line
-     :parent normal)
-    (gdocs-source-block-last
-     :parent normal)
-    (gdocs-source-block-single
-     :parent normal)
-    (gdocs-quote-block
-     :parent normal)
-    (gdocs-quote-block-first
-     :parent normal)
-    (gdocs-quote-block-line
-     :parent normal)
-    (gdocs-quote-block-last
-     :parent normal)
-    (gdocs-quote-block-single
-     :parent normal)
-    (gdocs-callout-info-label
-     :parent normal
-     :text (:bold t))
-    (gdocs-callout-note-label
-     :parent normal
-     :text (:bold t))
-    (gdocs-callout-warning-label
-     :parent normal
-     :text (:bold t))
-    (gdocs-callout-tip-label
-     :parent normal
-     :text (:bold t))
-    (gdocs-callout-important-label
-     :parent normal
-     :text (:bold t))
-    (gdocs-callout-info-first
-     :parent normal)
-    (gdocs-callout-info-line
-     :parent normal)
-    (gdocs-callout-info-last
-     :parent normal)
-    (gdocs-callout-info-single
-     :parent normal)
-    (gdocs-callout-note-first
-     :parent normal)
-    (gdocs-callout-note-line
-     :parent normal)
-    (gdocs-callout-note-last
-     :parent normal)
-    (gdocs-callout-note-single
-     :parent normal)
-    (gdocs-callout-warning-first
-     :parent normal)
-    (gdocs-callout-warning-line
-     :parent normal)
-    (gdocs-callout-warning-last
-     :parent normal)
-    (gdocs-callout-warning-single
-     :parent normal)
-    (gdocs-callout-tip-first
-     :parent normal)
-    (gdocs-callout-tip-line
-     :parent normal)
-    (gdocs-callout-tip-last
-     :parent normal)
-    (gdocs-callout-tip-single
-     :parent normal)
-    (gdocs-callout-important-first
-     :parent normal)
-    (gdocs-callout-important-line
-     :parent normal)
-    (gdocs-callout-important-last
-     :parent normal)
-    (gdocs-callout-important-single
-     :parent normal)
-    (gdocs-image-caption
-     :parent normal))
-  "Logical style definitions used when rendering IR to Google Docs.
-Definitions deliberately use logical names rather than treating Google Docs
-properties as semantics.  The converter resolves these definitions late, when
-building batchUpdate requests.  Adapters and users may override this variable to
-change visual output without changing Org/IR semantics."
-  :type '(alist :key-type symbol :value-type plist)
-  :group 'gdocs)
-
-(defcustom gdocs-style-base-font-size 11
-  "Fallback base font size used for logical `:font-scale' resolution.
-The Google Docs API exposes named styles when reading a document, but request
-conversion can also run without a document JSON context.  This value keeps the
-style resolver deterministic until a caller supplies document-derived style
-context."
-  :type 'number
-  :group 'gdocs)
 
 (defcustom gdocs-convert-native-date-elements t
   "Whether Org timestamps should push as native Google Docs date elements."
@@ -632,61 +537,6 @@ paragraphs is more surprising than preserving them remotely."
 
 ;; ---------------------------------------------------------------------------
 ;;; Headline -> IR
-
-(defun gdocs-convert--headline-to-ir (headline)
-  "Convert an org HEADLINE element to an IR element."
-  (let* ((level (org-element-property :level headline))
-         (style (gdocs-convert--level-to-style level))
-         (title-objects (org-element-property :title headline))
-         (contents (gdocs-convert--objects-to-runs title-objects))
-         (marker (gdocs-convert--headline-marker headline)))
-    (append (list :type 'paragraph
-                  :style style
-                  :style-name (gdocs-convert--heading-logical-style-name style)
-                  :contents contents
-                  :id (gdocs-convert--next-id))
-            (when marker (list :gdocs-marker marker)))))
-
-(defun gdocs-convert--heading-logical-style-name (style)
-  "Return logical Google Docs style name for heading STYLE."
-  (intern (format "gdocs-%s" style)))
-
-(defun gdocs-convert--level-to-style (level)
-  "Convert an org heading LEVEL (integer) to an IR style symbol.
-Levels above 6 are clamped to heading-6."
-  (intern (format "heading-%d" (min level 6))))
-
-(defun gdocs-convert--headline-marker (headline)
-  "Extract org-only marker data from HEADLINE, or return nil.
-Preserves TODO keywords, tags, priority, and scheduling info.
-Returns a list of marker plists, or nil if the headline has no
-preservable metadata."
-  (let* ((todo (org-element-property :todo-keyword headline))
-         (tags (org-element-property :tags headline))
-         (priority (org-element-property :priority headline))
-         (scheduled (org-element-property :scheduled headline))
-         (deadline (org-element-property :deadline headline))
-         (parts nil))
-    (when deadline
-      (push (list :type 'deadline
-                  :data (org-element-interpret-data deadline))
-            parts))
-    (when scheduled
-      (push (list :type 'scheduled
-                  :data (org-element-interpret-data scheduled))
-            parts))
-    (when priority
-      (push (list :type 'priority
-                  :data (char-to-string priority))
-            parts))
-    (when tags
-      (push (list :type 'tags
-                  :data (s-join ":" tags))
-            parts))
-    (when todo
-      (push (list :type 'todo :data todo) parts))
-    (when parts
-      parts)))
 
 ;; ---------------------------------------------------------------------------
 ;;; Paragraph -> IR
@@ -1694,42 +1544,6 @@ merge the heading text into that list item."
       (format "#+BEGIN_CENTER\n%s\n#+END_CENTER" text))
      (t text))))
 
-(defun gdocs-convert--heading-style-p (style)
-  "Return non-nil if STYLE is a heading style."
-  (and style
-       (string-prefix-p "heading-" (symbol-name style))))
-
-(defun gdocs-convert--format-heading (style text marker)
-  "Format a heading with STYLE, TEXT, and optional MARKER for org-only data."
-  (let* ((level (string-to-number
-                 (substring (symbol-name style)
-                            (length "heading-"))))
-         (stars (make-string level ?*))
-         (todo (gdocs-convert--extract-marker-field marker 'todo))
-         (tags (gdocs-convert--extract-marker-field marker 'tags))
-         (priority (gdocs-convert--extract-marker-field marker 'priority))
-         (head (concat stars " "
-                       (when todo (concat todo " "))
-                       (when priority (format "[#%s] " priority))
-                       text))
-         (scheduled (gdocs-convert--extract-marker-field marker 'scheduled))
-         (deadline (gdocs-convert--extract-marker-field marker 'deadline))
-         (planning-parts nil))
-    (when deadline
-      (push (format "DEADLINE: %s" deadline) planning-parts))
-    (when scheduled
-      (push (format "SCHEDULED: %s" scheduled) planning-parts))
-    (let ((heading (if tags
-                       (gdocs-convert--heading-with-tags head tags)
-                     head)))
-      (if planning-parts
-          (concat heading "\n" (s-join " " planning-parts))
-        heading))))
-
-(defun gdocs-convert--heading-with-tags (head tags-string)
-  "Format HEAD with TAGS-STRING aligned with org-mode convention."
-  (format "%s :%s:" head tags-string))
-
 (defun gdocs-convert--extract-marker-field (marker type-sym)
   "Extract the :data value for TYPE-SYM from MARKER.
 MARKER is a list of marker plists."
@@ -2625,19 +2439,6 @@ MARKERS may contain original Org source ownership metadata."
                        (> marker-end start))))
               markers))
 
-(defun gdocs-convert--normalize-heading-bold (runs)
-  "Treat uniform heading bold in RUNS as presentation, not inline emphasis.
-Keep contrasting partial bold and all other inline formatting.  Ignore plain
-whitespace runs introduced by text-run normalization when checking uniformity."
-  (let ((visible (seq-filter
-                  (lambda (run)
-                    (not (string-blank-p (or (plist-get run :text) ""))))
-                  runs)))
-    (if (and visible (seq-every-p (lambda (run) (plist-get run :bold)) visible))
-        (gdocs-convert--merge-adjacent-runs
-         (mapcar (lambda (run) (plist-put (copy-sequence run) :bold nil)) runs))
-      runs)))
-
 (defun gdocs-convert--docs-paragraph-to-ir (paragraph lists-map markers
                                                       &optional start end)
   "Convert a Google Docs PARAGRAPH to an IR element.
@@ -2683,16 +2484,11 @@ named-range marker data.  START and END are document indices."
 
 (defun gdocs-convert--docs-style-to-ir (named-style)
   "Convert a Google Docs NAMED-STYLE string to an IR style symbol."
-  (pcase named-style
-    ("TITLE" 'title)
-    ("SUBTITLE" 'subtitle)
-    ("HEADING_1" 'heading-1)
-    ("HEADING_2" 'heading-2)
-    ("HEADING_3" 'heading-3)
-    ("HEADING_4" 'heading-4)
-    ("HEADING_5" 'heading-5)
-    ("HEADING_6" 'heading-6)
-    (_ 'normal)))
+  (or (gdocs-convert--heading-docs-to-style named-style)
+      (pcase named-style
+        ("TITLE" 'title)
+        ("SUBTITLE" 'subtitle)
+        (_ 'normal))))
 
 (defun gdocs-convert--docs-logical-style-name (style)
   "Return the logical style name inferred from fetched Docs STYLE."
@@ -2902,13 +2698,6 @@ Requires `gdocs-convert--document-id' to be bound."
   (when (and heading-id gdocs-convert--document-id)
     (format "https://docs.google.com/document/d/%s/edit#heading=h.%s"
             gdocs-convert--document-id heading-id)))
-
-(defvar gdocs-convert-monospace-font-families
-  '("Courier New" "Consolas" "Source Code Pro" "Roboto Mono" "Courier")
-  "Font families recognized as monospace for code detection.
-Google Docs does not have a native code style, so we use font
-heuristics.  When pushing, code is set to `Courier New'; when
-pulling, any of these families is treated as code.")
 
 (defun gdocs-convert--docs-is-monospace-p (style)
   "Return non-nil if STYLE indicates a monospace/code font."
@@ -3709,7 +3498,7 @@ inserted with `insertDate' and count as one UTF-16 model unit."
                              padding
                              (or (plist-get style-plist :border-color)
                                  (plist-get style-plist :background-color)
-                                 "#FFFFFF"))
+                                 gdocs-style-default-border-color))
                             style))))
     (when-let ((background (plist-get style-plist :background-color)))
       (push `(shading . ((backgroundColor . ,(gdocs-convert--hex-to-color
@@ -3722,9 +3511,13 @@ inserted with `insertDate' and count as one UTF-16 model unit."
 FALLBACK-COLOR and FALLBACK-PADDING are used when SPEC omits :color or
 :padding.  SPEC may also provide :width in points."
   `((color . ,(gdocs-convert--hex-to-color
-               (or (plist-get spec :color) fallback-color "#FFFFFF")))
-    (width . ((magnitude . ,(or (plist-get spec :width) 1)) (unit . "PT")))
-    (padding . ((magnitude . ,(or (plist-get spec :padding) fallback-padding 0))
+               (or (plist-get spec :color) fallback-color
+                   gdocs-style-default-border-color)))
+    (width . ((magnitude . ,(or (plist-get spec :width)
+                               gdocs-style-default-border-width))
+              (unit . "PT")))
+    (padding . ((magnitude . ,(or (plist-get spec :padding) fallback-padding
+                                gdocs-style-default-border-padding))
                 (unit . "PT")))
     (dashStyle . "SOLID")))
 
@@ -3743,7 +3536,7 @@ BORDERS is an alist of (SIDE . SPEC), where SIDE is one of `top', `bottom',
 `gdocs-convert--paragraph-border-object'."
   (let ((fallback-color (or (plist-get style-plist :border-color)
                             (plist-get style-plist :background-color)
-                            "#FFFFFF"))
+                            gdocs-style-default-border-color))
         (fallback-padding (plist-get style-plist :border-padding)))
     (mapcar (lambda (entry)
               (cons (gdocs-convert--paragraph-border-field (car entry))
@@ -3754,7 +3547,9 @@ BORDERS is an alist of (SIDE . SPEC), where SIDE is one of `top', `bottom',
 (defun gdocs-convert--paragraph-padding-border-style (padding color)
   "Return paragraph borders with PADDING in points and COLOR."
   (let ((border (gdocs-convert--paragraph-border-object
-                 (list :color color :width 1 :padding padding) color padding)))
+                 (list :color color :width gdocs-style-default-border-width
+                       :padding padding)
+                 color padding)))
     `((borderTop . ,border)
       (borderBottom . ,border)
       (borderLeft . ,border)
@@ -3833,17 +3628,11 @@ BORDERS is an alist of (SIDE . SPEC), where SIDE is one of `top', `bottom',
 
 (defun gdocs-convert--ir-style-to-docs (style)
   "Convert an IR STYLE symbol to a Google Docs namedStyleType string."
-  (pcase style
-    ('title "TITLE")
-    ('subtitle "SUBTITLE")
-    ('heading-1 "HEADING_1")
-    ('heading-2 "HEADING_2")
-    ('heading-3 "HEADING_3")
-    ('heading-4 "HEADING_4")
-    ('heading-5 "HEADING_5")
-    ('heading-6 "HEADING_6")
-    ('normal "NORMAL_TEXT")
-    (_ "NORMAL_TEXT")))
+  (or (gdocs-convert--heading-style-to-docs style)
+      (pcase style
+        ('title "TITLE")
+        ('subtitle "SUBTITLE")
+        (_ "NORMAL_TEXT"))))
 
 (defun gdocs-convert--make-footnote-reference-requests (runs start-index)
   "Create extension requests for semantic footnote RUNS at START-INDEX.

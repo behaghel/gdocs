@@ -65,6 +65,22 @@ distinct layer of functionality:
 - =gdocs-convert.el= :: Bidirectional conversion between org-mode and
   Google Docs JSON via an intermediate representation (IR)
   ([[#h:format-conversion][Format conversion]]).
+- =gdocs-convert-headings.el= :: Heading levels, Org heading metadata,
+  and imported heading emphasis canonicalization.  Uniform heading bold is
+  presentation; contrasting partial bold and other inline emphasis remain
+  semantic.  Invisible emphasis distinctions are not reconstructed.
+- =gdocs-styles.el= :: Standalone presentation configuration.  The existing
+  =gdocs-style-definitions= and =gdocs-style-base-font-size= variables keep
+  their names and defaults.  Fonts, colours, paragraph spacing/indentation,
+  and border distances are resolved when requests are built, not stored as
+  source semantics.  Distances are in points.  Border fallback colour,
+  width, and padding are configurable through
+  =gdocs-style-default-border-color=, =gdocs-style-default-border-width=,
+  and =gdocs-style-default-border-padding=.  Configure a code font using
+  the =gdocs-code= logical style; =gdocs-convert-monospace-font-families=
+  supplies the fallback font and import recognition list.  Heading depth,
+  Google protocol units, and UTF-16 indices are semantic/protocol rules,
+  not presentation settings.
 - =gdocs-diff.el= :: Incremental diff engine that computes the minimal
   set of API requests to synchronize changes, using word-level diffs
   to preserve Google Docs comment anchors ([[#h:diff-engine][Diff engine]]).
