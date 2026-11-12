@@ -22,6 +22,17 @@
                 (or (null style) (eq (plist-get it :style) style)))
            ir))
 
+(defun gdocs-convert-test--render-docs-heading (level elements)
+  "Render a fetched heading at LEVEL with JSON paragraph ELEMENTS."
+  (gdocs-convert-ir-to-org
+   (gdocs-convert-docs-json-to-ir
+    (json-parse-string
+     (format (concat "{\"body\":{\"content\":[{\"paragraph\":{"
+                     "\"paragraphStyle\":{\"namedStyleType\":\"HEADING_%d\"},"
+                     "\"elements\":[%s]}}]}}")
+             level elements)
+     :object-type 'alist :false-object :json-false))))
+
 ;; ---------------------------------------------------------------------------
 ;;; Basic paragraph
 
@@ -50,6 +61,44 @@
                   (intern (format "heading-%d" level))))
       (should (eq (plist-get elem :style-name)
                   (intern (format "gdocs-heading-%d" level)))))))
+
+(ert-deftest gdocs-convert-test-docs-headings-do-not-wrap-titles-in-bold ()
+  "Fetched heading presentation does not create whole-title Org bold markup."
+  (dolist (level '(1 2 3 4 5 6))
+    (let* ((elements (format (concat "{\"textRun\":{\"content\":\"Section %d\\n\","
+                                     "\"textStyle\":{\"bold\":%s}}}")
+                             level (if (>= level 3) "true" "false")))
+           (result (gdocs-convert-test--render-docs-heading level elements)))
+      (should (equal result (format "%s Section %d\n" (make-string level ?*) level))))))
+
+(ert-deftest gdocs-convert-test-docs-headings-preserve-contrasting-italic ()
+  "Removing whole-heading bold must retain independently visible italic text."
+  (let ((elements
+         (concat "{\"textRun\":{\"content\":\"Alpha \",\"textStyle\":{\"bold\":true}}},"
+                 "{\"textRun\":{\"content\":\"careful\",\"textStyle\":{\"bold\":true,\"italic\":true}}},"
+                 "{\"textRun\":{\"content\":\" heading\\n\",\"textStyle\":{\"bold\":true}}}")))
+    (should (equal (gdocs-convert-test--render-docs-heading 3 elements)
+                   "*** Alpha /careful/ heading\n"))))
+
+(ert-deftest gdocs-convert-test-docs-headings-preserve-partial-bold ()
+  "Bold contrasting with the rest of a fetched heading remains authored markup."
+  (let ((elements
+         (concat "{\"textRun\":{\"content\":\"Alpha \",\"textStyle\":{\"bold\":false}}},"
+                 "{\"textRun\":{\"content\":\"careful\",\"textStyle\":{\"bold\":true}}},"
+                 "{\"textRun\":{\"content\":\" heading\\n\",\"textStyle\":{\"bold\":false}}}")))
+    (should (equal (gdocs-convert-test--render-docs-heading 3 elements)
+                   "*** Alpha *careful* heading\n"))))
+
+(ert-deftest gdocs-convert-test-docs-body-keeps-uniform-bold ()
+  "Whole-paragraph bold in normal body text remains semantic Org emphasis."
+  (let* ((json (json-parse-string
+                (concat "{\"body\":{\"content\":[{\"paragraph\":{"
+                        "\"paragraphStyle\":{\"namedStyleType\":\"NORMAL_TEXT\"},"
+                        "\"elements\":[{\"textRun\":{\"content\":\"Bold body.\\n\","
+                        "\"textStyle\":{\"bold\":true}}}]}}]}}")
+                :object-type 'alist))
+         (result (gdocs-convert-ir-to-org (gdocs-convert-docs-json-to-ir json))))
+    (should (equal result "*Bold body.*\n"))))
 
 (ert-deftest gdocs-convert-test-heading-level-7-clamped ()
   "Heading level 7+ is clamped to heading-6."

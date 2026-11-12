@@ -2625,8 +2625,21 @@ MARKERS may contain original Org source ownership metadata."
                        (> marker-end start))))
               markers))
 
+(defun gdocs-convert--normalize-heading-bold (runs)
+  "Treat uniform heading bold in RUNS as presentation, not inline emphasis.
+Keep contrasting partial bold and all other inline formatting.  Ignore plain
+whitespace runs introduced by text-run normalization when checking uniformity."
+  (let ((visible (seq-filter
+                  (lambda (run)
+                    (not (string-blank-p (or (plist-get run :text) ""))))
+                  runs)))
+    (if (and visible (seq-every-p (lambda (run) (plist-get run :bold)) visible))
+        (gdocs-convert--merge-adjacent-runs
+         (mapcar (lambda (run) (plist-put (copy-sequence run) :bold nil)) runs))
+      runs)))
+
 (defun gdocs-convert--docs-paragraph-to-ir (paragraph lists-map markers
-                                                     &optional start end)
+                                                      &optional start end)
   "Convert a Google Docs PARAGRAPH to an IR element.
 LISTS-MAP is the document lists property.  MARKERS is parsed
 named-range marker data.  START and END are document indices."
@@ -2641,10 +2654,14 @@ named-range marker data.  START and END are document indices."
          (list-info (when bullet
                       (gdocs-convert--docs-bullet-to-list
                        bullet lists-map markers start end style-obj)))
+         (contents (if (and (not list-info)
+                            (gdocs-convert--heading-style-p ir-style))
+                       (gdocs-convert--normalize-heading-bold trimmed)
+                     trimmed))
          (ir-alignment (gdocs-convert--docs-alignment-to-ir alignment)))
     (append (list :type 'paragraph
                   :style (if list-info 'normal ir-style)
-                  :contents (or trimmed nil)
+                  :contents contents
                   :id (gdocs-convert--next-id))
             (unless list-info
               (when-let* ((style-name
