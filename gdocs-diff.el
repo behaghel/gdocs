@@ -118,6 +118,9 @@ identical keys."
 (defun gdocs-diff--run-semantic-text (run)
   "Return semantic text contribution for RUN."
   (cond
+   ((plist-get run :status)
+    (format "@status%S" (list (plist-get run :status)
+                              (substring-no-properties (plist-get run :text)))))
    ((plist-get run :date-element)
     (let ((date (plist-get run :date-element)))
       (format "@date(%s:%s)"
@@ -241,24 +244,25 @@ Google Docs often splits whitespace into separate text runs after fetch."
 
 (defun gdocs-diff--run-formatting-key (run)
   "Produce a formatting fingerprint string for RUN."
-  (format "%s%s%s%s%s%s%s%s"
-          (if (plist-get run :bold) "B" "")
-          (if (plist-get run :italic) "I" "")
-          (if (plist-get run :underline) "U" "")
-          (if (plist-get run :strikethrough) "S" "")
-          (if (plist-get run :code) "C" "")
-          (if-let* ((style-names (plist-get run :style-names)))
-              (format "Y(%s)" (mapconcat #'symbol-name style-names ","))
-            "")
-          (if (plist-get run :link) (format "L(%s)" (plist-get run :link)) "")
-          (if-let* ((date (plist-get run :date-element)))
-              (format "D(%s:%s)"
-                      (plist-get date :timestamp)
-                      (if (plist-get date :active) "active" "inactive"))
-            "")
-          (if (plist-get run :footnote-label)
-              (format "F(%s)" (plist-get run :footnote-label))
-            "")))
+  (concat (when (plist-get run :status) (format "T%S" (plist-get run :status)))
+          (format "%s%s%s%s%s%s%s%s%s"
+                  (if (plist-get run :bold) "B" "")
+                  (if (plist-get run :italic) "I" "")
+                  (if (plist-get run :underline) "U" "")
+                  (if (plist-get run :strikethrough) "S" "")
+                  (if (plist-get run :code) "C" "")
+                  (if-let* ((style-names (plist-get run :style-names)))
+                      (format "Y(%s)" (mapconcat #'symbol-name style-names ","))
+                    "")
+                  (if (plist-get run :link) (format "L(%s)" (plist-get run :link)) "")
+                  (if-let* ((date (plist-get run :date-element)))
+                      (format "D(%s:%s)"
+                              (plist-get date :timestamp)
+                              (if (plist-get date :active) "active" "inactive"))
+                    "")
+                  (if (plist-get run :footnote-label)
+                      (format "F(%s)" (plist-get run :footnote-label))
+                    ""))))
 
 (defun gdocs-diff--list-key (list-info)
   "Produce a key fragment for LIST-INFO, or empty string if nil."
@@ -539,7 +543,8 @@ START-INDEX is the UTF-16 index where the first element begins."
           (when (< start end)
             (push (list :index start
                         :sort-phase gdocs-diff--sort-phase-delete/modify
-                        :reqs (list (gdocs-diff--make-delete-request start end)))
+                        :reqs (append (gdocs-diff--status-marker-delete-requests (plist-get elem :contents))
+                                      (list (gdocs-diff--make-delete-request start end))))
                   groups)))))
     ;; Modifications (keep delete+insert+style together)
     (dolist (op diff-ops)
@@ -686,6 +691,11 @@ RANGE is a (START . END) cons.  Returns a plist with
          (cond
           ((gdocs-diff--only-marker-changed-p old-elem new-elem)
            (gdocs-diff--marker-only-modification new-elem range))
+          ((and (eq (plist-get old-elem :type) 'paragraph)
+                (eq (plist-get new-elem :type) 'paragraph)
+                (seq-some (lambda (run) (plist-get run :status))
+                          (append (plist-get old-elem :contents) (plist-get new-elem :contents))))
+           (gdocs-diff--content-modification old-elem new-elem range))
           ((gdocs-diff--only-style-changed-p old-elem new-elem)
            (gdocs-diff--style-only-modification old-elem new-elem range))
           ((gdocs-diff--only-formatting-changed-p old-elem new-elem)
@@ -804,7 +814,7 @@ followed by per-run style requests for the new formatting."
                       (gdocs-convert--make-text-style-reset-request
                        start reset-end)))
          (runs (plist-get new-elem :contents))
-         (style-reqs (gdocs-convert--make-text-style-requests runs start))
+         (style-reqs (gdocs-convert-make-text-style-requests runs start nil t))
          (footnote-reqs
           (gdocs-convert--make-footnote-reference-requests runs start)))
     (list :delete-reqs nil
@@ -862,7 +872,8 @@ comment anchors on unchanged text."
       (let* ((delete-req (gdocs-diff--make-delete-request start end))
              (insert-result (gdocs-convert--ir-element-to-requests
                              new-elem start)))
-        (list :delete-reqs (list delete-req)
+        (list :delete-reqs (append (gdocs-diff--status-marker-delete-requests
+                                    (plist-get old-elem :contents)) (list delete-req))
               :insert-reqs (plist-get insert-result :requests)
               :style-reqs nil)))))
 
@@ -951,8 +962,42 @@ with :text, :offset (UTF-16 offset from start of TEXT), and
               tokens)))
     (nreverse tokens)))
 
+(defun gdocs-diff--status-marker-delete-requests (runs)
+  "Delete provider marker IDs attached to status RUNS before changing their text."
+  (mapcar (lambda (id) `((deleteNamedRange . ((namedRangeId . ,id)))))
+          (delete-dups (cl-mapcan
+                        (lambda (run) (copy-sequence (plist-get run :status-marker-ids))) runs))))
+
+(defun gdocs-diff--tokenize-status-runs (runs)
+  "Tokenize RUNS while keeping each semantic status as one atomic token."
+  (let ((tokens nil) (plain nil) (offset 0))
+    (cl-labels ((flush ()
+                  (when plain
+                    (let ((text (apply #'concat (nreverse plain))))
+                      (dolist (token (gdocs-diff--tokenize-text text))
+                        (plist-put token :offset (+ offset (plist-get token :offset)))
+                        (push token tokens))
+                      (setq offset (+ offset (gdocs-convert--string-to-utf16-length text))
+                            plain nil)))))
+               (dolist (run runs)
+                 (when (or (plist-get run :date-element) (plist-get run :footnote-label))
+                   (user-error "Status labels mixed with native dates or footnotes in one paragraph are unsupported"))
+                 (if (plist-get run :status)
+                     (progn
+                       (flush)
+                       (let* ((text (plist-get run :text))
+                              (length (gdocs-convert--string-to-utf16-length text)))
+                         (push (list :text text :offset offset :length length
+                                     :status (plist-get run :status)
+                                     :status-marker-ids (plist-get run :status-marker-ids)
+                                     :key (list 'status (plist-get run :status) (substring-no-properties text))) tokens)
+                         (setq offset (+ offset length))))
+                   (push (plist-get run :text) plain)))
+               (flush))
+    (nreverse tokens)))
+
 (defun gdocs-diff--word-level-paragraph-modification (old-elem new-elem
-                                                                start end)
+                                                               start end)
   "Generate word-level diff requests for a paragraph text change.
 OLD-ELEM and NEW-ELEM are paragraph elements.  START and END are
 the document range of OLD-ELEM (END includes trailing newline).
@@ -964,20 +1009,37 @@ tokens so that comment anchors on unchanged text survive."
                     (plist-get old-elem :contents)))
          (new-text (gdocs-convert--runs-to-plain-text
                     (plist-get new-elem :contents)))
-         (old-tokens (gdocs-diff--tokenize-text old-text))
-         (new-tokens (gdocs-diff--tokenize-text new-text))
-         (old-strs (mapcar (lambda (tk) (plist-get tk :text)) old-tokens))
-         (new-strs (mapcar (lambda (tk) (plist-get tk :text)) new-tokens))
+         (has-status (seq-some (lambda (run) (plist-get run :status))
+                               (append (plist-get old-elem :contents) (plist-get new-elem :contents))))
+         (same-visible-text (and has-status (equal old-text new-text)))
+         (old-tokens (if has-status (gdocs-diff--tokenize-status-runs (plist-get old-elem :contents))
+                       (gdocs-diff--tokenize-text old-text)))
+         (new-tokens (if has-status (gdocs-diff--tokenize-status-runs (plist-get new-elem :contents))
+                       (gdocs-diff--tokenize-text new-text)))
+         (old-strs (mapcar (lambda (tk) (or (plist-get tk :key) (plist-get tk :text))) old-tokens))
+         (new-strs (mapcar (lambda (tk) (or (plist-get tk :key) (plist-get tk :text))) new-tokens))
          (lcs-pairs (gdocs-diff--lcs old-strs new-strs))
          ;; Build kept-index sets and new→old index mapping
          (old-kept (make-hash-table :test 'eql))
          (new-kept (make-hash-table :test 'eql))
          (new-to-old (make-hash-table :test 'eql)))
     (dolist (pair lcs-pairs)
-      (puthash (car pair) t old-kept)
-      (puthash (cdr pair) t new-kept)
-      (puthash (cdr pair) (car pair) new-to-old))
-    (let* ((delete-ranges (gdocs-diff--deleted-token-ranges
+      (let ((old-token (nth (car pair) old-tokens))
+            (new-token (nth (cdr pair) new-tokens)))
+        ;; With identical visible text no characters move: a moved semantic
+        ;; boundary requires a new marker, not an LCS-based retained marker.
+        (unless (and same-visible-text (plist-get new-token :status)
+                     (/= (plist-get old-token :offset) (plist-get new-token :offset)))
+          (puthash (car pair) t old-kept)
+          (puthash (cdr pair) t new-kept)
+          (puthash (cdr pair) (car pair) new-to-old))))
+    (let* ((marker-deletions
+            (when has-status
+              (gdocs-diff--status-marker-delete-requests
+               (cl-loop for token in old-tokens for index from 0
+                        when (and (plist-get token :status) (not (gethash index old-kept)))
+                        collect token))))
+           (delete-ranges (gdocs-diff--deleted-token-ranges
                            old-tokens old-kept start))
            (delete-reqs
             (mapcar (lambda (r)
@@ -999,14 +1061,34 @@ tokens so that comment anchors on unchanged text survive."
            (style-reqs (gdocs-convert--make-paragraph-style-requests
                         new-elem start para-end))
            (runs (plist-get new-elem :contents))
-           (run-reqs (gdocs-convert--make-text-style-requests runs start))
+           (reset-reqs
+            (when (and has-status (> new-text-len 0))
+              (let ((reset (gdocs-convert--make-text-style-reset-request start (+ start new-text-len))))
+                (setf (alist-get 'fields (alist-get 'updateTextStyle reset))
+                      (concat (alist-get 'fields (alist-get 'updateTextStyle reset)) ",link"))
+                (list reset))))
+           (logical-reqs
+            (when (and has-status (plist-get new-elem :style-name) (> new-text-len 0))
+              (when-let* ((request (gdocs-convert--logical-style-text-request
+                                    (plist-get new-elem :style-name) start (+ start new-text-len))))
+                (list request))))
+           (run-reqs (gdocs-convert-make-text-style-requests runs start nil has-status))
+           (status-markers
+            (when has-status
+              (cl-loop for token in new-tokens for index from 0
+                       when (and (plist-get token :status) (not (gethash index new-kept)))
+                       collect (gdocs-convert--status-marker-request
+                                (plist-get token :status)
+                                (+ start (plist-get token :offset))
+                                (+ start (plist-get token :offset) (plist-get token :length))))))
            (list-reqs (gdocs-convert--make-list-requests
                        new-elem start para-end))
            (footnote-reqs
             (gdocs-convert--make-footnote-reference-requests runs start)))
-      (list :delete-reqs delete-reqs
-            :insert-reqs (append insert-reqs style-reqs run-reqs list-reqs
-                                 footnote-reqs)
+      (list :delete-reqs (append marker-deletions (unless same-visible-text delete-reqs))
+            :insert-reqs (append (unless same-visible-text insert-reqs)
+                                 style-reqs reset-reqs logical-reqs
+                                 run-reqs status-markers list-reqs footnote-reqs)
             :style-reqs nil))))
 
 (defun gdocs-diff--deleted-token-ranges (old-tokens old-kept start)

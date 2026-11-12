@@ -675,7 +675,9 @@ on elements that were not changed remotely."
                            example-block quote-block callout-block footnote))
         (and (eq type 'paragraph)
              (or (not (eq (or (plist-get element :style) 'normal) 'normal))
-                 (plist-get element :list))))))
+                 (plist-get element :list)
+                 (seq-some (lambda (run) (plist-get run :status))
+                           (plist-get element :contents)))))))
 
 (defun gdocs-sync--semantic-ir-p (ir)
   "Return non-nil when IR contains rich semantic structure."

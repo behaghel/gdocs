@@ -925,28 +925,108 @@ Post-blank whitespace is handled by `gdocs-convert--object-to-runs'."
          (new-props (gdocs-convert--code-props inherited-props)))
     (list (gdocs-convert--make-run value new-props))))
 
+(defconst gdocs-convert--status-default-styles
+  '((grey :bold t :foreground-color "#3C4043" :background-color "#E2E3E5")
+    (red :bold t :foreground-color "#A50E0E" :background-color "#FCE8E6")
+    (yellow :bold t :foreground-color "#7A4F01" :background-color "#FEF7E0")
+    (green :bold t :foreground-color "#137333" :background-color "#E6F4EA")
+    (blue :bold t :foreground-color "#174EA6" :background-color "#E8F0FE")
+    (purple :bold t :foreground-color "#681DA8" :background-color "#F3E8FD"))
+  "Neutral status colours, overridden by gdocs-status-COLOR logical styles.")
+
+(defun gdocs-convert--status-docs-style (status)
+  "Return the Docs text style for semantic STATUS."
+  (let* ((key (gdocs-convert--status-color-key (plist-get status :color)))
+         (definition (assq (intern (concat "gdocs-status-" key)) gdocs-style-definitions)))
+    (gdocs-convert--logical-text-style-to-docs
+     (if definition (plist-get (cdr definition) :text)
+       (cdr (assq (intern key) gdocs-convert--status-default-styles))))))
+
+(defun gdocs-convert--status-marker-request (status start end &optional segment-id)
+  "Return the semantic STATUS marker covering START to END.
+SEGMENT-ID must be nil; status labels inside footnotes are unsupported."
+  (when segment-id (user-error "Status labels inside document segments are unsupported"))
+  `((createNamedRange
+     . ((name . ,(format "gdocs-org-marker:status:run-%d:%s:%s:%d"
+                         start (plist-get status :link-type) (plist-get status :color)
+                         (if (plist-get status :described) 1 0)))
+        (range . ,(gdocs-convert--text-range start end))))))
+
+(defun gdocs-convert--status-color-key (color)
+  "Return the supported logical status key for COLOR, or signal an error."
+  (let ((key (downcase (or color ""))))
+    (when (equal key "gray") (setq key "grey"))
+    (unless (member key '("grey" "red" "yellow" "green" "blue" "purple"))
+      (user-error "Unsupported status colour `%s'" color))
+    key))
+
+(defun gdocs-convert--status-link-to-run (link inherited-props)
+  "Convert a static status LINK to a semantic run, or return nil.
+Reject rich labels and unsupported contexts instead of making a colour URL.
+INHERITED-PROPS must not add invisible emphasis to the generated pill style."
+  (let ((raw (org-element-property :raw-link link))
+        (case-fold-search t))
+    (when (and raw (string-match "\\`\\(status\\|confluence-status\\):\\(.*\\)\\'" raw))
+      (let* ((protocol (match-string 1 raw))
+             (color (match-string 2 raw))
+             (children (org-element-contents link))
+             (label (substring-no-properties
+                     (if children (apply #'concat (seq-filter #'stringp children)) color)))
+             (container (org-element-lineage link '(paragraph headline))))
+        (gdocs-convert--status-color-key color)
+        (when (or (not (seq-every-p #'stringp children))
+                  (seq-some (lambda (key) (plist-get inherited-props key))
+                            '(:bold :italic :underline :strikethrough :code :subscript :superscript))
+                  (org-element-lineage link '(table footnote-definition footnote-reference)))
+          (user-error "Status labels support plain body/list/heading text only; no rich label, table, or footnote"))
+        (when (and container
+                   (org-element-map
+                    (if (eq (org-element-type container) 'headline)
+                        (org-element-property :title container) container)
+                    '(timestamp footnote-reference) #'identity nil t))
+          (user-error "Status labels mixed with native dates or footnotes in one paragraph are unsupported"))
+        (when (or (string-blank-p label) (string-match-p "[\n\r]" label))
+          (user-error "A status label must be nonempty and stay in one paragraph"))
+        (plist-put (gdocs-convert--make-plain-run label) :status
+                   (list :link-type protocol :color color :described (not (null children))))))))
+
+(defun gdocs-convert--status-run-to-org (run)
+  "Render semantic status RUN using its original link spelling and label."
+  (let* ((status (plist-get run :status))
+         (target (format "%s:%s" (plist-get status :link-type) (plist-get status :color)))
+         (text (plist-get run :text)))
+    (when (or (not (stringp text)) (string-blank-p text)
+              (string-match-p "[\n\r]\\|\\]\\]" text))
+      (user-error "Status label cannot be represented as a single plain Org link description"))
+    (if (or (plist-get status :described)
+            (not (equal text (plist-get status :color))))
+        (format "[[%s][%s]]" target text)
+      (format "[[%s]]" target))))
+
 (defun gdocs-convert--link-to-runs (link inherited-props)
   "Convert a LINK object to text runs with :link set.
 INHERITED-PROPS carries parent formatting.  Preserves any
 formatting (e.g. italic, bold) within the link description.
 When the URL is nil (e.g. an org file with no Google Doc
 counterpart), emits plain text with no hyperlink."
-  (let* ((url (gdocs-convert--link-url link))
-         (children (org-element-contents link))
-         (props (if url
-                    (plist-put (copy-sequence inherited-props) :link url)
-                  inherited-props)))
-    (if children
-        (let ((runs nil))
-          (dolist (child children)
-            (setq runs (nconc runs
-                              (gdocs-convert--object-to-runs child props))))
-          (or runs (list (gdocs-convert--make-run
-                          (or url (org-element-property :raw-link link))
-                          props))))
-      (list (gdocs-convert--make-run
-             (or url (org-element-property :raw-link link))
-             props)))))
+  (if-let* ((status (gdocs-convert--status-link-to-run link inherited-props)))
+      (list status)
+    (let* ((url (gdocs-convert--link-url link))
+           (children (org-element-contents link))
+           (props (if url
+                      (plist-put (copy-sequence inherited-props) :link url)
+                    inherited-props)))
+      (if children
+          (let ((runs nil))
+            (dolist (child children)
+              (setq runs (nconc runs
+                                (gdocs-convert--object-to-runs child props))))
+            (or runs (list (gdocs-convert--make-run
+                            (or url (org-element-property :raw-link link))
+                            props))))
+        (list (gdocs-convert--make-run
+               (or url (org-element-property :raw-link link))
+               props))))))
 
 (defun gdocs-convert--link-url (link)
   "Extract the URL string from a LINK element.
@@ -1791,37 +1871,39 @@ indent continuation lines to keep them inside the list item."
   "Convert a single text RUN plist to an org-formatted string.
 When `gdocs-convert--link-context' is bound, reverse-resolves
 Google Docs URLs back to org file: links."
-  (if-let* ((label (plist-get run :footnote-label)))
-      (format "[fn:%s]" label)
-    (let ((text (plist-get run :text))
-        (bold (plist-get run :bold))
-        (italic (plist-get run :italic))
-        (underline (plist-get run :underline))
-        (strikethrough (plist-get run :strikethrough))
-        (code (plist-get run :code))
-        (link (plist-get run :link)))
-    (when code
-      (setq text (format "~%s~" text)))
-    ;; Apply link before emphasis so emphasis wraps the whole link,
-    ;; producing *[[url][text]]* rather than [[url][*text*]].
-    (when link
-      (let ((resolved-link (if gdocs-convert--link-context
-                               (gdocs-convert--reverse-resolve-link link)
-                             link)))
-        (setq text (format "[[%s][%s]]" resolved-link text))))
-    (when bold
-      (setq text (gdocs-convert--wrap-emphasis "*" text)))
-    (when italic
-      (setq text (gdocs-convert--wrap-emphasis "/" text)))
-    (when underline
-      (setq text (gdocs-convert--wrap-emphasis "_" text)))
-    (when strikethrough
-      (setq text (gdocs-convert--wrap-emphasis "+" text)))
-    (when (plist-get run :subscript)
-      (setq text (format "_{%s}" text)))
-    (when (plist-get run :superscript)
-      (setq text (format "^{%s}" text)))
-    text)))
+  (if (plist-get run :status)
+      (gdocs-convert--status-run-to-org run)
+    (if-let* ((label (plist-get run :footnote-label)))
+        (format "[fn:%s]" label)
+      (let ((text (plist-get run :text))
+            (bold (plist-get run :bold))
+            (italic (plist-get run :italic))
+            (underline (plist-get run :underline))
+            (strikethrough (plist-get run :strikethrough))
+            (code (plist-get run :code))
+            (link (plist-get run :link)))
+        (when code
+          (setq text (format "~%s~" text)))
+        ;; Apply link before emphasis so emphasis wraps the whole link,
+        ;; producing *[[url][text]]* rather than [[url][*text*]].
+        (when link
+          (let ((resolved-link (if gdocs-convert--link-context
+                                   (gdocs-convert--reverse-resolve-link link)
+                                 link)))
+            (setq text (format "[[%s][%s]]" resolved-link text))))
+        (when bold
+          (setq text (gdocs-convert--wrap-emphasis "*" text)))
+        (when italic
+          (setq text (gdocs-convert--wrap-emphasis "/" text)))
+        (when underline
+          (setq text (gdocs-convert--wrap-emphasis "_" text)))
+        (when strikethrough
+          (setq text (gdocs-convert--wrap-emphasis "+" text)))
+        (when (plist-get run :subscript)
+          (setq text (format "_{%s}" text)))
+        (when (plist-get run :superscript)
+          (setq text (format "^{%s}" text)))
+        text))))
 
 (defun gdocs-convert--reverse-resolve-link (url)
   "Reverse-resolve a Google Docs URL to an org link.
@@ -2536,7 +2618,7 @@ KIND can be `active' or `inactive'; omitted KIND defaults to active."
     (nreverse result)))
 
 (defun gdocs-convert--structural-element-to-ir (element lists-map markers
-                                                       &optional inline-objects)
+                                                        &optional inline-objects)
   "Convert a Google Docs structural ELEMENT to IR.
 LISTS-MAP is the document's lists property for bullet type
 lookup.  MARKERS is an alist of element markers from named ranges.
@@ -2553,6 +2635,13 @@ INLINE-OBJECTS is the document's inline object metadata map."
            (alist-get 'startIndex element)
            (alist-get 'endIndex element)))))
    ((alist-get 'table element)
+    (when (seq-some (lambda (marker)
+                      (and (eq (plist-get marker :type) 'status)
+                           (< (plist-get marker :start) (plist-get marker :end))))
+                    (gdocs-convert--markers-for-range markers
+                                                      (alist-get 'startIndex element)
+                                                      (alist-get 'endIndex element)))
+      (user-error "Status labels inside Google Docs tables are not supported"))
     (gdocs-convert--docs-table-to-ir (alist-get 'table element)))
    ((alist-get 'sectionBreak element)
     nil)
@@ -2631,7 +2720,8 @@ Keep contrasting partial bold and all other inline formatting.  Ignore plain
 whitespace runs introduced by text-run normalization when checking uniformity."
   (let ((visible (seq-filter
                   (lambda (run)
-                    (not (string-blank-p (or (plist-get run :text) ""))))
+                    (and (not (plist-get run :status))
+                         (not (string-blank-p (or (plist-get run :text) "")))))
                   runs)))
     (if (and visible (seq-every-p (lambda (run) (plist-get run :bold)) visible))
         (gdocs-convert--merge-adjacent-runs
@@ -2670,7 +2760,8 @@ named-range marker data.  START and END are document indices."
             (when list-info (list :list list-info))
             (when ir-alignment (list :alignment ir-alignment))
             (when-let* ((paragraph-markers
-                         (gdocs-convert--markers-for-range markers start end)))
+                         (seq-remove (lambda (marker) (eq (plist-get marker :type) 'status))
+                                     (gdocs-convert--markers-for-range markers start end))))
               (list :gdocs-marker paragraph-markers)))))
 
 (defun gdocs-convert--docs-alignment-to-ir (alignment)
@@ -2703,33 +2794,103 @@ named-range marker data.  START and END are document indices."
      (gdocs-convert--heading-logical-style-name heading-style))
     (_ nil)))
 
+(defun gdocs-convert--status-marker-data (marker)
+  "Decode and validate semantic status MARKER data."
+  (let* ((parts (s-split ":" (or (plist-get marker :data) "")))
+         (protocol (nth 0 parts)) (color (nth 1 parts)) (described (nth 2 parts)))
+    (unless (and (= (length parts) 3)
+                 (member (downcase protocol) '("status" "confluence-status"))
+                 (member described '("0" "1")))
+      (user-error "Invalid status marker metadata"))
+    (gdocs-convert--status-color-key color)
+    (list :link-type protocol :color color :described (equal described "1"))))
+
+(defun gdocs-convert--utf16-string-index (text units)
+  "Return the character index in TEXT at exactly UNITS UTF-16 code units."
+  (let ((index 0) (offset 0))
+    (while (and (< offset units) (< index (length text)))
+      (setq offset (+ offset (if (> (aref text index) #xFFFF) 2 1))
+            index (1+ index)))
+    (unless (= offset units)
+      (user-error "Status marker splits a Unicode character or exceeds its text"))
+    index))
+
+(defun gdocs-convert--docs-status-text-parts (element markers)
+  "Split text ELEMENT at semantic status MARKERS, returning (MARKER . RUN) pairs."
+  (let* ((run (gdocs-convert--docs-text-run-to-ir (alist-get 'textRun element)))
+         (text (plist-get run :text))
+         (start (or (alist-get 'startIndex element) 0))
+         (end (+ start (gdocs-convert--string-to-utf16-length text)))
+         (statuses (seq-filter
+                    (lambda (marker)
+                      (and (eq (plist-get marker :type) 'status)
+                           (< (plist-get marker :start) end)
+                           (> (plist-get marker :end) start))) markers)))
+    (if (null statuses)
+        (list (cons nil run))
+      (let* ((cuts (sort (delete-dups
+                          (append (list start end)
+                                  (cl-mapcan (lambda (marker)
+                                               (list (max start (plist-get marker :start))
+                                                     (min end (plist-get marker :end)))) statuses))) #'<))
+             (parts nil))
+        (while (cdr cuts)
+          (let* ((a (car cuts)) (b (cadr cuts))
+                 (covering (seq-filter (lambda (marker)
+                                         (and (<= (plist-get marker :start) a)
+                                              (>= (plist-get marker :end) b))) statuses))
+                 (marker (car covering))
+                 (value (substring text
+                                   (gdocs-convert--utf16-string-index text (- a start))
+                                   (gdocs-convert--utf16-string-index text (- b start))))
+                 (part (if marker (gdocs-convert--make-plain-run value)
+                         (plist-put (copy-sequence run) :text value))))
+            (when (> (length covering) 1)
+              (user-error "Overlapping status markers require manual review"))
+            (when marker
+              (when (string-match-p "[\n\r]" value)
+                (user-error "A status marker cannot cross paragraph boundaries"))
+              (plist-put part :status (gdocs-convert--status-marker-data marker))
+              (plist-put part :status-marker-ids (list (plist-get marker :range-id))))
+            (push (cons marker part) parts))
+          (setq cuts (cdr cuts)))
+        (nreverse parts)))))
+
 (defun gdocs-convert--docs-elements-to-runs (elements &optional markers)
   "Convert Google Docs paragraph ELEMENTS to IR text runs.
 ELEMENTS may be a list or a vector.  MARKERS can carry stable Org labels for
 native Google Docs footnote references.  Adjacent runs with identical formatting
 are merged, and edge whitespace on formatted runs is normalized."
-  (let ((runs nil))
+  (let ((runs nil) previous-marker)
     (seq-doseq (el elements)
-      (let ((text-run (alist-get 'textRun el))
-            (footnote-ref (alist-get 'footnoteReference el))
-            (date-element (alist-get 'dateElement el)))
-        (cond
-         (text-run
-          (push (gdocs-convert--docs-text-run-to-ir text-run) runs))
-         (footnote-ref
-          (push (gdocs-convert--docs-footnote-reference-to-run
-                 footnote-ref markers
-                 (alist-get 'startIndex el)
-                 (alist-get 'endIndex el))
-                runs))
-         (date-element
-          (push (gdocs-convert--docs-date-element-to-run
-                 date-element markers
-                 (alist-get 'startIndex el)
-                 (alist-get 'endIndex el))
-                runs)))))
+      (let* ((footnote-ref (alist-get 'footnoteReference el))
+             (date-element (alist-get 'dateElement el))
+             (parts
+              (cond
+               ((alist-get 'textRun el) (gdocs-convert--docs-status-text-parts el markers))
+               (footnote-ref
+                (list (cons nil (gdocs-convert--docs-footnote-reference-to-run
+                                 footnote-ref markers (alist-get 'startIndex el) (alist-get 'endIndex el)))))
+               (date-element
+                (list (cons nil (gdocs-convert--docs-date-element-to-run
+                                 date-element markers (alist-get 'startIndex el) (alist-get 'endIndex el)))))
+               ((assq 'dropdown el)
+                (user-error "Native dropdown choices have no static Org status mapping")))))
+        (dolist (part parts)
+          (let ((marker (car part)) (run (cdr part)))
+            (if (and marker (eq marker previous-marker))
+                (plist-put (car runs) :text
+                           (concat (plist-get (car runs) :text) (plist-get run :text)))
+              (push run runs))
+            (setq previous-marker marker)))))
+    (setq runs (nreverse runs))
+    (dolist (run runs)
+      (when-let* ((status (plist-get run :status)))
+        (when (and (not (plist-get status :described))
+                   (not (equal (plist-get run :text) (plist-get status :color))))
+          (plist-put run :status (plist-put (copy-sequence status) :described t)))))
     (gdocs-convert--normalize-run-whitespace
-     (gdocs-convert--merge-adjacent-runs (nreverse runs)))))
+     (gdocs-convert--merge-adjacent-runs runs))))
 
 (defun gdocs-convert--merge-adjacent-runs (runs)
   "Merge adjacent RUNS that have identical formatting.
@@ -2751,7 +2912,9 @@ coarser run boundaries that org-element produces."
 (defun gdocs-convert--runs-same-format-p (a b)
   "Return non-nil if runs A and B have identical formatting."
   (and (not (or (plist-get a :date-element)
-                (plist-get b :date-element)))
+                (plist-get b :date-element)
+                (plist-get a :status)
+                (plist-get b :status)))
        (eq (plist-get a :bold) (plist-get b :bold))
        (eq (plist-get a :italic) (plist-get b :italic))
        (eq (plist-get a :underline) (plist-get b :underline))
@@ -2929,7 +3092,7 @@ may have trailing whitespace-only runs before it."
                (text (plist-get last-run :text))
                (trimmed (s-trim-right text)))
           (cond
-           ((plist-get last-run :footnote-label)
+           ((or (plist-get last-run :footnote-label) (plist-get last-run :status))
             (setq done t))
            ((string-empty-p trimmed)
             (setq result (butlast result)))
@@ -3142,15 +3305,25 @@ the IR element.  Returns marker plists with range metadata when available."
                      (string= (car parts) "gdocs-org-marker"))
             (seq-doseq (range-entry (alist-get 'namedRanges named-range))
               (let* ((ranges (alist-get 'ranges range-entry))
-                     (range (if (vectorp ranges)
-                                (aref ranges 0)
-                              (car ranges))))
-                (push (list :type (intern (nth 1 parts))
-                            :id (nth 2 parts)
-                            :data (when (> (length parts) 3)
-                                    (s-join ":" (nthcdr 3 parts)))
-                            :start (alist-get 'startIndex range)
-                            :end (alist-get 'endIndex range))
+                     (status-p (equal (nth 1 parts) "status"))
+                     (range (progn
+                              (when (and status-p (/= (length ranges) 1))
+                                (user-error "A status marker must have one contiguous range"))
+                              (if (vectorp ranges) (aref ranges 0) (car ranges)))))
+                (when (and status-p
+                           (or (not (stringp (alist-get 'namedRangeId range-entry)))
+                               (not (integerp (alist-get 'startIndex range)))
+                               (not (integerp (alist-get 'endIndex range)))
+                               (let ((segment (alist-get 'segmentId range)))
+                                 (and segment (not (string-empty-p segment))))))
+                  (user-error "Malformed status marker or unsupported document segment"))
+                (push (append (list :type (intern (nth 1 parts))
+                                    :id (nth 2 parts)
+                                    :data (when (> (length parts) 3)
+                                            (s-join ":" (nthcdr 3 parts)))
+                                    :start (alist-get 'startIndex range)
+                                    :end (alist-get 'endIndex range))
+                              (when status-p (list :range-id (alist-get 'namedRangeId range-entry))))
                       result)))))))
     result))
 
@@ -3875,10 +4048,11 @@ When SEGMENT-ID is non-nil, target that segment instead of the body."
           (list (cons 'startIndex start)
                 (cons 'endIndex end))))
 
-(defun gdocs-convert-make-text-style-requests (runs start-index &optional segment-id)
+(defun gdocs-convert-make-text-style-requests (runs start-index &optional segment-id omit-status-markers)
   "Create updateTextStyle requests for formatted RUNS starting at START-INDEX.
 Each run that has any formatting generates a request.  When SEGMENT-ID is
-non-nil, requests target that document segment, such as a native footnote."
+non-nil, requests target that document segment, such as a native footnote.
+OMIT-STATUS-MARKERS suppresses duplicate markers for unchanged status tokens."
   (let ((requests nil)
         (index start-index))
     (dolist (run runs)
@@ -3889,10 +4063,13 @@ non-nil, requests target that document segment, such as a native footnote."
           (push `((updateTextStyle
                    . ((textStyle . ,style-fields)
                       (range . ,(gdocs-convert--text-range
-                                  index end segment-id))
-                      (fields . ,(gdocs-convert--style-fields-mask
-                                  style-fields)))))
+                                 index end segment-id))
+                      (fields . ,(concat (gdocs-convert--style-fields-mask style-fields)
+                                         (when (plist-get run :status) ",link"))))))
                 requests))
+        (when (and (plist-get run :status) (not omit-status-markers))
+          (push (gdocs-convert--status-marker-request
+                 (plist-get run :status) index end segment-id) requests))
         (setq index end)))
     (nreverse requests)))
 
@@ -3978,7 +4155,8 @@ When SEGMENT-ID is non-nil, target that non-body segment."
 (defun gdocs-convert--run-to-docs-style (run)
   "Convert formatting of a text RUN to a Google Docs textStyle alist.
 Returns nil if no formatting is applied."
-  (let ((style nil))
+  (let ((style (when (plist-get run :status)
+                 (gdocs-convert--status-docs-style (plist-get run :status)))))
     (when (plist-get run :link)
       (push `(link . ((url . ,(plist-get run :link)))) style))
     (setq style (append (gdocs-convert--run-logical-style run) style))
