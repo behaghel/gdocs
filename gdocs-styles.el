@@ -89,5 +89,22 @@ These choices do not change Org or IR semantics."
   :type 'number
   :group 'gdocs-styles)
 
+(defvaralias 'gdocs-convert--status-default-styles 'gdocs-status-default-styles)
+
+(defcustom gdocs-status-default-styles
+  '((grey :bold t :foreground-color "#3C4043" :background-color "#E2E3E5")
+    (red :bold t :foreground-color "#A50E0E" :background-color "#FCE8E6")
+    (yellow :bold t :foreground-color "#7A4F01" :background-color "#FEF7E0")
+    (green :bold t :foreground-color "#137333" :background-color "#E6F4EA")
+    (blue :bold t :foreground-color "#174EA6" :background-color "#E8F0FE")
+    (purple :bold t :foreground-color "#681DA8" :background-color "#F3E8FD"))
+  "Fallback presentation for static status colour identifiers.
+Each value is a logical text-style plist.  A gdocs-status-COLOR entry in
+`gdocs-style-definitions' takes precedence.  Presentation does not alter
+status colour identifiers, labels, original link spelling, or named ranges.
+The former private palette variable remains an alias for compatibility."
+  :type '(alist :key-type symbol :value-type plist)
+  :group 'gdocs-styles)
+
 (provide 'gdocs-styles)
 ;;; gdocs-styles.el ends here

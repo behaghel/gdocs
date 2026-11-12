@@ -106,7 +106,8 @@ Keep contrasting partial bold and all other inline formatting.  Ignore plain
 whitespace runs introduced by text-run normalization when checking uniformity."
   (let ((visible (seq-filter
                   (lambda (run)
-                    (not (string-blank-p (or (plist-get run :text) ""))))
+                    (and (not (plist-get run :status))
+                         (not (string-blank-p (or (plist-get run :text) "")))))
                   runs)))
     (if (and visible (seq-every-p (lambda (run) (plist-get run :bold)) visible))
         (gdocs-convert--merge-adjacent-runs

@@ -69,6 +69,11 @@ distinct layer of functionality:
   and imported heading emphasis canonicalization.  Uniform heading bold is
   presentation; contrasting partial bold and other inline emphasis remain
   semantic.  Invisible emphasis distinctions are not reconstructed.
+- =gdocs-convert-status.el= :: Static status link parsing, Org rendering,
+  provider named-range identity, and UTF-16-aware import across text runs.
+  Unsupported rich labels and document contexts fail closed.
+- =gdocs-diff-status.el= :: Atomic status tokenization and provider marker
+  cleanup.  The general diff engine owns request ordering and text edits.
 - =gdocs-styles.el= :: Standalone presentation configuration.  The existing
   =gdocs-style-definitions= and =gdocs-style-base-font-size= variables keep
   their names and defaults.  Fonts, colours, paragraph spacing/indentation,
@@ -80,7 +85,10 @@ distinct layer of functionality:
   the =gdocs-code= logical style; =gdocs-convert-monospace-font-families=
   supplies the fallback font and import recognition list.  Heading depth,
   Google protocol units, and UTF-16 indices are semantic/protocol rules,
-  not presentation settings.
+  not presentation settings.  Static pill defaults are configurable through
+  =gdocs-status-default-styles=, retaining the existing appearance; a
+  =gdocs-status-COLOR= logical text style takes precedence.  Palette changes
+  do not change link spellings, colour identifiers, labels, or marker identity.
 - =gdocs-diff.el= :: Incremental diff engine that computes the minimal
   set of API requests to synchronize changes, using word-level diffs
   to preserve Google Docs comment anchors ([[#h:diff-engine][Diff engine]]).
@@ -758,6 +766,41 @@ list to a list of Google Docs ~batchUpdate~ request alists.  It tracks
 a running UTF-16 insertion index starting at 1 (the beginning of the
 Google Docs body).  This function is used for full document replacement
 and by the diff engine for incremental insertions.
+
+*** Static status labels
+:PROPERTIES:
+:CUSTOM_ID: h:static-status-labels
+:END:
+
+Plain links such as ~[[status:Green][Ready]]~ publish as static coloured
+labels, not colour URLs.  The existing authoring spelling
+~[[confluence-status:Green][Ready]]~ is also accepted and retained on pull.
+Colours are Grey (or Gray), Red, Yellow, Green, Blue, and Purple, matched
+case-insensitively.  Source colour spelling and label text remain intact.
+
+Status runs carry ~:status~ metadata with ~:link-type~, ~:color~, and
+~:described~.  Text styling supplies a neutral background/foreground pair;
+~gdocs-status-COLOR~ entries in ~gdocs-style-definitions~ can override it.
+Semantic named ranges preserve status identity independently of text-run
+splits and styling.  Remote label edits retain the colour and link spelling.
+Provider range IDs are transient diff metadata, not authored Org data.
+
+These labels are not native Google dropdowns.  A static Org status does not
+declare a choice set, so publishing does not invent selectable options.
+Rich labels, tables, footnotes, labels crossing paragraphs, and mixtures
+with native dates or footnotes in one paragraph fail closed.  Imported
+native dropdowns also require an explicit choice-set mapping and are rejected.
+
+Status diffs keep unchanged labels and surrounding text in place.  Colour-only
+changes update styles and semantic ranges without deleting text; removed or
+changed markers are deleted by provider ID before content changes.  A
+simultaneous local/remote status conflict does not fall back to plain-text merge.
+
+Already-published bogus colour URLs are not guessed back into statuses.
+Restore the intended Org status links from a known-good source or backup
+before republishing.  Offline fixtures cover conversion, Unicode ranges,
+provider-run normalization, repeat diffs, and callback source/account handling;
+they do not establish live Google rendering or API conformance.
 
 ** Diff engine
 :PROPERTIES:

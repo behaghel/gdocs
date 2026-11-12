@@ -15,9 +15,12 @@ TEST_FILES = \
   test/gdocs-api-test.el \
   test/gdocs-convert-test.el \
   test/gdocs-convert-headings-test.el \
+  test/gdocs-convert-status-test.el \
   test/gdocs-styles-test.el \
   test/gdocs-diff-test.el \
+  test/gdocs-diff-status-test.el \
   test/gdocs-sync-test.el \
+  test/gdocs-sync-status-test.el \
   test/gdocs-merge-test.el \
   test/gdocs-roundtrip-test.el \
   test/gdocs-test.el
