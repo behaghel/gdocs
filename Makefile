@@ -14,6 +14,8 @@ TEST_FILES = \
   test/gdocs-auth-test.el \
   test/gdocs-api-test.el \
   test/gdocs-convert-test.el \
+  test/gdocs-convert-headings-test.el \
+  test/gdocs-styles-test.el \
   test/gdocs-diff-test.el \
   test/gdocs-sync-test.el \
   test/gdocs-merge-test.el \
