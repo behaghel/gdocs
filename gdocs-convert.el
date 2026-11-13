@@ -3391,6 +3391,16 @@ removing leading tabs, not by paragraph indentation alone."
         (make-string level ?\t)
       "")))
 
+(defun gdocs-convert--paragraph-logical-text-request (element start end)
+  "Return logical text styling for paragraph ELEMENT between START and END.
+Normal paragraphs, including lists, inherit configured body text styling
+when they have no explicit logical style.  Inline styles apply afterward."
+  (let ((style (or (plist-get element :style-name)
+                   (when (eq (plist-get element :style) 'normal)
+                     'gdocs-body))))
+    (when (and style (< start end))
+      (gdocs-convert--logical-style-text-request style start end))))
+
 (defun gdocs-convert--paragraph-to-requests (element index)
   "Convert an IR paragraph ELEMENT to requests starting at INDEX.
 Returns a plist (:requests LIST :index NEW-INDEX).
@@ -3415,10 +3425,8 @@ clear any inherited formatting before per-run styles are applied."
                       (gdocs-convert--make-text-style-reset-request
                        text-start (+ index text-only-len))))
          (logical-text-req
-          (when (and (plist-get element :style-name) (> text-only-len 0))
-            (gdocs-convert--logical-style-text-request
-             (plist-get element :style-name)
-             text-start (+ index text-only-len))))
+          (gdocs-convert--paragraph-logical-text-request
+           element text-start (+ index text-only-len)))
          (run-reqs (gdocs-convert--make-text-style-requests
                     contents text-start))
          (list-reqs (gdocs-convert--make-list-requests element index

@@ -646,12 +646,37 @@ to stale same-index ranges before later inserts shift the document."
              (setq requests (append requests (plist-get result :requests))
                    cursor (plist-get result :index)
                    max-new-index (max max-new-index ni))))
+         (when (and old-indices
+                    (= insert-index (cdr (cdar (last old-indices)))))
+           (setq requests (gdocs-diff--terminal-insertion-requests
+                           requests insert-index cursor)))
          (push (list :index insert-index
                      :new-index max-new-index
                      :reqs requests)
                groups)))
      by-index)
     groups))
+
+(defun gdocs-diff--terminal-insertion-requests (requests start end)
+  "Make terminal REQUESTS legal while preserving the final body newline.
+START is the old segment end, an invalid insertion location.  Split the
+last paragraph before its protected newline to make START available.
+END is the converter's final cursor.  When generated text supplies its
+own trailing newline, remove that newline before the protected one so
+repeated append/pull cycles do not accumulate empty paragraphs."
+  (append
+   (list `((insertText . ((text . "\n")
+                         (location . ((index . ,(1- start))))))))
+   requests
+   (when (seq-some
+          (lambda (request)
+            (when-let* ((insert (alist-get 'insertText request))
+                        (text (alist-get 'text insert))
+                        (index (alist-get 'index (alist-get 'location insert))))
+              (and (string-suffix-p "\n" text)
+                   (= (+ index (gdocs-convert--string-to-utf16-length text)) end))))
+          requests)
+     (list (gdocs-diff--make-delete-request (1- end) end)))))
 
 (defun gdocs-diff--insertion-point (op diff-ops old-indices start-index)
   "Determine the document index at which to insert for OP.
@@ -815,12 +840,15 @@ followed by per-run style requests for the new formatting."
                       (gdocs-convert--make-text-style-reset-request
                        start reset-end)))
          (runs (plist-get new-elem :contents))
+         (logical-request (gdocs-convert--paragraph-logical-text-request
+                           new-elem start reset-end))
          (style-reqs (gdocs-convert-make-text-style-requests runs start nil t))
          (footnote-reqs
           (gdocs-convert--make-footnote-reference-requests runs start)))
     (list :delete-reqs nil
           :insert-reqs nil
           :style-reqs (append (when reset-req (list reset-req))
+                              (when logical-request (list logical-request))
                               style-reqs
                               footnote-reqs))))
 
@@ -1035,10 +1063,9 @@ tokens so that comment anchors on unchanged text survive."
                       (concat (alist-get 'fields (alist-get 'updateTextStyle reset)) ",link"))
                 (list reset))))
            (logical-reqs
-            (when (and has-status (plist-get new-elem :style-name) (> new-text-len 0))
-              (when-let* ((request (gdocs-convert--logical-style-text-request
-                                    (plist-get new-elem :style-name) start (+ start new-text-len))))
-                (list request))))
+            (when-let* ((request (gdocs-convert--paragraph-logical-text-request
+                                 new-elem start (+ start new-text-len))))
+              (list request)))
            (run-reqs (gdocs-convert-make-text-style-requests runs start nil has-status))
            (status-markers
             (when has-status
