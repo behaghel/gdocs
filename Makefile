@@ -7,7 +7,8 @@ LOAD_PATH := -L $(CURDIR) -L test \
              -L $(ELPACA_REPOS)transient/lisp \
              -L $(ELPACA_REPOS)cond-let \
              -L $(ELPACA_REPOS)seq \
-             -L $(ELPACA_REPOS)llama
+             -L $(ELPACA_REPOS)llama \
+             -L $(ELPACA_REPOS)compat
 
 TEST_FILES = \
   test/gdocs-test-helpers.el \

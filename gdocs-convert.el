@@ -913,9 +913,9 @@ heading cache and append a #heading=h.ID fragment."
 
 (defun gdocs-convert--timestamp-to-runs (timestamp inherited-props)
   "Convert TIMESTAMP to a native Google Docs date run.
-INHERITED-PROPS carries parent formatting.  The original Org timestamp syntax is
-kept as the run text so Org output can reconstruct the source form when the IR is
-not pushed to Google Docs."
+INHERITED-PROPS carries parent formatting.  The original Org timestamp
+syntax is kept as the run text so Org output can reconstruct the source
+form when the IR is not pushed to Google Docs."
   (let ((raw (org-element-interpret-data timestamp))
         (year (org-element-property :year-start timestamp))
         (month (org-element-property :month-start timestamp))
@@ -2783,6 +2783,18 @@ may have trailing whitespace-only runs before it."
       (list :type (intern type)
             :level (string-to-number level)))))
 
+(defconst gdocs-convert--unchecked-checkbox-glyphs
+  '("☐" "□" "❏" "❑" "◻" "⬜")
+  "Google Docs glyph symbols observed for unchecked checklist items.")
+
+(defconst gdocs-convert--checked-checkbox-glyphs
+  '("☑" "✓" "✔")
+  "Google Docs glyph symbols observed for checked checklist items.")
+
+(defconst gdocs-convert--partial-checkbox-glyphs
+  '("☒")
+  "Google Docs glyph symbols observed for partial checklist items.")
+
 (defun gdocs-convert--docs-check-state (list-props nesting-level)
   "Return checkbox state plist from LIST-PROPS at NESTING-LEVEL."
   (let* ((nesting (alist-get 'listProperties list-props))
@@ -2919,18 +2931,6 @@ nested lists as separate list objects where the sub-list has nestingLevel 0
                                   "ZERO_DECIMAL")))
         'number)
        (t 'bullet)))))
-
-(defconst gdocs-convert--unchecked-checkbox-glyphs
-  '("☐" "□" "❏" "❑" "◻" "⬜")
-  "Google Docs glyph symbols observed for unchecked checklist items.")
-
-(defconst gdocs-convert--checked-checkbox-glyphs
-  '("☑" "✓" "✔")
-  "Google Docs glyph symbols observed for checked checklist items.")
-
-(defconst gdocs-convert--partial-checkbox-glyphs
-  '("☒")
-  "Google Docs glyph symbols observed for partial checklist items.")
 
 (defun gdocs-convert--checkbox-glyph-p (glyph-type glyph-symbol)
   "Return non-nil if GLYPH-TYPE or GLYPH-SYMBOL indicates a checkbox."
@@ -3295,10 +3295,10 @@ indent after bullet creation."
 
 (defun gdocs-convert--image-to-requests (element index)
   "Create insertInlineImage requests for image ELEMENT at INDEX.
-ELEMENT must contain `:uri' or `:source-uri'.  Images without a fetchable URI are
-left to adapter preflight code and produce no requests.  When ELEMENT has a
-`:caption', insert it as visible text in the following paragraph for v1 semantic
-preservation."
+ELEMENT must contain `:uri' or `:source-uri'.  Images without a fetchable
+URI are left to adapter preflight code and produce no requests.
+When ELEMENT has a `:caption', insert it as visible text in the following
+paragraph for v1 semantic preservation."
   (if-let* ((uri (or (plist-get element :uri)
                     (plist-get element :source-uri))))
       (let* ((caption (plist-get element :caption))
@@ -3348,23 +3348,23 @@ preservation."
                       (endIndex . ,(1+ index))))))))))
 
 (defun gdocs-convert-make-logical-style-requests
-    (style-name paragraph-start paragraph-end &optional text-start text-end segment-id)
+    (style-name start-index end-index &optional text-start text-end segment-id)
   "Create paragraph/text requests for logical STYLE-NAME.
-PARAGRAPH-START and PARAGRAPH-END target paragraph style in the body.  When
-TEXT-START and TEXT-END are non-nil, also create text style requests.  Optional
-SEGMENT-ID targets the text style request at a non-body segment."
+START-INDEX and END-INDEX target paragraph style in the body.  When
+TEXT-START and TEXT-END are non-nil, also create text style requests.
+Optional SEGMENT-ID targets the text style request at a non-body segment."
   (delq nil
         (list (gdocs-convert--logical-style-paragraph-request
-               style-name paragraph-start paragraph-end)
+               style-name start-index end-index)
               (when (and text-start text-end)
                 (gdocs-convert--logical-style-text-request
                  style-name text-start text-end segment-id)))))
 
-(defun gdocs-convert--caption-style-requests (paragraph-start paragraph-end
-                                                text-start text-end)
+(defun gdocs-convert--caption-style-requests
+    (start-index end-index text-start text-end)
   "Create logical image-caption style requests for caption ranges."
   (gdocs-convert-make-logical-style-requests
-   'gdocs-image-caption paragraph-start paragraph-end text-start text-end))
+   'gdocs-image-caption start-index end-index text-start text-end))
 
 (defun gdocs-convert--make-image-caption-marker-requests (element text-start text-end)
   "Create semantic marker requests for image caption ELEMENT.
@@ -3401,7 +3401,6 @@ clear any inherited formatting before per-run styles are applied."
          (prefix (gdocs-convert--list-leading-prefix element))
          (prefix-len (gdocs-convert--string-to-utf16-length prefix))
          (text-start (+ index prefix-len))
-         (text (gdocs-convert--runs-to-plain-text contents))
          (insert-data (gdocs-convert--make-inline-insert-requests
                        contents index prefix))
          (text-len (plist-get insert-data :length))
@@ -4039,9 +4038,9 @@ and :preset (bullet preset string)."
 
 (defun gdocs-convert--callout-list-post-bullet-indent-resets (element-ranges)
   "Return final indent resets for callout list paragraphs.
-These run after `createParagraphBullets'.  They keep paragraph shading full-width
-inside callout panels while native nesting level has already been assigned from
-leading tabs."
+These run after `createParagraphBullets'.  They keep paragraph shading
+full-width inside callout panels while native nesting level has already
+been assigned from leading tabs."
   (let (requests)
     (dolist (range element-ranges (nreverse requests))
       (let* ((element (plist-get range :element))

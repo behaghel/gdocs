@@ -142,11 +142,21 @@
     (should (eq (plist-get elem :style) 'normal))))
 
 (ert-deftest gdocs-roundtrip/org-quote-block ()
-  "A quote block produces :style quote."
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir
-              "#+BEGIN_QUOTE\nQuoted text.\n#+END_QUOTE"))
-         (elem (gdocs-roundtrip-test--find-ir-element ir 'paragraph 'quote)))
-    (should elem)))
+  "A semantic quote block retains its body and emits provider markers."
+  (let* ((source "#+BEGIN_QUOTE\nQuoted text.\n#+END_QUOTE\n")
+         (ir (gdocs-roundtrip-test--org-to-ir source))
+         (element (gdocs-roundtrip-test--find-ir-element ir 'quote-block)))
+    (should element)
+    (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
+                          (plist-get element :paragraphs))
+                   '("Quoted text.")))
+    (should (equal (gdocs-convert-ir-to-org ir) source))
+    (should (seq-some
+             (lambda (request)
+               (when-let* ((marker (alist-get 'createNamedRange request)))
+                 (string-prefix-p "gdocs-org-marker:quote-block:"
+                                  (alist-get 'name marker))))
+             (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-center-block ()
   "A center block is parsed into IR."
@@ -164,20 +174,36 @@
     (should ir)))
 
 (ert-deftest gdocs-roundtrip/org-example-block ()
-  "An example block produces code-formatted IR elements."
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir
-              "#+BEGIN_EXAMPLE\nExample text.\n#+END_EXAMPLE")))
-    (should ir)
-    ;; Example blocks should produce runs with :code t
-    (let ((code-run (gdocs-roundtrip-test--find-run-with-prop ir :code)))
-      (should code-run))))
+  "A semantic example block retains literal lines and provider markers."
+  (let* ((source "#+BEGIN_EXAMPLE\nExample text.\n#+END_EXAMPLE\n")
+         (ir (gdocs-roundtrip-test--org-to-ir source))
+         (element (gdocs-roundtrip-test--find-ir-element ir 'example-block)))
+    (should element)
+    (should (equal (plist-get element :lines) '("Example text.")))
+    (should (equal (gdocs-convert-ir-to-org ir) source))
+    (should (seq-some
+             (lambda (request)
+               (when-let* ((marker (alist-get 'createNamedRange request)))
+                 (string-prefix-p "gdocs-org-marker:example-block:"
+                                  (alist-get 'name marker))))
+             (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-src-block ()
-  "A src block produces a :gdocs-marker of type src-block."
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir
-              "#+BEGIN_SRC python\nprint('hi')\n#+END_SRC"))
-         (elem (gdocs-roundtrip-test--find-marker ir 'src-block)))
-    (should elem)))
+  "A semantic source block retains code, language, and provider markers."
+  (let* ((source "#+BEGIN_SRC python\nprint('hi')\n#+END_SRC\n")
+         (ir (gdocs-roundtrip-test--org-to-ir source))
+         (element (gdocs-roundtrip-test--find-ir-element ir 'source-block)))
+    (should element)
+    (should (equal (plist-get element :language) "python"))
+    (should (equal (plist-get element :lines) '("print('hi')")))
+    (should (equal (gdocs-convert-ir-to-org ir) source))
+    (should (seq-some
+             (lambda (request)
+               (when-let* ((marker (alist-get 'createNamedRange request)))
+                 (and (string-prefix-p "gdocs-org-marker:src-block:"
+                                       (alist-get 'name marker))
+                      (string-suffix-p ":python" (alist-get 'name marker)))))
+             (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-special-block ()
   "A special block (e.g., #+BEGIN_WARNING) is parsed into IR."
@@ -392,10 +418,17 @@
     (should elem)))
 
 (ert-deftest gdocs-roundtrip/org-keyword-author ()
-  "#+AUTHOR produces a marker with :type keyword."
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir "#+AUTHOR: Test"))
-         (elem (gdocs-roundtrip-test--find-marker ir 'keyword)))
-    (should elem)))
+  "AUTHOR remains local metadata rather than a published body marker."
+  (let ((source "#+AUTHOR: Test\n\nBody.\n"))
+    (with-temp-buffer
+      (org-mode)
+      (insert source)
+      (let* ((ir (gdocs-convert-org-buffer-to-ir))
+             (requests (gdocs-convert-ir-to-docs-requests ir)))
+        (should (equal (buffer-string) source))
+        (should (equal (gdocs-convert-ir-to-org ir) "Body.\n"))
+        (should-not (gdocs-roundtrip-test--find-marker ir 'keyword))
+        (should-not (string-match-p "AUTHOR\\|Test" (json-encode requests)))))))
 
 ;; ---------------------------------------------------------------------------
 ;;; 1g. Inline elements

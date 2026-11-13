@@ -919,7 +919,7 @@ markers do not cause false mismatches."
                   (string-join new-footnotes " > ")))))
 
 (defun gdocs-sync--block-count-diagnostics (old-blocks new-blocks)
-  "Return diagnostics for semantic block counts dropped from OLD-BLOCKS to NEW-BLOCKS."
+  "Report semantic block count drops from OLD-BLOCKS to NEW-BLOCKS."
   (let (diagnostics)
     (dolist (entry old-blocks diagnostics)
       (let* ((type (car entry))
