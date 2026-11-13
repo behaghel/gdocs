@@ -23,6 +23,9 @@
 (require 'org-element)
 (require 'ox)
 (require 'url-util)
+(require 'gdocs-styles)
+(require 'gdocs-convert-headings)
+(require 'gdocs-convert-status)
 
 ;; ---------------------------------------------------------------------------
 ;;; ID generation
@@ -94,103 +97,6 @@ Used during org-to-IR link resolution to append heading anchors.")
   "Session cache: doc-id -> alist of ((heading-id . heading-text) ...).
 Reverse mapping of `gdocs-convert--heading-cache', used during
 IR-to-org conversion to resolve heading anchors back to text.")
-
-(defcustom gdocs-style-definitions
-  '((gdocs-code
-     :text (:monospace t))
-    (gdocs-source-block
-     :parent normal)
-    (gdocs-source-block-first
-     :parent normal)
-    (gdocs-source-block-line
-     :parent normal)
-    (gdocs-source-block-last
-     :parent normal)
-    (gdocs-source-block-single
-     :parent normal)
-    (gdocs-quote-block
-     :parent normal)
-    (gdocs-quote-block-first
-     :parent normal)
-    (gdocs-quote-block-line
-     :parent normal)
-    (gdocs-quote-block-last
-     :parent normal)
-    (gdocs-quote-block-single
-     :parent normal)
-    (gdocs-callout-info-label
-     :parent normal
-     :text (:bold t))
-    (gdocs-callout-note-label
-     :parent normal
-     :text (:bold t))
-    (gdocs-callout-warning-label
-     :parent normal
-     :text (:bold t))
-    (gdocs-callout-tip-label
-     :parent normal
-     :text (:bold t))
-    (gdocs-callout-important-label
-     :parent normal
-     :text (:bold t))
-    (gdocs-callout-info-first
-     :parent normal)
-    (gdocs-callout-info-line
-     :parent normal)
-    (gdocs-callout-info-last
-     :parent normal)
-    (gdocs-callout-info-single
-     :parent normal)
-    (gdocs-callout-note-first
-     :parent normal)
-    (gdocs-callout-note-line
-     :parent normal)
-    (gdocs-callout-note-last
-     :parent normal)
-    (gdocs-callout-note-single
-     :parent normal)
-    (gdocs-callout-warning-first
-     :parent normal)
-    (gdocs-callout-warning-line
-     :parent normal)
-    (gdocs-callout-warning-last
-     :parent normal)
-    (gdocs-callout-warning-single
-     :parent normal)
-    (gdocs-callout-tip-first
-     :parent normal)
-    (gdocs-callout-tip-line
-     :parent normal)
-    (gdocs-callout-tip-last
-     :parent normal)
-    (gdocs-callout-tip-single
-     :parent normal)
-    (gdocs-callout-important-first
-     :parent normal)
-    (gdocs-callout-important-line
-     :parent normal)
-    (gdocs-callout-important-last
-     :parent normal)
-    (gdocs-callout-important-single
-     :parent normal)
-    (gdocs-image-caption
-     :parent normal))
-  "Logical style definitions used when rendering IR to Google Docs.
-Definitions deliberately use logical names rather than treating Google Docs
-properties as semantics.  The converter resolves these definitions late, when
-building batchUpdate requests.  Adapters and users may override this variable to
-change visual output without changing Org/IR semantics."
-  :type '(alist :key-type symbol :value-type plist)
-  :group 'gdocs)
-
-(defcustom gdocs-style-base-font-size 11
-  "Fallback base font size used for logical `:font-scale' resolution.
-The Google Docs API exposes named styles when reading a document, but request
-conversion can also run without a document JSON context.  This value keeps the
-style resolver deterministic until a caller supplies document-derived style
-context."
-  :type 'number
-  :group 'gdocs)
 
 (defcustom gdocs-convert-native-date-elements t
   "Whether Org timestamps should push as native Google Docs date elements."
@@ -633,61 +539,6 @@ paragraphs is more surprising than preserving them remotely."
 ;; ---------------------------------------------------------------------------
 ;;; Headline -> IR
 
-(defun gdocs-convert--headline-to-ir (headline)
-  "Convert an org HEADLINE element to an IR element."
-  (let* ((level (org-element-property :level headline))
-         (style (gdocs-convert--level-to-style level))
-         (title-objects (org-element-property :title headline))
-         (contents (gdocs-convert--objects-to-runs title-objects))
-         (marker (gdocs-convert--headline-marker headline)))
-    (append (list :type 'paragraph
-                  :style style
-                  :style-name (gdocs-convert--heading-logical-style-name style)
-                  :contents contents
-                  :id (gdocs-convert--next-id))
-            (when marker (list :gdocs-marker marker)))))
-
-(defun gdocs-convert--heading-logical-style-name (style)
-  "Return logical Google Docs style name for heading STYLE."
-  (intern (format "gdocs-%s" style)))
-
-(defun gdocs-convert--level-to-style (level)
-  "Convert an org heading LEVEL (integer) to an IR style symbol.
-Levels above 6 are clamped to heading-6."
-  (intern (format "heading-%d" (min level 6))))
-
-(defun gdocs-convert--headline-marker (headline)
-  "Extract org-only marker data from HEADLINE, or return nil.
-Preserves TODO keywords, tags, priority, and scheduling info.
-Returns a list of marker plists, or nil if the headline has no
-preservable metadata."
-  (let* ((todo (org-element-property :todo-keyword headline))
-         (tags (org-element-property :tags headline))
-         (priority (org-element-property :priority headline))
-         (scheduled (org-element-property :scheduled headline))
-         (deadline (org-element-property :deadline headline))
-         (parts nil))
-    (when deadline
-      (push (list :type 'deadline
-                  :data (org-element-interpret-data deadline))
-            parts))
-    (when scheduled
-      (push (list :type 'scheduled
-                  :data (org-element-interpret-data scheduled))
-            parts))
-    (when priority
-      (push (list :type 'priority
-                  :data (char-to-string priority))
-            parts))
-    (when tags
-      (push (list :type 'tags
-                  :data (s-join ":" tags))
-            parts))
-    (when todo
-      (push (list :type 'todo :data todo) parts))
-    (when parts
-      parts)))
-
 ;; ---------------------------------------------------------------------------
 ;;; Paragraph -> IR
 
@@ -931,22 +782,24 @@ INHERITED-PROPS carries parent formatting.  Preserves any
 formatting (e.g. italic, bold) within the link description.
 When the URL is nil (e.g. an org file with no Google Doc
 counterpart), emits plain text with no hyperlink."
-  (let* ((url (gdocs-convert--link-url link))
-         (children (org-element-contents link))
-         (props (if url
-                    (plist-put (copy-sequence inherited-props) :link url)
-                  inherited-props)))
-    (if children
-        (let ((runs nil))
-          (dolist (child children)
-            (setq runs (nconc runs
-                              (gdocs-convert--object-to-runs child props))))
-          (or runs (list (gdocs-convert--make-run
-                          (or url (org-element-property :raw-link link))
-                          props))))
-      (list (gdocs-convert--make-run
-             (or url (org-element-property :raw-link link))
-             props)))))
+  (if-let* ((status (gdocs-convert--status-link-to-run link inherited-props)))
+      (list status)
+    (let* ((url (gdocs-convert--link-url link))
+           (children (org-element-contents link))
+           (props (if url
+                      (plist-put (copy-sequence inherited-props) :link url)
+                    inherited-props)))
+      (if children
+          (let ((runs nil))
+            (dolist (child children)
+              (setq runs (nconc runs
+                                (gdocs-convert--object-to-runs child props))))
+            (or runs (list (gdocs-convert--make-run
+                            (or url (org-element-property :raw-link link))
+                            props))))
+        (list (gdocs-convert--make-run
+               (or url (org-element-property :raw-link link))
+               props))))))
 
 (defun gdocs-convert--link-url (link)
   "Extract the URL string from a LINK element.
@@ -1700,42 +1553,6 @@ merge the heading text into that list item."
       (format "#+BEGIN_CENTER\n%s\n#+END_CENTER" text))
      (t text))))
 
-(defun gdocs-convert--heading-style-p (style)
-  "Return non-nil if STYLE is a heading style."
-  (and style
-       (string-prefix-p "heading-" (symbol-name style))))
-
-(defun gdocs-convert--format-heading (style text marker)
-  "Format a heading with STYLE, TEXT, and optional MARKER for org-only data."
-  (let* ((level (string-to-number
-                 (substring (symbol-name style)
-                            (length "heading-"))))
-         (stars (make-string level ?*))
-         (todo (gdocs-convert--extract-marker-field marker 'todo))
-         (tags (gdocs-convert--extract-marker-field marker 'tags))
-         (priority (gdocs-convert--extract-marker-field marker 'priority))
-         (head (concat stars " "
-                       (when todo (concat todo " "))
-                       (when priority (format "[#%s] " priority))
-                       text))
-         (scheduled (gdocs-convert--extract-marker-field marker 'scheduled))
-         (deadline (gdocs-convert--extract-marker-field marker 'deadline))
-         (planning-parts nil))
-    (when deadline
-      (push (format "DEADLINE: %s" deadline) planning-parts))
-    (when scheduled
-      (push (format "SCHEDULED: %s" scheduled) planning-parts))
-    (let ((heading (if tags
-                       (gdocs-convert--heading-with-tags head tags)
-                     head)))
-      (if planning-parts
-          (concat heading "\n" (s-join " " planning-parts))
-        heading))))
-
-(defun gdocs-convert--heading-with-tags (head tags-string)
-  "Format HEAD with TAGS-STRING aligned with org-mode convention."
-  (format "%s :%s:" head tags-string))
-
 (defun gdocs-convert--extract-marker-field (marker type-sym)
   "Extract the :data value for TYPE-SYM from MARKER.
 MARKER is a list of marker plists."
@@ -1797,37 +1614,39 @@ indent continuation lines to keep them inside the list item."
   "Convert a single text RUN plist to an org-formatted string.
 When `gdocs-convert--link-context' is bound, reverse-resolves
 Google Docs URLs back to org file: links."
-  (if-let* ((label (plist-get run :footnote-label)))
-      (format "[fn:%s]" label)
-    (let ((text (plist-get run :text))
-        (bold (plist-get run :bold))
-        (italic (plist-get run :italic))
-        (underline (plist-get run :underline))
-        (strikethrough (plist-get run :strikethrough))
-        (code (plist-get run :code))
-        (link (plist-get run :link)))
-    (when code
-      (setq text (format "~%s~" text)))
-    ;; Apply link before emphasis so emphasis wraps the whole link,
-    ;; producing *[[url][text]]* rather than [[url][*text*]].
-    (when link
-      (let ((resolved-link (if gdocs-convert--link-context
-                               (gdocs-convert--reverse-resolve-link link)
-                             link)))
-        (setq text (format "[[%s][%s]]" resolved-link text))))
-    (when bold
-      (setq text (gdocs-convert--wrap-emphasis "*" text)))
-    (when italic
-      (setq text (gdocs-convert--wrap-emphasis "/" text)))
-    (when underline
-      (setq text (gdocs-convert--wrap-emphasis "_" text)))
-    (when strikethrough
-      (setq text (gdocs-convert--wrap-emphasis "+" text)))
-    (when (plist-get run :subscript)
-      (setq text (format "_{%s}" text)))
-    (when (plist-get run :superscript)
-      (setq text (format "^{%s}" text)))
-    text)))
+  (if (plist-get run :status)
+      (gdocs-convert--status-run-to-org run)
+    (if-let* ((label (plist-get run :footnote-label)))
+        (format "[fn:%s]" label)
+      (let ((text (plist-get run :text))
+            (bold (plist-get run :bold))
+            (italic (plist-get run :italic))
+            (underline (plist-get run :underline))
+            (strikethrough (plist-get run :strikethrough))
+            (code (plist-get run :code))
+            (link (plist-get run :link)))
+        (when code
+          (setq text (format "~%s~" text)))
+        ;; Apply link before emphasis so emphasis wraps the whole link,
+        ;; producing *[[url][text]]* rather than [[url][*text*]].
+        (when link
+          (let ((resolved-link (if gdocs-convert--link-context
+                                   (gdocs-convert--reverse-resolve-link link)
+                                 link)))
+            (setq text (format "[[%s][%s]]" resolved-link text))))
+        (when bold
+          (setq text (gdocs-convert--wrap-emphasis "*" text)))
+        (when italic
+          (setq text (gdocs-convert--wrap-emphasis "/" text)))
+        (when underline
+          (setq text (gdocs-convert--wrap-emphasis "_" text)))
+        (when strikethrough
+          (setq text (gdocs-convert--wrap-emphasis "+" text)))
+        (when (plist-get run :subscript)
+          (setq text (format "_{%s}" text)))
+        (when (plist-get run :superscript)
+          (setq text (format "^{%s}" text)))
+        text))))
 
 (defun gdocs-convert--reverse-resolve-link (url)
   "Reverse-resolve a Google Docs URL to an org link.
@@ -2542,7 +2361,7 @@ KIND can be `active' or `inactive'; omitted KIND defaults to active."
     (nreverse result)))
 
 (defun gdocs-convert--structural-element-to-ir (element lists-map markers
-                                                       &optional inline-objects)
+                                                        &optional inline-objects)
   "Convert a Google Docs structural ELEMENT to IR.
 LISTS-MAP is the document's lists property for bullet type
 lookup.  MARKERS is an alist of element markers from named ranges.
@@ -2559,6 +2378,13 @@ INLINE-OBJECTS is the document's inline object metadata map."
            (alist-get 'startIndex element)
            (alist-get 'endIndex element)))))
    ((alist-get 'table element)
+    (when (seq-some (lambda (marker)
+                      (and (eq (plist-get marker :type) 'status)
+                           (< (plist-get marker :start) (plist-get marker :end))))
+                    (gdocs-convert--markers-for-range markers
+                                                      (alist-get 'startIndex element)
+                                                      (alist-get 'endIndex element)))
+      (user-error "Status labels inside Google Docs tables are not supported"))
     (gdocs-convert--docs-table-to-ir (alist-get 'table element)))
    ((alist-get 'sectionBreak element)
     nil)
@@ -2632,7 +2458,7 @@ MARKERS may contain original Org source ownership metadata."
               markers))
 
 (defun gdocs-convert--docs-paragraph-to-ir (paragraph lists-map markers
-                                                     &optional start end)
+                                                      &optional start end)
   "Convert a Google Docs PARAGRAPH to an IR element.
 LISTS-MAP is the document lists property.  MARKERS is parsed
 named-range marker data.  START and END are document indices."
@@ -2647,10 +2473,14 @@ named-range marker data.  START and END are document indices."
          (list-info (when bullet
                       (gdocs-convert--docs-bullet-to-list
                        bullet lists-map markers start end style-obj)))
+         (contents (if (and (not list-info)
+                            (gdocs-convert--heading-style-p ir-style))
+                       (gdocs-convert--normalize-heading-bold trimmed)
+                     trimmed))
          (ir-alignment (gdocs-convert--docs-alignment-to-ir alignment)))
     (append (list :type 'paragraph
                   :style (if list-info 'normal ir-style)
-                  :contents (or trimmed nil)
+                  :contents contents
                   :id (gdocs-convert--next-id))
             (unless list-info
               (when-let* ((style-name
@@ -2659,7 +2489,8 @@ named-range marker data.  START and END are document indices."
             (when list-info (list :list list-info))
             (when ir-alignment (list :alignment ir-alignment))
             (when-let* ((paragraph-markers
-                         (gdocs-convert--markers-for-range markers start end)))
+                         (seq-remove (lambda (marker) (eq (plist-get marker :type) 'status))
+                                     (gdocs-convert--markers-for-range markers start end))))
               (list :gdocs-marker paragraph-markers)))))
 
 (defun gdocs-convert--docs-alignment-to-ir (alignment)
@@ -2672,16 +2503,11 @@ named-range marker data.  START and END are document indices."
 
 (defun gdocs-convert--docs-style-to-ir (named-style)
   "Convert a Google Docs NAMED-STYLE string to an IR style symbol."
-  (pcase named-style
-    ("TITLE" 'title)
-    ("SUBTITLE" 'subtitle)
-    ("HEADING_1" 'heading-1)
-    ("HEADING_2" 'heading-2)
-    ("HEADING_3" 'heading-3)
-    ("HEADING_4" 'heading-4)
-    ("HEADING_5" 'heading-5)
-    ("HEADING_6" 'heading-6)
-    (_ 'normal)))
+  (or (gdocs-convert--heading-docs-to-style named-style)
+      (pcase named-style
+        ("TITLE" 'title)
+        ("SUBTITLE" 'subtitle)
+        (_ 'normal))))
 
 (defun gdocs-convert--docs-logical-style-name (style)
   "Return the logical style name inferred from fetched Docs STYLE."
@@ -2697,28 +2523,36 @@ named-range marker data.  START and END are document indices."
 ELEMENTS may be a list or a vector.  MARKERS can carry stable Org labels for
 native Google Docs footnote references.  Adjacent runs with identical formatting
 are merged, and edge whitespace on formatted runs is normalized."
-  (let ((runs nil))
+  (let ((runs nil) previous-marker)
     (seq-doseq (el elements)
-      (let ((text-run (alist-get 'textRun el))
-            (footnote-ref (alist-get 'footnoteReference el))
-            (date-element (alist-get 'dateElement el)))
-        (cond
-         (text-run
-          (push (gdocs-convert--docs-text-run-to-ir text-run) runs))
-         (footnote-ref
-          (push (gdocs-convert--docs-footnote-reference-to-run
-                 footnote-ref markers
-                 (alist-get 'startIndex el)
-                 (alist-get 'endIndex el))
-                runs))
-         (date-element
-          (push (gdocs-convert--docs-date-element-to-run
-                 date-element markers
-                 (alist-get 'startIndex el)
-                 (alist-get 'endIndex el))
-                runs)))))
+      (let* ((footnote-ref (alist-get 'footnoteReference el))
+             (date-element (alist-get 'dateElement el))
+             (parts
+              (cond
+               ((alist-get 'textRun el) (gdocs-convert--docs-status-text-parts el markers))
+               (footnote-ref
+                (list (cons nil (gdocs-convert--docs-footnote-reference-to-run
+                                 footnote-ref markers (alist-get 'startIndex el) (alist-get 'endIndex el)))))
+               (date-element
+                (list (cons nil (gdocs-convert--docs-date-element-to-run
+                                 date-element markers (alist-get 'startIndex el) (alist-get 'endIndex el)))))
+               ((assq 'dropdown el)
+                (user-error "Native dropdown choices have no static Org status mapping")))))
+        (dolist (part parts)
+          (let ((marker (car part)) (run (cdr part)))
+            (if (and marker (eq marker previous-marker))
+                (plist-put (car runs) :text
+                           (concat (plist-get (car runs) :text) (plist-get run :text)))
+              (push run runs))
+            (setq previous-marker marker)))))
+    (setq runs (nreverse runs))
+    (dolist (run runs)
+      (when-let* ((status (plist-get run :status)))
+        (when (and (not (plist-get status :described))
+                   (not (equal (plist-get run :text) (plist-get status :color))))
+          (plist-put run :status (plist-put (copy-sequence status) :described t)))))
     (gdocs-convert--normalize-run-whitespace
-     (gdocs-convert--merge-adjacent-runs (nreverse runs)))))
+     (gdocs-convert--merge-adjacent-runs runs))))
 
 (defun gdocs-convert--merge-adjacent-runs (runs)
   "Merge adjacent RUNS that have identical formatting.
@@ -2740,7 +2574,9 @@ coarser run boundaries that org-element produces."
 (defun gdocs-convert--runs-same-format-p (a b)
   "Return non-nil if runs A and B have identical formatting."
   (and (not (or (plist-get a :date-element)
-                (plist-get b :date-element)))
+                (plist-get b :date-element)
+                (plist-get a :status)
+                (plist-get b :status)))
        (eq (plist-get a :bold) (plist-get b :bold))
        (eq (plist-get a :italic) (plist-get b :italic))
        (eq (plist-get a :underline) (plist-get b :underline))
@@ -2892,13 +2728,6 @@ Requires `gdocs-convert--document-id' to be bound."
     (format "https://docs.google.com/document/d/%s/edit#heading=h.%s"
             gdocs-convert--document-id heading-id)))
 
-(defvar gdocs-convert-monospace-font-families
-  '("Courier New" "Consolas" "Source Code Pro" "Roboto Mono" "Courier")
-  "Font families recognized as monospace for code detection.
-Google Docs does not have a native code style, so we use font
-heuristics.  When pushing, code is set to `Courier New'; when
-pulling, any of these families is treated as code.")
-
 (defun gdocs-convert--docs-is-monospace-p (style)
   "Return non-nil if STYLE indicates a monospace/code font."
   (let* ((font (alist-get 'weightedFontFamily style))
@@ -2918,7 +2747,7 @@ may have trailing whitespace-only runs before it."
                (text (plist-get last-run :text))
                (trimmed (s-trim-right text)))
           (cond
-           ((plist-get last-run :footnote-label)
+           ((or (plist-get last-run :footnote-label) (plist-get last-run :status))
             (setq done t))
            ((string-empty-p trimmed)
             (setq result (butlast result)))
@@ -3131,15 +2960,25 @@ the IR element.  Returns marker plists with range metadata when available."
                      (string= (car parts) "gdocs-org-marker"))
             (seq-doseq (range-entry (alist-get 'namedRanges named-range))
               (let* ((ranges (alist-get 'ranges range-entry))
-                     (range (if (vectorp ranges)
-                                (aref ranges 0)
-                              (car ranges))))
-                (push (list :type (intern (nth 1 parts))
-                            :id (nth 2 parts)
-                            :data (when (> (length parts) 3)
-                                    (s-join ":" (nthcdr 3 parts)))
-                            :start (alist-get 'startIndex range)
-                            :end (alist-get 'endIndex range))
+                     (status-p (equal (nth 1 parts) "status"))
+                     (range (progn
+                              (when (and status-p (/= (length ranges) 1))
+                                (user-error "A status marker must have one contiguous range"))
+                              (if (vectorp ranges) (aref ranges 0) (car ranges)))))
+                (when (and status-p
+                           (or (not (stringp (alist-get 'namedRangeId range-entry)))
+                               (not (integerp (alist-get 'startIndex range)))
+                               (not (integerp (alist-get 'endIndex range)))
+                               (let ((segment (alist-get 'segmentId range)))
+                                 (and segment (not (string-empty-p segment))))))
+                  (user-error "Malformed status marker or unsupported document segment"))
+                (push (append (list :type (intern (nth 1 parts))
+                                    :id (nth 2 parts)
+                                    :data (when (> (length parts) 3)
+                                            (s-join ":" (nthcdr 3 parts)))
+                                    :start (alist-get 'startIndex range)
+                                    :end (alist-get 'endIndex range))
+                              (when status-p (list :range-id (alist-get 'namedRangeId range-entry))))
                       result)))))))
     result))
 
@@ -3698,7 +3537,7 @@ inserted with `insertDate' and count as one UTF-16 model unit."
                              padding
                              (or (plist-get style-plist :border-color)
                                  (plist-get style-plist :background-color)
-                                 "#FFFFFF"))
+                                 gdocs-style-default-border-color))
                             style))))
     (when-let ((background (plist-get style-plist :background-color)))
       (push `(shading . ((backgroundColor . ,(gdocs-convert--hex-to-color
@@ -3711,9 +3550,13 @@ inserted with `insertDate' and count as one UTF-16 model unit."
 FALLBACK-COLOR and FALLBACK-PADDING are used when SPEC omits :color or
 :padding.  SPEC may also provide :width in points."
   `((color . ,(gdocs-convert--hex-to-color
-               (or (plist-get spec :color) fallback-color "#FFFFFF")))
-    (width . ((magnitude . ,(or (plist-get spec :width) 1)) (unit . "PT")))
-    (padding . ((magnitude . ,(or (plist-get spec :padding) fallback-padding 0))
+               (or (plist-get spec :color) fallback-color
+                   gdocs-style-default-border-color)))
+    (width . ((magnitude . ,(or (plist-get spec :width)
+                               gdocs-style-default-border-width))
+              (unit . "PT")))
+    (padding . ((magnitude . ,(or (plist-get spec :padding) fallback-padding
+                                gdocs-style-default-border-padding))
                 (unit . "PT")))
     (dashStyle . "SOLID")))
 
@@ -3732,7 +3575,7 @@ BORDERS is an alist of (SIDE . SPEC), where SIDE is one of `top', `bottom',
 `gdocs-convert--paragraph-border-object'."
   (let ((fallback-color (or (plist-get style-plist :border-color)
                             (plist-get style-plist :background-color)
-                            "#FFFFFF"))
+                            gdocs-style-default-border-color))
         (fallback-padding (plist-get style-plist :border-padding)))
     (mapcar (lambda (entry)
               (cons (gdocs-convert--paragraph-border-field (car entry))
@@ -3743,7 +3586,9 @@ BORDERS is an alist of (SIDE . SPEC), where SIDE is one of `top', `bottom',
 (defun gdocs-convert--paragraph-padding-border-style (padding color)
   "Return paragraph borders with PADDING in points and COLOR."
   (let ((border (gdocs-convert--paragraph-border-object
-                 (list :color color :width 1 :padding padding) color padding)))
+                 (list :color color :width gdocs-style-default-border-width
+                       :padding padding)
+                 color padding)))
     `((borderTop . ,border)
       (borderBottom . ,border)
       (borderLeft . ,border)
@@ -3822,17 +3667,11 @@ BORDERS is an alist of (SIDE . SPEC), where SIDE is one of `top', `bottom',
 
 (defun gdocs-convert--ir-style-to-docs (style)
   "Convert an IR STYLE symbol to a Google Docs namedStyleType string."
-  (pcase style
-    ('title "TITLE")
-    ('subtitle "SUBTITLE")
-    ('heading-1 "HEADING_1")
-    ('heading-2 "HEADING_2")
-    ('heading-3 "HEADING_3")
-    ('heading-4 "HEADING_4")
-    ('heading-5 "HEADING_5")
-    ('heading-6 "HEADING_6")
-    ('normal "NORMAL_TEXT")
-    (_ "NORMAL_TEXT")))
+  (or (gdocs-convert--heading-style-to-docs style)
+      (pcase style
+        ('title "TITLE")
+        ('subtitle "SUBTITLE")
+        (_ "NORMAL_TEXT"))))
 
 (defun gdocs-convert--make-footnote-reference-requests (runs start-index)
   "Create extension requests for semantic footnote RUNS at START-INDEX.
@@ -3864,10 +3703,11 @@ When SEGMENT-ID is non-nil, target that segment instead of the body."
           (list (cons 'startIndex start)
                 (cons 'endIndex end))))
 
-(defun gdocs-convert-make-text-style-requests (runs start-index &optional segment-id)
+(defun gdocs-convert-make-text-style-requests (runs start-index &optional segment-id omit-status-markers)
   "Create updateTextStyle requests for formatted RUNS starting at START-INDEX.
 Each run that has any formatting generates a request.  When SEGMENT-ID is
-non-nil, requests target that document segment, such as a native footnote."
+non-nil, requests target that document segment, such as a native footnote.
+OMIT-STATUS-MARKERS suppresses duplicate markers for unchanged status tokens."
   (let ((requests nil)
         (index start-index))
     (dolist (run runs)
@@ -3878,10 +3718,13 @@ non-nil, requests target that document segment, such as a native footnote."
           (push `((updateTextStyle
                    . ((textStyle . ,style-fields)
                       (range . ,(gdocs-convert--text-range
-                                  index end segment-id))
-                      (fields . ,(gdocs-convert--style-fields-mask
-                                  style-fields)))))
+                                 index end segment-id))
+                      (fields . ,(concat (gdocs-convert--style-fields-mask style-fields)
+                                         (when (plist-get run :status) ",link"))))))
                 requests))
+        (when (and (plist-get run :status) (not omit-status-markers))
+          (push (gdocs-convert--status-marker-request
+                 (plist-get run :status) index end segment-id) requests))
         (setq index end)))
     (nreverse requests)))
 
@@ -3967,7 +3810,8 @@ When SEGMENT-ID is non-nil, target that non-body segment."
 (defun gdocs-convert--run-to-docs-style (run)
   "Convert formatting of a text RUN to a Google Docs textStyle alist.
 Returns nil if no formatting is applied."
-  (let ((style nil))
+  (let ((style (when (plist-get run :status)
+                 (gdocs-convert--status-docs-style (plist-get run :status)))))
     (when (plist-get run :link)
       (push `(link . ((url . ,(plist-get run :link)))) style))
     (setq style (append (gdocs-convert--run-logical-style run) style))
