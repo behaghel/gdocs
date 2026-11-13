@@ -223,12 +223,12 @@ Return a MIME type string based on the file extension."
       (_ (error "Unsupported image type: %s (supported: png, jpg, jpeg, gif, webp, svg)" ext)))))
 
 (defun gdocs-api--send-multipart-upload (token file-path mime-type
-                                               metadata callback account)
+                                               metadata callback _account)
   "Send a multipart upload request to Google Drive.
 TOKEN is the OAuth access token.  FILE-PATH is the local file.
 MIME-TYPE is the file's MIME type.  METADATA is the JSON metadata
 string.  CALLBACK receives the parsed JSON response.  ACCOUNT is
-the account name for error reporting."
+reserved for caller compatibility."
   ;; Multipart uploads are sent with curl directly instead of through `plz'.
   ;; `plz' feeds both its curl config and request body through stdin; Google
   ;; Drive intermittently treats larger binary multipart payloads sent this way

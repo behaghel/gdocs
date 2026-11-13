@@ -913,9 +913,9 @@ heading cache and append a #heading=h.ID fragment."
 
 (defun gdocs-convert--timestamp-to-runs (timestamp inherited-props)
   "Convert TIMESTAMP to a native Google Docs date run.
-INHERITED-PROPS carries parent formatting.  The original Org timestamp syntax is
-kept as the run text so Org output can reconstruct the source form when the IR is
-not pushed to Google Docs."
+INHERITED-PROPS carries parent formatting.  The original Org timestamp
+syntax is kept as the run text so Org output can reconstruct the source
+form when the IR is not pushed to Google Docs."
   (let ((raw (org-element-interpret-data timestamp))
         (year (org-element-property :year-start timestamp))
         (month (org-element-property :month-start timestamp))
@@ -1400,7 +1400,8 @@ collected at the end under a conventional `* Footnotes' section."
             (push (format "#+BEGIN_EXAMPLE\n%s\n#+END_EXAMPLE"
                           (s-join "\n" (nreverse code-lines)))
                   parts)
-            (setq prev-type 'paragraph)
+            (setq prev-element (list :type 'example-block)
+                  prev-type 'example-block)
             (setq list-counter 0 prev-list-level nil)))
          ;; Normal element
          (t
@@ -1482,15 +1483,20 @@ already round-trip via named ranges."
 
 (defun gdocs-convert--needs-blank-line-p (previous element)
   "Return non-nil if a blank line is needed before ELEMENT.
-PREVIOUS is the previous IR element.  In particular, keep a blank line after Org
-headings even when the section starts with a list; otherwise a later parse can
+PREVIOUS is the previous IR element.  Separate semantic blocks and list
+boundaries while keeping consecutive list items compact.  Keep a blank line
+after headings even when a section starts with a list, so a later parse cannot
 merge the heading text into that list item."
   (when previous
     (let ((previous-type (plist-get previous :type))
           (previous-style (plist-get previous :style))
           (type (plist-get element :type))
-          (list-info (plist-get element :list)))
-      (or (and (eq previous-type 'paragraph)
+          (list-info (plist-get element :list))
+          (block-types '(source-block example-block quote-block callout-block)))
+      (or (memq previous-type block-types)
+          (memq type block-types)
+          (and list-info (not (plist-get previous :list)))
+          (and (eq previous-type 'paragraph)
                (gdocs-convert--heading-style-p previous-style))
           (eq type 'table)
           (eq type 'horizontal-rule)
@@ -2777,6 +2783,18 @@ may have trailing whitespace-only runs before it."
       (list :type (intern type)
             :level (string-to-number level)))))
 
+(defconst gdocs-convert--unchecked-checkbox-glyphs
+  '("☐" "□" "❏" "❑" "◻" "⬜")
+  "Google Docs glyph symbols observed for unchecked checklist items.")
+
+(defconst gdocs-convert--checked-checkbox-glyphs
+  '("☑" "✓" "✔")
+  "Google Docs glyph symbols observed for checked checklist items.")
+
+(defconst gdocs-convert--partial-checkbox-glyphs
+  '("☒")
+  "Google Docs glyph symbols observed for partial checklist items.")
+
 (defun gdocs-convert--docs-check-state (list-props nesting-level)
   "Return checkbox state plist from LIST-PROPS at NESTING-LEVEL."
   (let* ((nesting (alist-get 'listProperties list-props))
@@ -2913,18 +2931,6 @@ nested lists as separate list objects where the sub-list has nestingLevel 0
                                   "ZERO_DECIMAL")))
         'number)
        (t 'bullet)))))
-
-(defconst gdocs-convert--unchecked-checkbox-glyphs
-  '("☐" "□" "❏" "❑" "◻" "⬜")
-  "Google Docs glyph symbols observed for unchecked checklist items.")
-
-(defconst gdocs-convert--checked-checkbox-glyphs
-  '("☑" "✓" "✔")
-  "Google Docs glyph symbols observed for checked checklist items.")
-
-(defconst gdocs-convert--partial-checkbox-glyphs
-  '("☒")
-  "Google Docs glyph symbols observed for partial checklist items.")
 
 (defun gdocs-convert--checkbox-glyph-p (glyph-type glyph-symbol)
   "Return non-nil if GLYPH-TYPE or GLYPH-SYMBOL indicates a checkbox."
@@ -3289,10 +3295,10 @@ indent after bullet creation."
 
 (defun gdocs-convert--image-to-requests (element index)
   "Create insertInlineImage requests for image ELEMENT at INDEX.
-ELEMENT must contain `:uri' or `:source-uri'.  Images without a fetchable URI are
-left to adapter preflight code and produce no requests.  When ELEMENT has a
-`:caption', insert it as visible text in the following paragraph for v1 semantic
-preservation."
+ELEMENT must contain `:uri' or `:source-uri'.  Images without a fetchable
+URI are left to adapter preflight code and produce no requests.
+When ELEMENT has a `:caption', insert it as visible text in the following
+paragraph for v1 semantic preservation."
   (if-let* ((uri (or (plist-get element :uri)
                     (plist-get element :source-uri))))
       (let* ((caption (plist-get element :caption))
@@ -3342,23 +3348,23 @@ preservation."
                       (endIndex . ,(1+ index))))))))))
 
 (defun gdocs-convert-make-logical-style-requests
-    (style-name paragraph-start paragraph-end &optional text-start text-end segment-id)
+    (style-name start-index end-index &optional text-start text-end segment-id)
   "Create paragraph/text requests for logical STYLE-NAME.
-PARAGRAPH-START and PARAGRAPH-END target paragraph style in the body.  When
-TEXT-START and TEXT-END are non-nil, also create text style requests.  Optional
-SEGMENT-ID targets the text style request at a non-body segment."
+START-INDEX and END-INDEX target paragraph style in the body.  When
+TEXT-START and TEXT-END are non-nil, also create text style requests.
+Optional SEGMENT-ID targets the text style request at a non-body segment."
   (delq nil
         (list (gdocs-convert--logical-style-paragraph-request
-               style-name paragraph-start paragraph-end)
+               style-name start-index end-index)
               (when (and text-start text-end)
                 (gdocs-convert--logical-style-text-request
                  style-name text-start text-end segment-id)))))
 
-(defun gdocs-convert--caption-style-requests (paragraph-start paragraph-end
-                                                text-start text-end)
+(defun gdocs-convert--caption-style-requests
+    (start-index end-index text-start text-end)
   "Create logical image-caption style requests for caption ranges."
   (gdocs-convert-make-logical-style-requests
-   'gdocs-image-caption paragraph-start paragraph-end text-start text-end))
+   'gdocs-image-caption start-index end-index text-start text-end))
 
 (defun gdocs-convert--make-image-caption-marker-requests (element text-start text-end)
   "Create semantic marker requests for image caption ELEMENT.
@@ -3385,6 +3391,16 @@ removing leading tabs, not by paragraph indentation alone."
         (make-string level ?\t)
       "")))
 
+(defun gdocs-convert--paragraph-logical-text-request (element start end)
+  "Return logical text styling for paragraph ELEMENT between START and END.
+Normal paragraphs, including lists, inherit configured body text styling
+when they have no explicit logical style.  Inline styles apply afterward."
+  (let ((style (or (plist-get element :style-name)
+                   (when (eq (plist-get element :style) 'normal)
+                     'gdocs-body))))
+    (when (and style (< start end))
+      (gdocs-convert--logical-style-text-request style start end))))
+
 (defun gdocs-convert--paragraph-to-requests (element index)
   "Convert an IR paragraph ELEMENT to requests starting at INDEX.
 Returns a plist (:requests LIST :index NEW-INDEX).
@@ -3395,7 +3411,6 @@ clear any inherited formatting before per-run styles are applied."
          (prefix (gdocs-convert--list-leading-prefix element))
          (prefix-len (gdocs-convert--string-to-utf16-length prefix))
          (text-start (+ index prefix-len))
-         (text (gdocs-convert--runs-to-plain-text contents))
          (insert-data (gdocs-convert--make-inline-insert-requests
                        contents index prefix))
          (text-len (plist-get insert-data :length))
@@ -3410,10 +3425,8 @@ clear any inherited formatting before per-run styles are applied."
                       (gdocs-convert--make-text-style-reset-request
                        text-start (+ index text-only-len))))
          (logical-text-req
-          (when (and (plist-get element :style-name) (> text-only-len 0))
-            (gdocs-convert--logical-style-text-request
-             (plist-get element :style-name)
-             text-start (+ index text-only-len))))
+          (gdocs-convert--paragraph-logical-text-request
+           element text-start (+ index text-only-len)))
          (run-reqs (gdocs-convert--make-text-style-requests
                     contents text-start))
          (list-reqs (gdocs-convert--make-list-requests element index
@@ -4033,9 +4046,9 @@ and :preset (bullet preset string)."
 
 (defun gdocs-convert--callout-list-post-bullet-indent-resets (element-ranges)
   "Return final indent resets for callout list paragraphs.
-These run after `createParagraphBullets'.  They keep paragraph shading full-width
-inside callout panels while native nesting level has already been assigned from
-leading tabs."
+These run after `createParagraphBullets'.  They keep paragraph shading
+full-width inside callout panels while native nesting level has already
+been assigned from leading tabs."
   (let (requests)
     (dolist (range element-ranges (nreverse requests))
       (let* ((element (plist-get range :element))

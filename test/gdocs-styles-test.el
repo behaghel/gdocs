@@ -65,5 +65,44 @@
     (should (= (alist-get 'magnitude (alist-get 'width border)) 3))
     (should (= (alist-get 'magnitude (alist-get 'padding border)) 7))))
 
+(ert-deftest gdocs-styles-body-font-applies-to-lists-and-normal-text ()
+  "Configured body fonts cover native lists as well as ordinary paragraphs."
+  (require 'gdocs-convert)
+  (let* ((gdocs-style-definitions '((gdocs-body :parent normal :text (:font-family "Example Sans"))))
+         (ir (gdocs-convert-org-string-to-ir "- One\n\nBody.\n"))
+         (before (copy-tree ir))
+         (requests (gdocs-convert-ir-to-docs-requests ir))
+         (ranges (delq nil
+                       (mapcar
+                        (lambda (request)
+                          (let* ((update (alist-get 'updateTextStyle request))
+                                 (font (alist-get 'weightedFontFamily (alist-get 'textStyle update))))
+                            (when (equal (alist-get 'fontFamily font) "Example Sans")
+                              (let ((range (alist-get 'range update)))
+                                (cons (alist-get 'startIndex range) (alist-get 'endIndex range))))))
+                        requests))))
+    (should (equal ranges '((1 . 4) (5 . 10))))
+    (should (equal ir before))
+    (should (seq-some (lambda (request) (alist-get 'createParagraphBullets request)) requests))))
+
+(ert-deftest gdocs-styles-body-font-survives-incremental-edits ()
+  "Normal and list paragraph edits reapply body font before inline formatting."
+  (require 'gdocs-diff)
+  (let ((gdocs-style-definitions '((gdocs-body :parent normal :text (:font-family "Example Sans")))))
+    (dolist (case '(("Body.\n" "Body changed.\n")
+                    ("- One\n" "- One changed\n")
+                    ("Body.\n" "*Body.*\n")
+                    ("- One\n" "- *One*\n")))
+      (let* ((old (gdocs-convert-org-string-to-ir (car case)))
+             (new (gdocs-convert-org-string-to-ir (cadr case)))
+             (requests (gdocs-diff-generate old new)))
+        (should (seq-some
+                 (lambda (request)
+                   (equal (alist-get 'fontFamily
+                                     (alist-get 'weightedFontFamily
+                                                (alist-get 'textStyle (alist-get 'updateTextStyle request))))
+                          "Example Sans"))
+                 requests))))))
+
 (provide 'gdocs-styles-test)
 ;;; gdocs-styles-test.el ends here

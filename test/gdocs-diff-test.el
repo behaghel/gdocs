@@ -68,6 +68,48 @@ ROWS is a list of lists of lists of run plists."
         :strikethrough nil :code nil :link nil
         :footnote-label label))
 
+(defun gdocs-diff-test--apply-body-text-requests (text requests)
+  "Apply REQUESTS to TEXT while enforcing the protected body newline."
+  (dolist (request requests text)
+    (let* ((insert (alist-get 'insertText request))
+           (delete (alist-get 'deleteContentRange request))
+           (end (+ 1 (gdocs-convert--string-to-utf16-length text))))
+      (cond
+       (insert
+        (let ((index (alist-get 'index (alist-get 'location insert))))
+          (should (<= 1 index))
+          (should (< index end))
+          (let ((offset (gdocs-convert--utf16-string-index text (1- index))))
+            (setq text (concat (substring text 0 offset)
+                               (alist-get 'text insert) (substring text offset))))))
+       (delete
+        (let* ((range (alist-get 'range delete))
+               (start (alist-get 'startIndex range))
+               (stop (alist-get 'endIndex range)))
+          (should (<= 1 start))
+          (should (< start stop))
+          (should (<= stop (1- end)))
+          (setq text (concat
+                      (substring text 0 (gdocs-convert--utf16-string-index text (1- start)))
+                      (substring text (gdocs-convert--utf16-string-index text (1- stop))))))))
+      (should (string-suffix-p "\n" text)))))
+
+(ert-deftest gdocs-diff-test-append-preserves-protected-terminal-newline ()
+  "Appending paragraphs, lists, and blocks stays inside Google's body segment."
+  (dolist (case '(("Old 😀\n\nNew Bépo.\n" . "Old 😀\nNew Bépo.\n")
+                  ("Old 😀\n\nNext.\n\nLast 😀.\n" . "Old 😀\nNext.\nLast 😀.\n")
+                  ("Old 😀\n\n- Item\n- Deux\n" . "Old 😀\nItem\nDeux\n")
+                  ("Old 😀\n\n#+BEGIN_EXAMPLE\nliteral.\n#+END_EXAMPLE\n" . "Old 😀\nliteral.\n")))
+    (let* ((json '((body . ((content . [((startIndex . 1) (endIndex . 8)
+                                        (paragraph . ((elements . [((startIndex . 1) (endIndex . 8)
+                                                                    (textRun . ((content . "Old 😀\n"))))]))))])))))
+           (old (gdocs-convert-docs-json-to-ir json))
+           (new (gdocs-convert-org-string-to-ir (car case)))
+           (requests (gdocs-diff-generate old new)))
+      (should requests)
+      (should (equal (gdocs-diff-test--apply-body-text-requests "Old 😀\n" requests)
+                     (cdr case))))))
+
 ;;;; LCS tests
 
 (ert-deftest gdocs-diff-test-lcs-identical ()
