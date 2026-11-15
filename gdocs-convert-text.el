@@ -77,5 +77,13 @@ When SEGMENT-ID is non-nil, target that segment instead of the body."
   (append (when segment-id (list (cons 'segmentId segment-id)))
           (list (cons 'startIndex start) (cons 'endIndex end))))
 
+(defun gdocs-convert--soft-wrap-continuation-p (runs)
+  "Return non-nil when RUNS look like a split soft-wrapped paragraph line."
+  (let ((text (string-trim-left (gdocs-convert--runs-to-plain-text runs))))
+    (and (not (string-empty-p text))
+         (let ((first (aref text 0)))
+           (or (and (>= first ?a) (<= first ?z))
+               (member first '(?, ?. ?\; ?: ?\) ?\] ?\})))))))
+
 (provide 'gdocs-convert-text)
 ;;; gdocs-convert-text.el ends here

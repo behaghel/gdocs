@@ -96,7 +96,6 @@ identical keys."
     ('paragraph (gdocs-diff--paragraph-key element))
     ('horizontal-rule "horizontal-rule")
     ('page-break "page-break")
-    ('quote-block (gdocs-diff--quote-block-key element))
     ('callout-block (gdocs-diff--callout-block-key element))
     (_ (or (plist-get (gdocs-diff-semantic-element element) :key)
            (format "unknown:%s" (plist-get element :type))))))
@@ -155,17 +154,6 @@ Includes type, style, list info, semantic markers, and full run details."
         (marker-key (gdocs-diff--marker-key element)))
     (format "paragraph:%s:%s:%s:%s:%s:%s"
             style style-name list-key marker-key formatting text)))
-
-(defun gdocs-diff--quote-block-key (element)
-  "Compute a content key for quote-block ELEMENT."
-  (format "quote-block:%s:%s"
-          (or (plist-get element :style-revision) "")
-          (mapconcat (lambda (runs)
-                       (format "%s:%s"
-                               (gdocs-diff--runs-formatting-key runs)
-                               (gdocs-convert--runs-to-plain-text runs)))
-                     (plist-get element :paragraphs)
-                     "\n\n")))
 
 (defun gdocs-diff--callout-block-key (element)
   "Compute a content key for callout-block ELEMENT."
@@ -387,20 +375,9 @@ the UTF-16 index where the first element begins (default 1)."
     ;; structural element in the document body (1 UTF-16 unit).
     ('horizontal-rule 1)
     ('page-break 1)
-    ('quote-block (gdocs-diff--quote-block-utf16-length element))
     ('callout-block (gdocs-diff--callout-block-utf16-length element))
     (_ (or (plist-get (gdocs-diff-semantic-element element) :body-length)
            (error "gdocs-diff: unknown element type: %s" (plist-get element :type))))))
-
-(defun gdocs-diff--quote-block-utf16-length (element)
-  "Compute UTF-16 length of quote-block ELEMENT."
-  ;; Includes the generated unmarked empty separator paragraph.
-  (1+ (apply #'+
-             (mapcar (lambda (runs)
-                       (1+ (gdocs-convert--string-to-utf16-length
-                            (gdocs-convert--runs-to-plain-text runs))))
-                     (or (plist-get element :paragraphs)
-                         (list (list (gdocs-convert--make-plain-run ""))))))))
 
 (defun gdocs-diff--callout-block-utf16-length (element)
   "Compute UTF-16 length of callout-block ELEMENT."

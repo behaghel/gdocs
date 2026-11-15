@@ -1133,5 +1133,35 @@ so this requires manual fixture update or a doc created via the GDocs UI."
         (should-not (gdocs-diff-generate parsed parsed))
         (should-not (gdocs-diff-generate parsed parsed))))))
 
+(ert-deftest gdocs-roundtrip/specimen-quote-feature-composition ()
+  "Both specimen flows compose quote grouping, planning and neutral descriptors."
+  (require 'gdocs-diff)
+  (let* ((native (gdocs-roundtrip-test--read-json-fixture))
+         (body (alist-get 'body native)))
+    ;; Add explicit native semantic quote input; do not alter standard fixtures.
+    (setf (alist-get 'content body)
+          (vconcat (alist-get 'content body)
+                   [((startIndex . 100000) (endIndex . 100010)
+                     (paragraph . ((elements . [((textRun . ((content . "synthetic\n"))))]))))
+                    ((startIndex . 100010) (endIndex . 100011)
+                     (paragraph . ((elements . [((textRun . ((content . "\n"))))]))))]))
+    (setf (alist-get 'namedRanges native)
+          (cons '(gdocs-org-marker:quote-block:synthetic
+                  . ((namedRanges . [((ranges . [((startIndex . 100000) (endIndex . 100010))]))])))
+                (alist-get 'namedRanges native)))
+    (dolist (ir (list (gdocs-roundtrip-test--org-to-ir (gdocs-roundtrip-test--read-org-fixture))
+                      (gdocs-convert-docs-json-to-ir native)))
+      (let* ((quotes (seq-filter #'gdocs-convert-quote-element-p ir))
+             (requests (gdocs-convert-ir-to-docs-requests ir)))
+        (should quotes)
+        (should requests)
+        (dolist (quote quotes)
+          (let ((descriptor (gdocs-diff-semantic-element quote)))
+            (should (equal (plist-get descriptor :key) (gdocs-diff--element-key quote)))
+            (should (= (plist-get descriptor :body-length) (gdocs-diff--element-utf16-length quote)))))
+        (should (string-match-p (regexp-quote "#+BEGIN_QUOTE") (gdocs-convert-ir-to-org ir)))
+        (should-not (gdocs-diff-generate ir ir))
+        (should-not (gdocs-diff-generate ir ir))))))
+
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

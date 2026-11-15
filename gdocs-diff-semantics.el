@@ -57,6 +57,7 @@ explicit nil operations means no body operations, not an unmatched plan.")
 (require 'gdocs-diff-tables)
 (require 'gdocs-diff-images)
 (require 'gdocs-diff-code-blocks)
+(require 'gdocs-diff-quotes)
 
 (provide 'gdocs-diff-semantics)
 ;;; gdocs-diff-semantics.el ends here

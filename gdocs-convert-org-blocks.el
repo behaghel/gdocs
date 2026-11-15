@@ -12,6 +12,7 @@
 (require 'subr-x)
 (require 'gdocs-convert-paragraph-codec)
 (require 'gdocs-convert-code-blocks)
+(require 'gdocs-convert-quotes)
 
 (declare-function gdocs-convert--extract-marker-field "gdocs-convert" (marker type-sym))
 (declare-function gdocs-convert--plain-text "gdocs-convert" (element))
@@ -23,13 +24,7 @@
 
 (defun gdocs-convert-block-paragraph-to-ir (paragraph runs)
   "Return contextual block IR for PARAGRAPH and RUNS, or nil when unhandled."
-  (when (and runs (eq (gdocs-convert--paragraph-style paragraph) 'quote))
-    (list (gdocs-convert-paragraph-from-runs runs 'quote))))
-
-(defun gdocs-convert--paragraph-style (paragraph)
-  "Determine the IR style for PARAGRAPH based on its context."
-  (let ((parent (org-element-parent paragraph)))
-    (if (eq (org-element-type parent) 'quote-block) 'quote 'normal)))
+  (gdocs-convert-quote-paragraph-to-ir paragraph runs))
 
 (defun gdocs-convert--multiline-code-paragraph-p (runs)
   "Return non-nil if RUNS represent consecutive inline code lines."
@@ -51,9 +46,9 @@
 
 (defun gdocs-convert-block-paragraph-to-org (element text)
   "Render block paragraph ELEMENT and TEXT, or nil when unhandled."
-  (let ((style (plist-get element :style)) (marker (plist-get element :gdocs-marker)))
+  (let ((marker (plist-get element :gdocs-marker)))
     (cond
-     ((eq style 'quote) (format "#+BEGIN_QUOTE\n%s\n#+END_QUOTE" text))
+     ((gdocs-convert-quote-paragraph-to-org element text))
      ((when-let* ((data (gdocs-convert--extract-marker-field marker 'src-block)))
         (gdocs-convert--format-src-block data element)))
      ((when-let* ((data (gdocs-convert--extract-marker-field marker 'keyword)))

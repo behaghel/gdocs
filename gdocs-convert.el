@@ -35,6 +35,7 @@
 (require 'gdocs-convert-images)
 (require 'gdocs-convert-lists)
 (require 'gdocs-convert-code-blocks)
+(require 'gdocs-convert-quotes)
 (require 'gdocs-convert-org-blocks)
 (require 'gdocs-convert-headings)
 (require 'gdocs-convert-status)
@@ -345,18 +346,6 @@ a paragraph inside a quote block is handled by the quote walker."
     (or (eq parent-type 'section)
         (eq parent-type 'org-data))))
 
-(defun gdocs-convert--block-paragraph-runs (block)
-  "Return non-empty paragraph run lists from Org BLOCK."
-  (let (paragraphs)
-    (org-element-map block 'paragraph
-      (lambda (paragraph)
-        (let* ((runs (gdocs-convert--objects-to-runs
-                      (org-element-contents paragraph)))
-               (trimmed (gdocs-convert--trim-runs runs)))
-          (when trimmed
-            (push trimmed paragraphs)))))
-    (nreverse paragraphs)))
-
 (defun gdocs-convert--reject-nested-block-list-elements (elements block-name)
   "Signal if ELEMENTS contain nested list items inside BLOCK-NAME."
   (when-let* ((nested (seq-find
@@ -540,14 +529,6 @@ it so the IR text is clean for round-tripping."
 
 ;; ---------------------------------------------------------------------------
 ;;; Quote blocks -> IR
-
-(defun gdocs-convert--quote-block-to-ir (quote-block)
-  "Convert a QUOTE-BLOCK element to semantic quote-block IR."
-  (let ((paragraphs (gdocs-convert--block-paragraph-runs quote-block)))
-    (list :type 'quote-block
-          :paragraphs (or paragraphs
-                          (list (list (gdocs-convert--make-plain-run ""))))
-          :id (gdocs-convert--next-id))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Src blocks / keywords -> IR (org-only markers)
@@ -810,17 +791,6 @@ collected at the end under a conventional `* Footnotes' section."
      (concat (s-join "\n" (nreverse parts)) "\n")
      footnotes)))
 
-(defun gdocs-convert--quote-block-marker (element)
-  "Return the quote-block marker on ELEMENT, or nil."
-  (seq-find (lambda (marker)
-              (eq (plist-get marker :type) 'quote-block))
-            (plist-get element :gdocs-marker)))
-
-(defun gdocs-convert--quote-block-paragraph-p (element)
-  "Return non-nil if ELEMENT is a marked quote-block paragraph."
-  (and (eq (plist-get element :type) 'paragraph)
-       (gdocs-convert--quote-block-marker element)))
-
 (defun gdocs-convert--plain-text (element)
   "Return the concatenated plain text of ELEMENT's runs."
   (mapconcat (lambda (r) (plist-get r :text))
@@ -837,8 +807,10 @@ merge the heading text into that list item."
           (previous-style (plist-get previous :style))
           (type (plist-get element :type))
           (list-info (plist-get element :list))
-          (block-types '(quote-block callout-block)))
-      (or (gdocs-convert-code-block-element-p previous)
+          (block-types '(callout-block)))
+      (or (gdocs-convert-quote-element-p previous)
+          (gdocs-convert-quote-element-p element)
+          (gdocs-convert-code-block-element-p previous)
           (gdocs-convert-code-block-element-p element)
           (memq previous-type block-types)
           (memq type block-types)
@@ -893,13 +865,6 @@ MARKER is a list of marker plists."
 
 ;; ---------------------------------------------------------------------------
 ;;; IR footnote -> org
-
-(defun gdocs-convert--ir-quote-block-to-org (element)
-  "Convert quote-block IR ELEMENT to Org quote block text."
-  (format "#+BEGIN_QUOTE\n%s\n#+END_QUOTE"
-          (s-join "\n\n"
-                  (mapcar #'gdocs-convert--runs-to-org
-                          (plist-get element :paragraphs)))))
 
 (defun gdocs-convert--callout-body-elements-from-paragraphs (element)
   "Return backward-compatible callout body elements for ELEMENT."
@@ -1055,27 +1020,6 @@ like `body', `title', `lists', and `namedRanges'."
         copy)
     element))
 
-(defun gdocs-convert--empty-paragraph-p (element)
-  "Return non-nil when ELEMENT is an empty paragraph."
-  (and (eq (plist-get element :type) 'paragraph)
-       (let ((contents (plist-get element :contents)))
-         (or (null contents)
-             (and (= (length contents) 1)
-                  (string-empty-p
-                   (string-trim
-                    (or (plist-get (car contents) :text) ""))))))))
-
-(defun gdocs-convert--consume-generated-separator (remaining end)
-  "Consume one generated empty paragraph from REMAINING.
-Return a plist with :remaining and :end.  Typographic block renderers use an
-unmarked empty paragraph as separator chrome; pull grouping treats it as owned
-by the preceding marked block so repeated push/restyle operations stay
-idempotent."
-  (if (and remaining (gdocs-convert--empty-paragraph-p (car remaining)))
-      (list :remaining (cdr remaining)
-            :end (or (plist-get (car remaining) :doc-end) end))
-    (list :remaining remaining :end end)))
-
 (defun gdocs-convert--attach-callout-block-markers (ir)
   "Group marked callout paragraphs in IR.
 Consume one following empty paragraph as generated callout separator chrome so
@@ -1146,68 +1090,6 @@ subsequent diffs treat the separator as part of the owning callout block."
                             (when start (list :doc-start start))
                             (when end (list :doc-end end)))
                     result)))
-          (push element result)
-          (setq remaining (cdr remaining)))))
-    (nreverse result)))
-
-(defun gdocs-convert--strip-quote-visual-style (runs)
-  "Return RUNS without visual-only quote paragraph styling."
-  (mapcar (lambda (run)
-            (plist-put (copy-sequence run) :italic nil))
-          runs))
-
-(defun gdocs-convert--soft-wrap-continuation-p (runs)
-  "Return non-nil when RUNS look like a split soft-wrapped paragraph line."
-  (let ((text (string-trim-left (gdocs-convert--runs-to-plain-text runs))))
-    (and (not (string-empty-p text))
-         (let ((first (aref text 0)))
-           (or (and (>= first ?a) (<= first ?z))
-               (member first '(?, ?. ?\; ?: ?\) ?\] ?\})))))))
-
-(defun gdocs-convert--attach-quote-block-markers (ir)
-  "Group consecutive marked quote-block paragraphs in IR."
-  (let ((result nil)
-        (remaining ir))
-    (while remaining
-      (let ((element (car remaining)))
-        (if (gdocs-convert--quote-block-paragraph-p element)
-            (let ((paragraphs nil)
-                  (last-marker-id nil)
-                  (start (plist-get element :doc-start))
-                  end)
-              (while (and remaining
-                          (gdocs-convert--quote-block-paragraph-p
-                           (car remaining)))
-                (unless (gdocs-convert--empty-paragraph-p (car remaining))
-                  (let* ((marker (gdocs-convert--quote-block-marker
-                                  (car remaining)))
-                         (marker-id (plist-get marker :id))
-                         (runs (gdocs-convert--strip-quote-visual-style
-                                (plist-get (car remaining) :contents))))
-                    (if (and paragraphs
-                             marker-id
-                             (equal marker-id last-marker-id)
-                             (gdocs-convert--soft-wrap-continuation-p runs))
-                        (setcar paragraphs
-                                (gdocs-convert--merge-adjacent-runs
-                                 (append (car paragraphs)
-                                         (list (gdocs-convert--make-plain-run
-                                                " "))
-                                         runs)))
-                      (push runs paragraphs))
-                    (setq last-marker-id marker-id)))
-                (setq end (plist-get (car remaining) :doc-end))
-                (setq remaining (cdr remaining)))
-              (let ((separator (gdocs-convert--consume-generated-separator
-                                remaining end)))
-                (setq remaining (plist-get separator :remaining))
-                (setq end (plist-get separator :end)))
-              (push (append (list :type 'quote-block
-                                  :paragraphs (nreverse paragraphs)
-                                  :id (gdocs-convert--next-id))
-                            (when start (list :doc-start start))
-                            (when end (list :doc-end end)))
-                    result))
           (push element result)
           (setq remaining (cdr remaining)))))
     (nreverse result)))
@@ -1374,48 +1256,6 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
 
 ;; ---------------------------------------------------------------------------
 ;;; Typographic block -> requests
-
-(defun gdocs-convert--append-generated-separator-requests
-    (requests current element)
-  "Append shared generated separator chrome for typographic block ELEMENT.
-Return a plist with :requests and :index.  The separator is intentionally
-unmarked and unstyled; pull grouping consumes one following empty paragraph as
-owned chrome via `gdocs-convert--consume-generated-separator'."
-  (let* ((separator (list :type 'paragraph
-                          :style 'normal
-                          :contents (list (gdocs-convert--make-plain-run ""))
-                          :id (plist-get element :id)))
-         (result (gdocs-convert--paragraph-to-requests separator current)))
-    (list :requests (nconc requests (plist-get result :requests))
-          :index (plist-get result :index))))
-
-(defun gdocs-convert--quote-block-paragraph-element (element runs index count)
-  "Return paragraph IR for quote-block ELEMENT RUNS at INDEX of COUNT."
-  (gdocs-convert--typographic-block-paragraph
-   element runs 'gdocs-quote-block (list :type 'quote-block) index count))
-
-(defun gdocs-convert--quote-block-to-requests (element index)
-  "Create paragraph requests for quote-block ELEMENT at INDEX."
-  (let* ((paragraphs (or (plist-get element :paragraphs)
-                         (list (list (gdocs-convert--make-plain-run "")))))
-         (count (length paragraphs))
-         (paragraph-index 0)
-         (requests nil)
-         (current index))
-    (dolist (runs paragraphs)
-      (let* ((paragraph (gdocs-convert--quote-block-paragraph-element
-                         element runs paragraph-index count))
-             (result (gdocs-convert--paragraph-to-requests paragraph current)))
-        (setq requests (nconc requests (plist-get result :requests)))
-        (setq current (plist-get result :index))
-        (cl-incf paragraph-index)))
-    ;; Add unmarked spacing chrome so shaded quote blocks do not visually merge
-    ;; with following shaded typographic blocks such as callouts.
-    (let ((result (gdocs-convert--append-generated-separator-requests
-                   requests current element)))
-      (setq requests (plist-get result :requests))
-      (setq current (plist-get result :index)))
-    (list :requests requests :index current)))
 
 (defun gdocs-convert--callout-style-base (type)
   "Return logical style base symbol for callout TYPE."

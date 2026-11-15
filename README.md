@@ -235,6 +235,31 @@ prefers an existing Org ID for a same-document heading. Cache ordering,
 normalization and dynamic callback context remain part of link resolution, not
 semantic conversion or typography policy.
 
+## Quote block conversion
+
+`gdocs-convert-quotes.el` owns source/context quote recognition, paragraph
+extraction, native quote markers, grouping, visual-italic cleanup, Org rendering
+and publication planning. Contextual Org paragraph adapters delegate quote
+policy to this feature rather than interpreting it inside the generic codec.
+Quote identity and read-side geometry belong to `gdocs-diff-quotes.el`, exposed
+through neutral element descriptors; identity includes style revision and rich
+paragraph run formatting/text.
+
+Native grouping preserves authoritative ranges, skips empty marked paragraphs,
+and joins soft-wrap continuations only when marker IDs match. Quote cleanup
+removes visual italic flags without mutating input runs.
+Publication emits shared paragraph plans with quote-specific logical line roles
+and semantic markers, then one unmarked separator paragraph. Body length counts
+paragraph terminal newlines and that separator. Empty quote publication includes
+an empty content paragraph and the separator.
+
+Shared text supplies only the soft-wrap text heuristic. Shared paragraph
+construction supplies empty-paragraph recognition and neutral separator
+append/consume operations; quote and callout features decide when to invoke
+those operations. Callouts do not depend on quote policy. Logical presentation,
+transport, accounts and asynchronous orchestration remain separate. Existing
+helper APIs remain available through the facade.
+
 ## Source and example block conversion
 
 `gdocs-convert-code-blocks.el` owns source/example syntax, literal lines,

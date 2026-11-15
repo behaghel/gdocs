@@ -50,5 +50,32 @@ feature metadata; INDEX and COUNT describe position within the group."
    :style-name (gdocs-convert--block-line-style-name style-base index count)
    :gdocs-marker (list marker) :id (plist-get element :id)))
 
+(declare-function gdocs-convert--paragraph-to-requests "gdocs-convert" (element index))
+
+(defun gdocs-convert--empty-paragraph-p (element)
+  "Return non-nil when ELEMENT is an empty paragraph."
+  (and (eq (plist-get element :type) 'paragraph)
+       (let ((contents (plist-get element :contents)))
+         (or (null contents)
+             (and (= (length contents) 1)
+                  (string-empty-p (string-trim (or (plist-get (car contents) :text) ""))))))))
+
+(defun gdocs-convert--consume-generated-separator (remaining end)
+  "Consume one empty separator from REMAINING, updating END when addressed.
+Return a neutral plist with :remaining and :end.  Feature grouping decides
+when this structural operation is appropriate."
+  (if (and remaining (gdocs-convert--empty-paragraph-p (car remaining)))
+      (list :remaining (cdr remaining) :end (or (plist-get (car remaining) :doc-end) end))
+    (list :remaining remaining :end end)))
+
+(defun gdocs-convert--append-generated-separator-requests (requests current element)
+  "Append an unmarked empty paragraph to REQUESTS at CURRENT for ELEMENT.
+Features choose whether a separator is needed; shared paragraph emission
+supplies requests and index advancement."
+  (let* ((separator (list :type 'paragraph :style 'normal
+                          :contents (list (gdocs-convert--make-plain-run "")) :id (plist-get element :id)))
+         (result (gdocs-convert--paragraph-to-requests separator current)))
+    (list :requests (nconc requests (plist-get result :requests)) :index (plist-get result :index))))
+
 (provide 'gdocs-convert-paragraphs)
 ;;; gdocs-convert-paragraphs.el ends here
