@@ -32,11 +32,16 @@ LOAD_TESTS = $(foreach f,$(TEST_FILES),-l $(f))
 
 SRC_FILES := $(wildcard gdocs*.el)
 
-.PHONY: test test-verbose compile clean
+.PHONY: test test-specimen test-verbose compile clean
 
 test:
 	$(EMACS) -Q --batch $(LOAD_PATH) -l ert $(LOAD_TESTS) \
 	  -f ert-run-tests-batch-and-exit
+
+# Named CI gate for the standard document specimens, also part of `test`.
+test-specimen:
+	$(EMACS) -Q --batch $(LOAD_PATH) -l ert -l test/gdocs-roundtrip-test.el \
+	  --eval '(ert-run-tests-batch-and-exit "^gdocs-roundtrip/")'
 
 test-verbose:
 	$(EMACS) -Q --batch $(LOAD_PATH) -l ert $(LOAD_TESTS) \

@@ -901,5 +901,25 @@ so this requires manual fixture update or a doc created via the GDocs UI."
 
 ;; ---------------------------------------------------------------------------
 
+(ert-deftest gdocs-roundtrip/specimen-styling-does-not-change-semantic-identity ()
+  "Changing presentation policy must not change standard specimen semantics."
+  (require 'gdocs-diff)
+  (let* ((source (gdocs-roundtrip-test--read-org-fixture))
+         (before (gdocs-roundtrip-test--org-to-ir source))
+         (gdocs-style-definitions
+          (cons '(gdocs-body :text (:font-family "Specimen Serif" :font-size 23 :bold t))
+                gdocs-style-definitions))
+         (after (gdocs-roundtrip-test--org-to-ir source)))
+    (should (equal (gdocs-diff--element-keys before)
+                   (gdocs-diff--element-keys after)))
+    ;; The override must actually affect presentation, not be ignored.
+    (should (seq-some
+             (lambda (request)
+               (equal (alist-get 'fontFamily
+                                 (alist-get 'weightedFontFamily
+                                            (alist-get 'textStyle (alist-get 'updateTextStyle request))))
+                      "Specimen Serif"))
+             (gdocs-convert-ir-to-docs-requests after)))))
+
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

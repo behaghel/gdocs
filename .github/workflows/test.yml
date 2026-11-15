@@ -27,6 +27,9 @@ jobs:
           git clone --depth 1 https://github.com/emacs-straight/compat.git ../compat
       - name: Byte-compile
         run: make compile
+      - name: Standard document specimen regressions
+        if: ${{ !cancelled() }}
+        run: make test-specimen
       - name: Run tests
         if: ${{ !cancelled() }}
         run: make test
