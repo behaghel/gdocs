@@ -24,6 +24,8 @@
 (require 'ox)
 (require 'url-util)
 (require 'gdocs-styles)
+(require 'gdocs-convert-text)
+(require 'gdocs-convert-paragraphs)
 (require 'gdocs-convert-headings)
 (require 'gdocs-convert-status)
 (require 'gdocs-convert-footnotes)
@@ -740,17 +742,6 @@ objects."
     ('line-break (list (gdocs-convert--make-run "\n" inherited-props)))
     (_ (gdocs-convert--fallback-object-to-runs object inherited-props))))
 
-(defun gdocs-convert--string-to-run (text inherited-props)
-  "Create a text run list from plain TEXT string with INHERITED-PROPS.
-Org plain text strings may contain soft source line wraps inside a paragraph.
-Normalize those to spaces before pushing to Google Docs; literal Org line-break
-objects are handled separately and still emit newlines."
-  (if (string-empty-p text)
-      nil
-    (list (gdocs-convert--make-run
-           (string-replace "\n" " " (substring-no-properties text))
-           inherited-props))))
-
 (defun gdocs-convert--markup-to-runs (object inherited-props formatting-key)
   "Convert a markup OBJECT (bold, italic, etc.) to text runs.
 INHERITED-PROPS carries parent formatting.  FORMATTING-KEY is the
@@ -971,47 +962,6 @@ INHERITED-PROPS carries parent formatting."
   (let ((interpreted (org-element-interpret-data object)))
     (when (and interpreted (not (string-empty-p interpreted)))
       (list (gdocs-convert--make-run interpreted inherited-props)))))
-
-(defun gdocs-convert-make-run (text &rest props)
-  "Create a reusable semantic text run for TEXT with PROPS.
-Supported PROPS include inline formatting flags like `:bold', `:italic',
-`:underline', `:strikethrough', `:link', and logical `:style-names'."
-  (gdocs-convert--make-run text props))
-
-(defun gdocs-convert-make-paragraph (contents &rest props)
-  "Create reusable semantic paragraph IR with CONTENTS and PROPS.
-PROPS may include `:style', `:style-name', `:list', `:gdocs-marker', and `:id'."
-  (append (list :type 'paragraph
-                :style (or (plist-get props :style) 'normal)
-                :contents contents)
-          (when (plist-member props :style-name)
-            (list :style-name (plist-get props :style-name)))
-          (when (plist-member props :list)
-            (list :list (plist-get props :list)))
-          (when (plist-member props :gdocs-marker)
-            (list :gdocs-marker (plist-get props :gdocs-marker)))
-          (when (plist-member props :id)
-            (list :id (plist-get props :id)))))
-
-(defun gdocs-convert--make-run (text props)
-  "Create a text run plist for TEXT with formatting from PROPS."
-  (list :text text
-        :bold (plist-get props :bold)
-        :italic (plist-get props :italic)
-        :underline (plist-get props :underline)
-        :strikethrough (plist-get props :strikethrough)
-        :code (plist-get props :code)
-        :style-names (plist-get props :style-names)
-        :link (plist-get props :link)
-        :subscript (plist-get props :subscript)
-        :superscript (plist-get props :superscript)
-        :foreground-color (plist-get props :foreground-color)
-        :background-color (plist-get props :background-color)
-        :font-size (plist-get props :font-size)))
-
-(defun gdocs-convert--make-plain-run (text)
-  "Create a plain (unformatted) text run plist for TEXT."
-  (gdocs-convert--make-run text nil))
 
 ;; ---------------------------------------------------------------------------
 ;;; Lists -> IR
@@ -2566,12 +2516,6 @@ emphasis model.  This prevents spurious diffs on round-trip."
       (plist-get run :font-size)
       (plist-get run :footnote-label)))
 
-(defun gdocs-convert--strip-vertical-tabs (text)
-  "Replace vertical tab characters in TEXT with newlines.
-Google Docs uses vertical tabs (^K, U+000B) for soft line breaks
-within paragraphs."
-  (replace-regexp-in-string "\v" "\n" text))
-
 (defun gdocs-convert--docs-text-run-to-ir (text-run)
   "Convert a Google Docs TEXT-RUN to an IR text run plist."
   (let* ((content (gdocs-convert--strip-vertical-tabs
@@ -3373,26 +3317,14 @@ clear any inherited formatting before per-run styles are applied."
     (list :requests all-requests
           :index (+ index text-len))))
 
-(defun gdocs-convert--runs-to-plain-text (runs)
-  "Concatenate the :text values of all RUNS."
-  (mapconcat (lambda (run) (plist-get run :text)) runs ""))
-
-(defun gdocs-convert--make-insert-text-request (text index)
-  "Create an insertText request for TEXT at INDEX."
-  `((insertText . ((text . ,text)
-                   (location . ((index . ,index)))))))
-
 (defun gdocs-convert--make-inline-insert-requests (runs index &optional prefix)
   "Return insert requests for PREFIX, RUNS, and paragraph newline at INDEX.
 The returned plist contains :requests and model :length.  Native date runs are
 inserted with `insertDate' and count as one UTF-16 model unit."
   (setq prefix (or prefix ""))
   (if (not (seq-some (lambda (run) (plist-get run :date-element)) runs))
-      (let* ((text (gdocs-convert--runs-to-plain-text runs))
-             (full-text (concat prefix text "\n")))
-        (list :requests (list (gdocs-convert--make-insert-text-request
-                               full-text index))
-              :length (gdocs-convert--string-to-utf16-length full-text)))
+      (gdocs-convert-paragraph-text-requests
+       (gdocs-convert--runs-to-plain-text runs) index prefix)
     (let ((requests nil)
           (cursor index))
       (unless (string-empty-p prefix)
@@ -4301,15 +4233,6 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
 
 ;; ---------------------------------------------------------------------------
 ;;; UTF-16 helper
-
-(defun gdocs-convert--string-to-utf16-length (string)
-  "Return the number of UTF-16 code units needed to encode STRING.
-Google Docs uses UTF-16 for indexing.  Characters above U+FFFF
-require 2 code units (surrogate pairs), all others require 1."
-  (let ((len 0))
-    (seq-doseq (char string)
-      (setq len (+ len (if (> char #xFFFF) 2 1))))
-    len))
 
 (provide 'gdocs-convert)
 ;;; gdocs-convert.el ends here

@@ -112,6 +112,24 @@ extension points require a concrete behavior that the existing contract cannot
 express. Architecture tests enforce the boundary and exercise an unrelated
 synthetic semantic kind so the contract is not a renamed feature-specific API.
 
+## Shared text and paragraph primitives
+
+`gdocs-convert-text.el` owns run construction, literal text concatenation,
+source soft-wrap normalization, returned soft-break decoding and UTF-16 text
+coordinates. `gdocs-convert-paragraphs.el` composes it for paragraph construction
+and literal paragraph insertion, including the terminal newline. Both load
+without Org, the conversion facade, styles, feature modules or transport.
+Existing constructor/helper names remain available through the facade.
+
+These primitives accept already resolved text and formatting data. They do not
+recognize native objects, choose IDs, resolve styles or interpret feature
+metadata. Source soft wraps become spaces only through the source-text helper;
+literal constructors preserve authored newlines. Paragraph insertion accepts a
+rendered string, not unresolved semantic runs. Body, heading, list and block
+publishing compose this same literal insertion envelope; feature-specific
+requests and configurable styling remain outside it. Footnotes and status
+conversion require their shared text dependency directly.
+
 ## Native footnote conversion
 
 `gdocs-convert-footnotes.el` owns footnote definition/run conversion, native

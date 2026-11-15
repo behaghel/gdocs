@@ -931,5 +931,24 @@ so this requires manual fixture update or a doc created via the GDocs UI."
     (should (string-match-p "#\\+AUTHOR:" (plist-get parts :preamble)))
     (should (equal (gdocs-preamble-preserve source remote) source))))
 
+(ert-deftest gdocs-roundtrip/specimen-shared-paragraph-wire-contract ()
+  "Both standard specimens retain the established literal paragraph wire shape."
+  (dolist (ir (list (gdocs-roundtrip-test--org-to-ir
+                    (gdocs-roundtrip-test--read-org-fixture))
+                   (gdocs-convert-docs-json-to-ir
+                    (gdocs-roundtrip-test--read-json-fixture))))
+    (let ((actual (gdocs-convert-ir-to-docs-requests ir)) (calls 0))
+      ;; Independent reference for the existing wire contract, not a golden
+      ;; regenerated from the new module.  All other request stages run normally.
+      (cl-letf (((symbol-function 'gdocs-convert-paragraph-text-requests)
+                 (lambda (text index &optional prefix)
+                   (setq calls (1+ calls))
+                   (let ((body (concat prefix text "\n")))
+                     (list :requests `(((insertText . ((text . ,body)
+                                                       (location . ((index . ,index)))))))
+                           :length (/ (length (encode-coding-string body 'utf-16le t)) 2))))))
+        (should (equal actual (gdocs-convert-ir-to-docs-requests ir))))
+      (should (> calls 0)))))
+
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

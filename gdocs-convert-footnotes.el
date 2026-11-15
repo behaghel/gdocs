@@ -10,22 +10,19 @@
 (require 'org-element)
 (require 'seq)
 (require 'subr-x)
+(require 'gdocs-convert-text)
 
 (defvar gdocs-convert-footnote-reference-text-function)
 (declare-function gdocs-convert--objects-to-runs "gdocs-convert" (objects))
 (declare-function gdocs-convert--trim-runs "gdocs-convert" (runs))
-(declare-function gdocs-convert--make-plain-run "gdocs-convert" (text))
 (declare-function gdocs-convert--next-id "gdocs-convert" ())
 (declare-function gdocs-convert--runs-to-org "gdocs-convert" (runs))
-(declare-function gdocs-convert--runs-to-plain-text "gdocs-convert" (runs))
 (declare-function gdocs-convert--docs-elements-to-runs "gdocs-convert" (elements &optional markers))
 (declare-function gdocs-convert--trim-trailing-newline-runs "gdocs-convert" (runs))
-(declare-function gdocs-convert--string-to-utf16-length "gdocs-convert" (string))
 (declare-function gdocs-convert--text-range "gdocs-convert" (start end &optional segment-id))
 (declare-function gdocs-convert--make-text-style-reset-request "gdocs-convert" (start end))
 (declare-function gdocs-convert-make-text-style-requests "gdocs-convert"
                   (runs start-index &optional segment-id omit-status-markers))
-(declare-function gdocs-convert--make-insert-text-request "gdocs-convert" (text index))
 (declare-function gdocs-convert--make-marker-requests "gdocs-convert" (element start end))
 
 (defun gdocs-convert--footnote-definition-to-ir (footnote-def)

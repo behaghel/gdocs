@@ -15,12 +15,11 @@
 (require 's)
 (require 'subr-x)
 (require 'gdocs-styles)
+(require 'gdocs-convert-text)
 
 (declare-function gdocs-convert--logical-text-style-to-docs "gdocs-convert" (style-plist))
 (declare-function gdocs-convert--text-range "gdocs-convert" (start end &optional segment-id))
-(declare-function gdocs-convert--make-plain-run "gdocs-convert" (text))
 (declare-function gdocs-convert--docs-text-run-to-ir "gdocs-convert" (text-run))
-(declare-function gdocs-convert--string-to-utf16-length "gdocs-convert" (string))
 
 (defun gdocs-convert--status-docs-style (status)
   "Return the Docs text style for semantic STATUS."
