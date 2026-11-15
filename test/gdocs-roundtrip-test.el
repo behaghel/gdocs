@@ -1077,5 +1077,31 @@ so this requires manual fixture update or a doc created via the GDocs UI."
           (should-not (gdocs-diff-generate ir ir)))))
     (should (>= calls 2))))
 
+(ert-deftest gdocs-roundtrip/specimen-image-feature-composition ()
+  "Specimen publishing composes image planning and neutral diff descriptors."
+  (require 'gdocs-diff)
+  (let ((planner (symbol-function 'gdocs-convert--image-to-requests)) (calls 0))
+    (cl-letf (((symbol-function 'gdocs-convert--image-to-requests)
+               (lambda (&rest args) (setq calls (1+ calls)) (apply planner args))))
+      (dolist (ir (list (gdocs-roundtrip-test--org-to-ir
+                         (concat "#+CAPTION: Synthetic 😀\n[[file:synthetic.png]]\n\n"
+                                 (gdocs-roundtrip-test--read-org-fixture)))
+                        (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture))))
+        ;; URI enrichment is an explicit synthetic preflight result, not an upload.
+        (dolist (element ir)
+          (when (eq (plist-get element :type) 'image)
+            (plist-put element :uri "https://images.invalid/synthetic.png")))
+        (let* ((image (seq-find #'gdocs-convert-image-element-p ir))
+               (descriptor (gdocs-diff-semantic-element image))
+               (requests (gdocs-convert-ir-to-docs-requests ir)))
+          (should image)
+          (should (equal (plist-get descriptor :key) (gdocs-diff--element-key image)))
+          (should (= (plist-get descriptor :body-length) 1))
+          (should (seq-some (lambda (request) (alist-get 'insertInlineImage request)) requests))
+          (should (stringp (gdocs-convert-ir-to-org ir)))
+          (should-not (gdocs-diff-generate ir ir))
+          (should-not (gdocs-diff-generate ir ir)))))
+    (should (>= calls 2))))
+
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

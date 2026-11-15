@@ -235,6 +235,31 @@ prefers an existing Org ID for a same-document heading. Cache ordering,
 normalization and dynamic callback context remain part of link resolution, not
 semantic conversion or typography policy.
 
+## Image conversion and geometry
+
+`gdocs-convert-images.el` owns standalone source-image recognition, native
+inline-image decoding, source/caption markers, caption attachment, Org rendering
+and publication request geometry. Native traversal composes its element adapter
+in document order with other features. Shared document services supply IDs and
+marker-range selection; shared text and logical-style services supply literal
+insertion, UTF-16 lengths and caption presentation. Image modules do not upload,
+fetch files, select accounts or orchestrate asynchronous callbacks.
+
+Source markers encode authored paths as URL-escaped UTF-8; decoding restores
+Unicode filenames. Rendering prefers the authored path, then source URI,
+content URI and remote object ID. Marked caption paragraphs attach only to an
+immediately preceding image and extend its authoritative document range.
+Requests insert the image, source marker, visible caption, logical caption
+styles and caption marker in order. Missing fetchable URIs produce no insertion
+or index advance, leaving publication safety/enrichment to adapter preflight.
+
+`gdocs-diff-images.el` supplies image identity and one-unit native fallback length
+through neutral element descriptors. Authored source paths and captions take
+precedence over transient object IDs/URIs for identity; authoritative returned
+ranges cover attached captions. Generic diff does not classify images or choose
+their identity/addressing policy. Existing helper names and the semantic caption
+style-name option remain available through the facade.
+
 ## Table conversion and geometry
 
 `gdocs-convert-tables.el` owns Org/native table conversion, Org rendering,

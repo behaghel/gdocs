@@ -55,6 +55,7 @@ explicit nil operations means no body operations, not an unmatched plan.")
 ;; Explicit composition belongs here, not in the generic LCS/indexing engine.
 (require 'gdocs-diff-footnotes)
 (require 'gdocs-diff-tables)
+(require 'gdocs-diff-images)
 
 (provide 'gdocs-diff-semantics)
 ;;; gdocs-diff-semantics.el ends here

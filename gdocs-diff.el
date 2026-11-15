@@ -96,7 +96,6 @@ identical keys."
     ('paragraph (gdocs-diff--paragraph-key element))
     ('horizontal-rule "horizontal-rule")
     ('page-break "page-break")
-    ('image (gdocs-diff--image-key element))
     ('source-block (gdocs-diff--source-block-key element))
     ('example-block (gdocs-diff--example-block-key element))
     ('quote-block (gdocs-diff--quote-block-key element))
@@ -196,19 +195,6 @@ Includes type, style, list info, semantic markers, and full run details."
                      (gdocs-convert--callout-body-elements-from-paragraphs
                       element)
                      "\n\n")))
-
-(defun gdocs-diff--image-key (element)
-  "Compute a content key for an image ELEMENT.
-When an Org source `:path' marker is present, treat that path plus caption as
-semantic identity and ignore Google-assigned object IDs and transient image
-URIs.  This keeps create/fetch stable after native image insertion."
-  (format "image:%s:%s"
-          (or (plist-get element :path)
-              (plist-get element :source-uri)
-              (plist-get element :content-uri)
-              (plist-get element :object-id)
-              "")
-          (or (plist-get element :caption) "")))
 
 (defun gdocs-diff--normalized-runs-for-key (runs)
   "Return RUNS merged for formatting-key comparison."
@@ -410,11 +396,10 @@ the UTF-16 index where the first element begins (default 1)."
   "Compute the UTF-16 code unit length of ELEMENT in the document."
   (pcase (plist-get element :type)
     ('paragraph (gdocs-diff--paragraph-utf16-length element))
-    ;; Horizontal rules, page breaks, and images each occupy a single
+    ;; Horizontal rules and page breaks each occupy a single
     ;; structural element in the document body (1 UTF-16 unit).
     ('horizontal-rule 1)
     ('page-break 1)
-    ('image 1)
     ('source-block (gdocs-diff--source-block-utf16-length element))
     ('example-block (gdocs-diff--example-block-utf16-length element))
     ('quote-block (gdocs-diff--quote-block-utf16-length element))
