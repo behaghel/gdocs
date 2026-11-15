@@ -24,6 +24,7 @@
 (require 'ox)
 (require 'url-util)
 (require 'gdocs-styles)
+(require 'gdocs-style-resolve)
 (require 'gdocs-convert-text)
 (require 'gdocs-convert-inline-codec)
 (require 'gdocs-convert-dates)
@@ -2322,19 +2323,6 @@ paragraph for v1 semantic preservation."
             (range . ((startIndex . ,index)
                       (endIndex . ,(1+ index))))))))))
 
-(defun gdocs-convert-make-logical-style-requests
-    (style-name start-index end-index &optional text-start text-end segment-id)
-  "Create paragraph/text requests for logical STYLE-NAME.
-START-INDEX and END-INDEX target paragraph style in the body.  When
-TEXT-START and TEXT-END are non-nil, also create text style requests.
-Optional SEGMENT-ID targets the text style request at a non-body segment."
-  (delq nil
-        (list (gdocs-convert--logical-style-paragraph-request
-               style-name start-index end-index)
-              (when (and text-start text-end)
-                (gdocs-convert--logical-style-text-request
-                 style-name text-start text-end segment-id)))))
-
 (defun gdocs-convert--caption-style-requests
     (start-index end-index text-start text-end)
   "Create logical image-caption style requests for caption ranges."
@@ -2428,126 +2416,6 @@ clear any inherited formatting before per-run styles are applied."
       (gdocs-convert-paragraph-text-requests
        (gdocs-convert--runs-to-plain-text runs) index prefix)))
 
-(defun gdocs-convert--logical-paragraph-style-to-docs (style-plist)
-  "Resolve logical paragraph STYLE-PLIST to Google Docs ParagraphStyle fields."
-  (let ((style nil))
-    (when-let ((alignment (plist-get style-plist :alignment)))
-      (push `(alignment . ,(gdocs-convert--ir-alignment-to-docs alignment)) style))
-    (when-let ((spacing-mode (plist-get style-plist :spacing-mode)))
-      (push `(spacingMode . ,(pcase spacing-mode
-                              ('never-collapse "NEVER_COLLAPSE")
-                              ('collapse-lists "COLLAPSE_LISTS")
-                              (_ nil)))
-            style))
-    (when-let ((space-above (plist-get style-plist :space-above)))
-      (push `(spaceAbove . ((magnitude . ,space-above) (unit . "PT"))) style))
-    (when-let ((space-below (plist-get style-plist :space-below)))
-      (push `(spaceBelow . ((magnitude . ,space-below) (unit . "PT"))) style))
-    (when-let ((indent-start (plist-get style-plist :indent-start)))
-      (push `(indentStart . ((magnitude . ,indent-start) (unit . "PT"))) style))
-    (when (plist-member style-plist :indent-first-line)
-      (push `(indentFirstLine
-              . ((magnitude . ,(plist-get style-plist :indent-first-line))
-                 (unit . "PT")))
-            style))
-    (when-let ((indent-end (plist-get style-plist :indent-end)))
-      (push `(indentEnd . ((magnitude . ,indent-end) (unit . "PT"))) style))
-    (if-let ((borders (plist-get style-plist :borders)))
-        (setq style (append (gdocs-convert--paragraph-border-styles
-                             borders style-plist)
-                            style))
-      (when-let ((padding (plist-get style-plist :border-padding)))
-        (setq style (append (gdocs-convert--paragraph-padding-border-style
-                             padding
-                             (or (plist-get style-plist :border-color)
-                                 (plist-get style-plist :background-color)
-                                 gdocs-style-default-border-color))
-                            style))))
-    (when-let ((background (plist-get style-plist :background-color)))
-      (push `(shading . ((backgroundColor . ,(gdocs-convert--hex-to-color
-                                              background))))
-            style))
-    (delq nil style)))
-
-(defun gdocs-convert--paragraph-border-object (spec fallback-color fallback-padding)
-  "Return a Google Docs ParagraphBorder from SPEC.
-FALLBACK-COLOR and FALLBACK-PADDING are used when SPEC omits :color or
-:padding.  SPEC may also provide :width in points."
-  `((color . ,(gdocs-convert--hex-to-color
-               (or (plist-get spec :color) fallback-color
-                   gdocs-style-default-border-color)))
-    (width . ((magnitude . ,(or (plist-get spec :width)
-                               gdocs-style-default-border-width))
-              (unit . "PT")))
-    (padding . ((magnitude . ,(or (plist-get spec :padding) fallback-padding
-                                gdocs-style-default-border-padding))
-                (unit . "PT")))
-    (dashStyle . "SOLID")))
-
-(defun gdocs-convert--paragraph-border-field (side)
-  "Return Google Docs paragraph border field for SIDE."
-  (pcase side
-    ('top 'borderTop)
-    ('bottom 'borderBottom)
-    ('left 'borderLeft)
-    ('right 'borderRight)))
-
-(defun gdocs-convert--paragraph-border-styles (borders style-plist)
-  "Return paragraph border styles from BORDERS and STYLE-PLIST.
-BORDERS is an alist of (SIDE . SPEC), where SIDE is one of `top', `bottom',
-`left', or `right', and SPEC is a plist accepted by
-`gdocs-convert--paragraph-border-object'."
-  (let ((fallback-color (or (plist-get style-plist :border-color)
-                            (plist-get style-plist :background-color)
-                            gdocs-style-default-border-color))
-        (fallback-padding (plist-get style-plist :border-padding)))
-    (mapcar (lambda (entry)
-              (cons (gdocs-convert--paragraph-border-field (car entry))
-                    (gdocs-convert--paragraph-border-object
-                     (cdr entry) fallback-color fallback-padding)))
-            borders)))
-
-(defun gdocs-convert--paragraph-padding-border-style (padding color)
-  "Return paragraph borders with PADDING in points and COLOR."
-  (let ((border (gdocs-convert--paragraph-border-object
-                 (list :color color :width gdocs-style-default-border-width
-                       :padding padding)
-                 color padding)))
-    `((borderTop . ,border)
-      (borderBottom . ,border)
-      (borderLeft . ,border)
-      (borderRight . ,border))))
-
-(defun gdocs-convert--style-field-mask-name (field)
-  "Return Google Docs field mask name for STYLE FIELD."
-  (pcase field
-    ('shading "shading.backgroundColor")
-    (_ (symbol-name field))))
-
-(defun gdocs-convert--style-fields-mask-from-alist (style)
-  "Return comma-separated fields mask for STYLE alist."
-  (s-join "," (mapcar (lambda (pair)
-                         (gdocs-convert--style-field-mask-name (car pair)))
-                       style)))
-
-(defun gdocs-convert--logical-style-paragraph-request (style-name start end)
-  "Return logical STYLE-NAME paragraph request between START and END."
-  (when-let* ((definition (gdocs-convert--style-definition style-name)))
-    (let* ((parent (plist-get definition :parent))
-           (paragraph-style (gdocs-convert--logical-paragraph-style-to-docs
-                             (plist-get definition :paragraph)))
-           (named-style (and parent (gdocs-convert--ir-style-to-docs parent)))
-           (style (append (when named-style
-                            `((namedStyleType . ,named-style)))
-                          paragraph-style)))
-      (when style
-        `((updateParagraphStyle
-           . ((paragraphStyle . ,style)
-              (range . ((startIndex . ,start)
-                        (endIndex . ,(1- end))))
-              (fields . ,(gdocs-convert--style-fields-mask-from-alist
-                          style)))))))))
-
 (defun gdocs-convert--logical-paragraph-style-request (element start end)
   "Return logical style paragraph request for ELEMENT between START and END."
   (when-let* ((style-name (plist-get element :style-name)))
@@ -2581,33 +2449,10 @@ BORDERS is an alist of (SIDE . SPEC), where SIDE is one of `top', `bottom',
       (push logical-req requests))
     (nreverse requests)))
 
-(defun gdocs-convert--ir-alignment-to-docs (alignment)
-  "Convert an IR ALIGNMENT symbol to a Google Docs alignment string."
-  (pcase alignment
-    ('center "CENTER")
-    ('end "END")
-    ('justified "JUSTIFIED")
-    (_ nil)))
-
-(defun gdocs-convert--ir-style-to-docs (style)
-  "Convert an IR STYLE symbol to a Google Docs namedStyleType string."
-  (or (gdocs-convert--heading-style-to-docs style)
-      (pcase style
-        ('title "TITLE")
-        ('subtitle "SUBTITLE")
-        (_ "NORMAL_TEXT"))))
-
 (defun gdocs-convert--run-model-length (run)
   "Return Google Docs UTF-16 model length for RUN."
   (or (plist-get (gdocs-convert--inline-run-policy run) :model-length)
       (gdocs-convert--string-to-utf16-length (or (plist-get run :text) ""))))
-
-(defun gdocs-convert--text-range (start end &optional segment-id)
-  "Return a Google Docs text range from START to END.
-When SEGMENT-ID is non-nil, target that segment instead of the body."
-  (append (when segment-id (list (cons 'segmentId segment-id)))
-          (list (cons 'startIndex start)
-                (cons 'endIndex end))))
 
 (defun gdocs-convert-make-text-style-requests (runs start-index &optional segment-id omit-status-markers)
   "Create updateTextStyle requests for formatted RUNS starting at START-INDEX.
@@ -2655,58 +2500,6 @@ body are reset to their defaults by the Google Docs API."
                   (endIndex . ,end)))
         (fields . "bold,italic,underline,strikethrough,weightedFontFamily,baselineOffset,foregroundColor,backgroundColor")))))
 
-(defun gdocs-convert--style-definition (style-name)
-  "Return logical style definition for STYLE-NAME."
-  (cdr (assq style-name gdocs-style-definitions)))
-
-(defun gdocs-convert--logical-text-style-to-docs (style-plist)
-  "Resolve logical text STYLE-PLIST to Google Docs TextStyle fields."
-  (let ((style nil))
-    (let ((font-family (or (plist-get style-plist :font-family)
-                           (when (plist-get style-plist :monospace)
-                             (car gdocs-convert-monospace-font-families))))
-          (font-weight (plist-get style-plist :font-weight)))
-      (when font-family
-        (push `(weightedFontFamily
-                . ,(append `((fontFamily . ,font-family))
-                            (when font-weight
-                              `((weight . ,font-weight)))))
-              style)))
-    (when (plist-member style-plist :bold)
-      (push `(bold . ,(plist-get style-plist :bold)) style))
-    (when (plist-member style-plist :italic)
-      (push `(italic . ,(plist-get style-plist :italic)) style))
-    (when (plist-member style-plist :underline)
-      (push `(underline . ,(plist-get style-plist :underline)) style))
-    (when-let ((fg (plist-get style-plist :foreground-color)))
-      (push `(foregroundColor . ,(gdocs-convert--hex-to-color fg)) style))
-    (when-let ((bg (plist-get style-plist :background-color)))
-      (push `(backgroundColor . ,(gdocs-convert--hex-to-color bg)) style))
-    (when-let ((scale (plist-get style-plist :font-scale)))
-      (push `(fontSize . ((magnitude . ,(* gdocs-style-base-font-size scale))
-                          (unit . "PT")))
-            style))
-    (when-let ((size (plist-get style-plist :font-size)))
-      (push `(fontSize . ((magnitude . ,size) (unit . "PT"))) style))
-    style))
-
-(defun gdocs-convert--logical-style-text-fields (style-name)
-  "Return Google Docs TextStyle fields for logical STYLE-NAME."
-  (gdocs-convert--logical-text-style-to-docs
-   (plist-get (gdocs-convert--style-definition style-name) :text)))
-
-(defun gdocs-convert--logical-style-text-request (style-name start end
-                                                             &optional segment-id)
-  "Return logical STYLE-NAME text style request from START to END.
-When SEGMENT-ID is non-nil, target that non-body segment."
-  (let ((style (gdocs-convert--logical-style-text-fields style-name)))
-    (when style
-      `((updateTextStyle
-         . ((textStyle . ,style)
-            (range . ,(gdocs-convert--text-range start end segment-id))
-            (fields . ,(gdocs-convert--style-fields-mask-from-alist
-                        style))))))))
-
 (defun gdocs-convert--run-logical-style (run)
   "Return Google Docs TextStyle fields for RUN logical styles."
   (apply #'append
@@ -2739,20 +2532,6 @@ Returns nil if no formatting is applied."
     (when-let ((size (plist-get run :font-size)))
       (push `(fontSize . ((magnitude . ,size) (unit . "PT"))) style))
     style))
-
-(defun gdocs-convert--hex-to-color (hex)
-  "Convert HEX color string (#RRGGBB) to a Google Docs color alist."
-  (let ((r (/ (string-to-number (substring hex 1 3) 16) 255.0))
-        (g (/ (string-to-number (substring hex 3 5) 16) 255.0))
-        (b (/ (string-to-number (substring hex 5 7) 16) 255.0)))
-    `((color . ((rgbColor . ((red . ,r) (green . ,g) (blue . ,b))))))))
-
-(defun gdocs-convert--style-fields-mask (style-fields)
-  "Compute the fields mask string for STYLE-FIELDS alist."
-  (let ((fields nil))
-    (dolist (pair style-fields)
-      (push (symbol-name (car pair)) fields))
-    (s-join "," (nreverse fields))))
 
 (defun gdocs-convert--make-list-requests (element start end)
   "Create bullet/list requests for ELEMENT from START to END."

@@ -71,5 +71,11 @@ require 2 code units (surrogate pairs), all others require 1."
   `((insertText . ((text . ,text)
                    (location . ((index . ,index)))))))
 
+(defun gdocs-convert--text-range (start end &optional segment-id)
+  "Return a Google Docs text range from START to END.
+When SEGMENT-ID is non-nil, target that segment instead of the body."
+  (append (when segment-id (list (cons 'segmentId segment-id)))
+          (list (cons 'startIndex start) (cons 'endIndex end))))
+
 (provide 'gdocs-convert-text)
 ;;; gdocs-convert-text.el ends here

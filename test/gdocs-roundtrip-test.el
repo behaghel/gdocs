@@ -996,5 +996,42 @@ so this requires manual fixture update or a doc created via the GDocs UI."
     (should (> native-count 0))
     (should (> render-count 0))))
 
+(ert-deftest gdocs-roundtrip/specimen-style-resolution-changes-presentation-only ()
+  "Both standard conversion directions retain identity, text and non-style plans."
+  (require 'gdocs-diff)
+  (let* ((source (gdocs-roundtrip-test--read-org-fixture))
+         (native (gdocs-roundtrip-test--read-json-fixture))
+         (before-source (gdocs-convert-org-string-to-ir source))
+         (before-native (gdocs-convert-docs-json-to-ir native))
+         (before-requests (mapcar #'gdocs-convert-ir-to-docs-requests
+                                  (list before-source before-native)))
+         (gdocs-style-definitions
+          (cons '(gdocs-body :parent normal
+                             :text (:font-family "Specimen Sans" :font-size 19)
+                             :paragraph (:space-above 0 :space-below 8 :indent-first-line 0
+                                                      :borders ((left . (:color "#345678" :width 2 :padding 4)))))
+                gdocs-style-definitions))
+         (after-source (gdocs-convert-org-string-to-ir source))
+         (after-native (gdocs-convert-docs-json-to-ir native)))
+    (cl-mapc
+     (lambda (before after old-requests)
+       (should (equal before after))
+       (should (equal (gdocs-convert-ir-to-org before) (gdocs-convert-ir-to-org after)))
+       (should-not (gdocs-diff-generate before after))
+       (should-not (gdocs-diff-generate after after))
+       (let ((requests (gdocs-convert-ir-to-docs-requests after))
+             (style-request-p (lambda (request) (or (alist-get 'updateTextStyle request)
+                                                    (alist-get 'updateParagraphStyle request)))))
+         (should-not (equal old-requests requests))
+         (should (equal (seq-remove style-request-p old-requests)
+                        (seq-remove style-request-p requests)))
+         (should (seq-some
+                  (lambda (request)
+                    (equal (alist-get 'fontFamily
+                                      (alist-get 'weightedFontFamily
+                                                 (alist-get 'textStyle (alist-get 'updateTextStyle request))))
+                           "Specimen Sans")) requests))))
+     (list before-source before-native) (list after-source after-native) before-requests)))
+
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

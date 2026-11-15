@@ -189,6 +189,30 @@ link. Native default link underlining is not mistaken for authored underline.
 The source adapter preserves post-blank spacing and inherited formatting; native
 inline parts retain their grouping token until feature-owned completion runs.
 
+## Logical style resolution
+
+`gdocs-styles.el` contains presentation data only. `gdocs-style-resolve.el`
+resolves that data into native paragraph/text fields, borders, colour objects,
+field masks and logical-style requests. It loads without Org, conversion, diff,
+semantic feature modules, transport or accounts. Configured native parent names
+are translated as presentation enums, without loading heading recognition.
+Existing constructor and helper names remain available through the facade.
+
+Resolution retains ordered overrides, explicit zero/false values, fallback
+fonts/borders, relative and absolute size handling and existing field order.
+Missing entries remain distinguishable from explicitly empty overrides, so
+feature-owned fallbacks can preserve caller intent. Resolution does not mutate
+caller-owned configuration. Logical paragraph ranges exclude
+the terminal newline; text ranges preserve supplied body or segment addresses.
+The shared text layer owns the literal range constructor.
+
+Conversion still selects semantic roles and assembles publication requests.
+Authored inline emphasis, links and colours remain conversion data, not theme
+inference. Changing logical presentation does not change either conversion
+direction's IR, regenerated Org, semantic diff identity or non-style requests.
+Status presentation calls the resolver directly; choosing a status colour and
+maintaining its semantic markers remain status responsibilities.
+
 ## Native footnote conversion
 
 `gdocs-convert-footnotes.el` owns footnote definition/run conversion, native

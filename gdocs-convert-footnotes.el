@@ -29,7 +29,6 @@ second batchUpdate after `createFootnote' returns segment IDs.")
 (declare-function gdocs-convert--run-model-length "gdocs-convert" (run))
 (declare-function gdocs-convert--trim-runs "gdocs-convert" (runs))
 (declare-function gdocs-convert--next-id "gdocs-convert" ())
-(declare-function gdocs-convert--text-range "gdocs-convert" (start end &optional segment-id))
 (declare-function gdocs-convert--make-text-style-reset-request "gdocs-convert" (start end))
 (declare-function gdocs-convert-make-text-style-requests "gdocs-convert"
                   (runs start-index &optional segment-id omit-status-markers))

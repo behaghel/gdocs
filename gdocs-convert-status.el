@@ -15,16 +15,15 @@
 (require 's)
 (require 'subr-x)
 (require 'gdocs-styles)
+(require 'gdocs-style-resolve)
 (require 'gdocs-convert-text)
 (require 'gdocs-convert-inline-codec)
 
-(declare-function gdocs-convert--logical-text-style-to-docs "gdocs-convert" (style-plist))
-(declare-function gdocs-convert--text-range "gdocs-convert" (start end &optional segment-id))
 
 (defun gdocs-convert--status-docs-style (status)
   "Return the Docs text style for semantic STATUS."
   (let* ((key (gdocs-convert--status-color-key (plist-get status :color)))
-         (definition (assq (intern (concat "gdocs-status-" key)) gdocs-style-definitions)))
+         (definition (gdocs-style-resolve-find-definition (intern (concat "gdocs-status-" key)))))
     (gdocs-convert--logical-text-style-to-docs
      (if definition (plist-get (cdr definition) :text)
        (cdr (assq (intern key) gdocs-status-default-styles))))))
