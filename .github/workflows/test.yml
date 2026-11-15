@@ -1,9 +1,5 @@
 name: test
-on:
-  push:
-    branches: [main, org-image-seam, 'pr/**']
-  pull_request:
-    branches: [main, org-image-seam, 'pr/**']
+on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
