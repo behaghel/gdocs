@@ -16,10 +16,10 @@
 (require 'subr-x)
 (require 'gdocs-styles)
 (require 'gdocs-convert-text)
+(require 'gdocs-convert-inline-codec)
 
 (declare-function gdocs-convert--logical-text-style-to-docs "gdocs-convert" (style-plist))
 (declare-function gdocs-convert--text-range "gdocs-convert" (start end &optional segment-id))
-(declare-function gdocs-convert--docs-text-run-to-ir "gdocs-convert" (text-run))
 
 (defun gdocs-convert--status-docs-style (status)
   "Return the Docs text style for semantic STATUS."
@@ -155,6 +155,50 @@ INHERITED-PROPS must not add invisible emphasis to the generated pill style."
 (defun gdocs-convert--without-inline-status-markers (markers)
   "Return MARKERS without inline status annotations owned by status runs."
   (seq-remove (lambda (marker) (eq (plist-get marker :type) 'status)) markers))
+
+(defun gdocs-convert-status-source-object (object props)
+  "Decode status OBJECT with inherited PROPS, or nil when unhandled."
+  (when (eq (org-element-type object) 'link)
+    (when-let* ((run (gdocs-convert--status-link-to-run object props))) (list run))))
+
+(defun gdocs-convert-status-native-parts (element markers)
+  "Decode native text ELEMENT using status MARKERS, or nil when unhandled."
+  (when (alist-get 'textRun element) (gdocs-convert--docs-status-text-parts element markers)))
+
+(defun gdocs-convert-status-unsupported-native (element _markers)
+  "Reject unsupported native dropdown ELEMENT rather than flattening it."
+  (when (assq 'dropdown element)
+    (user-error "Native dropdown choices have no static Org status mapping")))
+
+(defun gdocs-convert-status-render-run (run)
+  "Render status RUN, or nil when unhandled."
+  (when (plist-get run :status) (gdocs-convert--status-run-to-org run)))
+
+(defun gdocs-convert-status-run-policy (run)
+  "Return status atomicity and terminal whitespace policy for RUN, or nil."
+  (when (plist-get run :status) '(:atomic t :preserve-terminal t)))
+
+(defun gdocs-convert-status-finalize-runs (runs)
+  "Update authored-label spelling in reconstructed status RUNS."
+  (dolist (run runs)
+    (when-let* ((status (plist-get run :status)))
+      (when (and (not (plist-get status :described))
+                 (not (equal (plist-get run :text) (plist-get status :color))))
+        (plist-put run :status (plist-put (copy-sequence status) :described t)))))
+  runs)
+
+(defun gdocs-convert-status-run-docs-style (run)
+  "Return logical status styling for RUN, or nil when unhandled."
+  (when-let* ((status (plist-get run :status))) (gdocs-convert--status-docs-style status)))
+
+(defun gdocs-convert-status-style-fields-mask (run fields)
+  "Extend FIELDS for RUN when status rendering must clear an inherited link."
+  (concat fields (when (plist-get run :status) ",link")))
+
+(defun gdocs-convert-status-run-marker-request (run start end segment-id omit)
+  "Return RUN's status marker at START..END in SEGMENT-ID unless OMIT is non-nil."
+  (when (and (plist-get run :status) (not omit))
+    (gdocs-convert--status-marker-request (plist-get run :status) start end segment-id)))
 
 (provide 'gdocs-convert-status)
 ;;; gdocs-convert-status.el ends here

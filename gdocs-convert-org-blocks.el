@@ -87,5 +87,34 @@
     (gdocs-convert--format-src-block-from-lines
      language (split-string (s-trim-right value) "\n"))))
 
+(defvar gdocs-convert-monospace-font-families)
+
+(defun gdocs-convert-code-source-object (object props)
+  "Decode code-like OBJECT with inherited PROPS, or nil when unhandled."
+  (pcase (org-element-type object)
+    ((or 'code 'verbatim) (gdocs-convert--code-object-to-run object props))
+    ('latex-fragment (gdocs-convert--latex-fragment-to-runs object props))
+    ('inline-src-block (gdocs-convert--inline-src-block-to-runs object props))))
+
+(defun gdocs-convert--code-object-to-run (object inherited-props)
+  "Convert code OBJECT to runs with INHERITED-PROPS."
+  (list (gdocs-convert--make-run (org-element-property :value object)
+                                 (gdocs-convert--code-props inherited-props))))
+
+(defun gdocs-convert--latex-fragment-to-runs (object inherited-props)
+  "Convert formula OBJECT to literal code runs with INHERITED-PROPS."
+  (list (gdocs-convert--make-run (org-element-property :value object)
+                                 (gdocs-convert--code-props inherited-props))))
+
+(defun gdocs-convert--inline-src-block-to-runs (object inherited-props)
+  "Convert inline source OBJECT to code runs with INHERITED-PROPS."
+  (list (gdocs-convert--make-run (org-element-property :value object)
+                                 (gdocs-convert--code-props inherited-props))))
+
+(defun gdocs-convert--docs-is-monospace-p (style)
+  "Return non-nil if native STYLE uses a configured code font."
+  (let ((family (alist-get 'fontFamily (alist-get 'weightedFontFamily style))))
+    (and family (member family gdocs-convert-monospace-font-families))))
+
 (provide 'gdocs-convert-org-blocks)
 ;;; gdocs-convert-org-blocks.el ends here

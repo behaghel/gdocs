@@ -973,5 +973,28 @@ so this requires manual fixture update or a doc created via the GDocs UI."
     (should (> native-count 0))
     (should (> render-count 0))))
 
+(ert-deftest gdocs-roundtrip/specimen-bidirectional-inline-codec ()
+  "Both standard specimens exercise shared inline conversion and stable diffs."
+  (require 'gdocs-diff)
+  (let ((source (symbol-function 'gdocs-convert--objects-to-runs))
+        (native (symbol-function 'gdocs-convert--docs-text-run-to-ir))
+        (render (symbol-function 'gdocs-convert-inline-plain-run-to-org))
+        (source-count 0) (native-count 0) (render-count 0))
+    (cl-letf (((symbol-function 'gdocs-convert--objects-to-runs)
+               (lambda (&rest args) (setq source-count (1+ source-count)) (apply source args)))
+              ((symbol-function 'gdocs-convert--docs-text-run-to-ir)
+               (lambda (&rest args) (setq native-count (1+ native-count)) (apply native args)))
+              ((symbol-function 'gdocs-convert-inline-plain-run-to-org)
+               (lambda (&rest args) (setq render-count (1+ render-count)) (apply render args))))
+      (dolist (ir (list (gdocs-roundtrip-test--org-to-ir (gdocs-roundtrip-test--read-org-fixture))
+                        (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture))))
+        (should (stringp (gdocs-convert-ir-to-org ir)))
+        (should (gdocs-convert-ir-to-docs-requests ir))
+        (should-not (gdocs-diff-generate ir ir))
+        (should-not (gdocs-diff-generate ir ir))))
+    (should (> source-count 0))
+    (should (> native-count 0))
+    (should (> render-count 0))))
+
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

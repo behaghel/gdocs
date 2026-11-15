@@ -15,10 +15,8 @@
 (require 'subr-x)
 (require 'gdocs-convert-paragraph-codec)
 
-(declare-function gdocs-convert--objects-to-runs "gdocs-convert" (objects &optional inherited-props))
 (declare-function gdocs-convert--next-id "gdocs-convert" ())
 (declare-function gdocs-convert--extract-marker-field "gdocs-convert" (marker type-sym))
-(declare-function gdocs-convert--merge-adjacent-runs "gdocs-convert" (runs))
 
 (defun gdocs-convert--headline-to-ir (headline)
   "Convert an org HEADLINE element to an IR element."

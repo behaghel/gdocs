@@ -13,11 +13,22 @@
 (require 'gdocs-convert-text)
 (require 'gdocs-convert-paragraph-codec)
 
-(defvar gdocs-convert-footnote-reference-text-function)
-(declare-function gdocs-convert--objects-to-runs "gdocs-convert" (objects))
+(defvar gdocs-convert-footnote-reference-text-function nil
+  "Function returning temporary body text for a semantic footnote reference.
+When non-nil, the function receives an Org footnote-reference object and should
+return text inserted into the body at the reference position.  Extension callers
+can use this to emit post-push anchor sentinels before replacing them with
+native Google Docs footnotes.")
+(defvar gdocs-convert-footnote-reference-handler nil
+  "Function called for each semantic footnote reference during request generation.
+When non-nil, the function receives two arguments: the zero-width footnote RUN
+and its exact Google Docs UTF-16 INDEX in the body segment.  It may return
+additional batchUpdate requests or nil.  This is an extension seam for callers
+that need native Google Docs footnotes, whose bodies must be inserted in a
+second batchUpdate after `createFootnote' returns segment IDs.")
+(declare-function gdocs-convert--run-model-length "gdocs-convert" (run))
 (declare-function gdocs-convert--trim-runs "gdocs-convert" (runs))
 (declare-function gdocs-convert--next-id "gdocs-convert" ())
-(declare-function gdocs-convert--runs-to-org "gdocs-convert" (runs))
 (declare-function gdocs-convert--text-range "gdocs-convert" (start end &optional segment-id))
 (declare-function gdocs-convert--make-text-style-reset-request "gdocs-convert" (start end))
 (declare-function gdocs-convert-make-text-style-requests "gdocs-convert"
@@ -178,6 +189,73 @@ Reject structures that the single-paragraph native mapping cannot preserve."
            (full-text (concat "[fn:" (or (plist-get element :label) "") "] " text "\n")))
       (list :requests (list (gdocs-convert--make-insert-text-request full-text index))
             :index (+ index (gdocs-convert--string-to-utf16-length full-text))))))
+
+(defun gdocs-convert-footnote-source-object (object props)
+  "Decode footnote OBJECT with inherited PROPS, or nil when unhandled."
+  (when (eq (org-element-type object) 'footnote-reference)
+    (gdocs-convert--footnote-reference-to-runs object props)))
+
+(defun gdocs-convert--footnote-reference-to-runs (object inherited-props)
+  "Convert reference OBJECT with INHERITED-PROPS to zero-width semantic runs."
+  (list (plist-put
+         (gdocs-convert--make-run
+          (if gdocs-convert-footnote-reference-text-function
+              (funcall gdocs-convert-footnote-reference-text-function object) "") inherited-props)
+         :footnote-label (org-element-property :label object))))
+
+(defun gdocs-convert-footnote-native-parts (element markers)
+  "Decode native reference ELEMENT using MARKERS, or nil when unhandled."
+  (when-let* ((reference (alist-get 'footnoteReference element)))
+    (list (cons nil (gdocs-convert--docs-footnote-reference-to-run
+                     reference markers (alist-get 'startIndex element) (alist-get 'endIndex element))))))
+
+(defun gdocs-convert-footnote-run-to-org (run)
+  "Render reference RUN, or nil when unhandled."
+  (when-let* ((label (plist-get run :footnote-label))) (format "[fn:%s]" label)))
+
+(defun gdocs-convert-footnote-run-policy (run)
+  "Return reference identity and whitespace policy for RUN, or nil."
+  (when-let* ((label (plist-get run :footnote-label)))
+    (list :identity label :preserve-whitespace t :preserve-terminal t :formatted t)))
+
+(defun gdocs-convert--footnote-label-marker (markers start end)
+  "Return footnote label from MARKERS overlapping START..END, or nil."
+  (seq-find (lambda (marker)
+              (and (eq (plist-get marker :type) 'footnote-label)
+                   (let ((a (plist-get marker :start)) (b (plist-get marker :end)))
+                     (and a b start end (< a end) (> b start))))) markers))
+
+(defun gdocs-convert--footnote-label-for-range (footnote-ref markers start end)
+  "Resolve FOOTNOTE-REF label from MARKERS at START..END."
+  (or (plist-get (gdocs-convert--footnote-label-marker markers start end) :data)
+      (alist-get 'footnoteNumber footnote-ref) (alist-get 'footnoteId footnote-ref)))
+
+(defun gdocs-convert--structural-element-footnote-refs (element markers)
+  "Collect native references in structural ELEMENT using MARKERS."
+  (let ((paragraph (alist-get 'paragraph element)) refs)
+    (when paragraph
+      (seq-doseq (part (alist-get 'elements paragraph))
+        (when-let* ((reference (alist-get 'footnoteReference part))
+                    (id (alist-get 'footnoteId reference)))
+          (push (list :id id :label (gdocs-convert--footnote-label-for-range
+                                     reference markers (alist-get 'startIndex part)
+                                     (alist-get 'endIndex part))) refs))))
+    (nreverse refs)))
+
+(defun gdocs-convert--docs-footnote-reference-to-run (footnote-ref &optional markers start end)
+  "Convert FOOTNOTE-REF using MARKERS at START..END to a zero-width reference."
+  (plist-put (gdocs-convert--make-plain-run "") :footnote-label
+             (gdocs-convert--footnote-label-for-range footnote-ref markers start end)))
+
+(defun gdocs-convert--make-footnote-reference-requests (runs start-index)
+  "Emit extension requests for reference RUNS at START-INDEX."
+  (let (requests (index start-index))
+    (dolist (run runs)
+      (let ((length (gdocs-convert--run-model-length run)))
+        (when (and (plist-get run :footnote-label) gdocs-convert-footnote-reference-handler)
+          (setq requests (append requests (funcall gdocs-convert-footnote-reference-handler run index))))
+        (setq index (+ index length))))
+    requests))
 
 (provide 'gdocs-convert-footnotes)
 ;;; gdocs-convert-footnotes.el ends here

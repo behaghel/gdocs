@@ -11,13 +11,10 @@
 (require 'org-element)
 (require 'seq)
 (require 'gdocs-convert-paragraphs)
+(require 'gdocs-convert-inline-codec)
 
-(declare-function gdocs-convert--objects-to-runs "gdocs-convert" (objects))
 (declare-function gdocs-convert--trim-runs "gdocs-convert" (runs))
-(declare-function gdocs-convert--docs-elements-to-runs "gdocs-convert" (elements &optional markers))
-(declare-function gdocs-convert--trim-trailing-newline-runs "gdocs-convert" (runs))
 (declare-function gdocs-convert--next-id "gdocs-convert" ())
-(declare-function gdocs-convert--runs-to-org "gdocs-convert" (runs))
 (declare-function gdocs-convert--paragraph-markers-for-range "gdocs-convert" (markers start end))
 
 (defun gdocs-convert-paragraph-org-runs (paragraph)

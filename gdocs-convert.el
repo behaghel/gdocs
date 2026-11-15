@@ -25,6 +25,8 @@
 (require 'url-util)
 (require 'gdocs-styles)
 (require 'gdocs-convert-text)
+(require 'gdocs-convert-inline-codec)
+(require 'gdocs-convert-dates)
 (require 'gdocs-convert-paragraphs)
 (require 'gdocs-convert-paragraph-codec)
 (require 'gdocs-convert-images)
@@ -104,26 +106,6 @@ Used during org-to-IR link resolution to append heading anchors.")
   "Session cache: doc-id -> alist of ((heading-id . heading-text) ...).
 Reverse mapping of `gdocs-convert--heading-cache', used during
 IR-to-org conversion to resolve heading anchors back to text.")
-
-(defcustom gdocs-convert-native-date-elements t
-  "Whether Org timestamps should push as native Google Docs date elements."
-  :type 'boolean
-  :group 'gdocs)
-
-(defvar gdocs-convert-footnote-reference-handler nil
-  "Function called for each semantic footnote reference during request generation.
-When non-nil, the function receives two arguments: the zero-width footnote RUN
-and its exact Google Docs UTF-16 INDEX in the body segment.  It may return
-additional batchUpdate requests or nil.  This is an extension seam for callers
-that need native Google Docs footnotes, whose bodies must be inserted in a
-second batchUpdate after `createFootnote' returns segment IDs.")
-
-(defvar gdocs-convert-footnote-reference-text-function nil
-  "Function returning temporary body text for a semantic footnote reference.
-When non-nil, the function receives an Org footnote-reference object and should
-return text inserted into the body at the reference position.  Extension callers
-can use this to emit post-push anchor sentinels before replacing them with
-native Google Docs footnotes.")
 
 (defun gdocs-convert--read-file-property-gdocs-id (file-path)
   "Read GDOCS_DOCUMENT_ID from FILE-PATH's file-level property drawer.
@@ -601,96 +583,34 @@ whitespace from the last.  Returns nil if no text remains."
 ;; ---------------------------------------------------------------------------
 ;;; Objects -> text runs
 
-(defun gdocs-convert--objects-to-runs (objects)
-  "Convert a list of org-element OBJECTS to a flat list of text run plists.
-Adjacent runs with identical formatting are merged to match the
-coarser boundaries from Google Docs JSON conversion."
-  (let ((runs nil))
-    (dolist (obj (if (listp objects) objects (list objects)))
-      (setq runs (nconc runs (gdocs-convert--object-to-runs obj nil))))
-    (gdocs-convert--merge-adjacent-runs runs)))
-
-(defun gdocs-convert--object-to-runs (object inherited-props)
-  "Convert a single org-element OBJECT to text runs.
-INHERITED-PROPS is a plist of formatting inherited from parent
-objects (e.g., bold wrapping italic)."
-  (if (stringp object)
-      (gdocs-convert--string-to-run object inherited-props)
-    (let ((runs (gdocs-convert--typed-object-to-runs
-                 object inherited-props))
-          (post-blank (or (org-element-property :post-blank object) 0)))
-      (when (> post-blank 0)
-        (setq runs (append runs
-                           (list (gdocs-convert--make-run
-                                  (make-string post-blank ?\s)
-                                  inherited-props)))))
-      runs)))
-
 (defun gdocs-convert--typed-object-to-runs (object inherited-props)
-  "Dispatch OBJECT by type to produce text runs.
-INHERITED-PROPS is a plist of formatting inherited from parent
-objects."
-  (pcase (org-element-type object)
-    ('bold (gdocs-convert--markup-to-runs object inherited-props :bold))
-    ('italic (gdocs-convert--markup-to-runs object inherited-props :italic))
-    ('underline (gdocs-convert--markup-to-runs object inherited-props :underline))
-    ('strike-through (gdocs-convert--markup-to-runs object inherited-props :strikethrough))
-    ('code (gdocs-convert--code-object-to-run object inherited-props))
-    ('verbatim (gdocs-convert--code-object-to-run object inherited-props))
-    ('link (gdocs-convert--link-to-runs object inherited-props))
-    ('subscript (gdocs-convert--markup-to-runs object inherited-props :subscript))
-    ('superscript (gdocs-convert--markup-to-runs object inherited-props :superscript))
-    ('latex-fragment (gdocs-convert--latex-fragment-to-runs object inherited-props))
-    ('inline-src-block (gdocs-convert--inline-src-block-to-runs object inherited-props))
-    ('footnote-reference (gdocs-convert--footnote-reference-to-runs object inherited-props))
-    ('timestamp (gdocs-convert--timestamp-to-runs object inherited-props))
-    ('entity (gdocs-convert--entity-to-run object inherited-props))
-    ('line-break (list (gdocs-convert--make-run "\n" inherited-props)))
-    (_ (gdocs-convert--fallback-object-to-runs object inherited-props))))
+  "Compose semantic adapters and ordinary rich text for OBJECT and INHERITED-PROPS."
+  (or (gdocs-convert-status-source-object object inherited-props)
+      (gdocs-convert-footnote-source-object object inherited-props)
+      (gdocs-convert-date-source-object object inherited-props)
+      (gdocs-convert-code-source-object object inherited-props)
+      (gdocs-convert-inline-plain-object object inherited-props)))
 
-(defun gdocs-convert--markup-to-runs (object inherited-props formatting-key)
-  "Convert a markup OBJECT (bold, italic, etc.) to text runs.
-INHERITED-PROPS carries parent formatting.  FORMATTING-KEY is the
-keyword to set (e.g. :bold)."
-  (let ((new-props (plist-put (copy-sequence inherited-props)
-                              formatting-key t)))
-    (let ((runs nil))
-      (dolist (child (org-element-contents object))
-        (setq runs (nconc runs
-                          (gdocs-convert--object-to-runs child new-props))))
-      runs)))
+(defun gdocs-convert--inline-element-parts (element markers)
+  "Compose native ELEMENT decoding with semantic MARKERS."
+  (or (gdocs-convert-status-native-parts element markers)
+      (gdocs-convert-footnote-native-parts element markers)
+      (gdocs-convert-date-native-parts element markers)
+      (gdocs-convert-status-unsupported-native element markers)))
 
-(defun gdocs-convert--code-object-to-run (object inherited-props)
-  "Convert a code or verbatim OBJECT to a text run with :code t.
-Post-blank whitespace is handled by `gdocs-convert--object-to-runs'."
-  (let* ((value (org-element-property :value object))
-         (new-props (gdocs-convert--code-props inherited-props)))
-    (list (gdocs-convert--make-run value new-props))))
+(defun gdocs-convert--inline-finalize-runs (runs)
+  "Compose feature-owned completion of reconstructed RUNS."
+  (gdocs-convert-status-finalize-runs runs))
 
-(defun gdocs-convert--link-to-runs (link inherited-props)
-  "Convert a LINK object to text runs with :link set.
-INHERITED-PROPS carries parent formatting.  Preserves any
-formatting (e.g. italic, bold) within the link description.
-When the URL is nil (e.g. an org file with no Google Doc
-counterpart), emits plain text with no hyperlink."
-  (if-let* ((status (gdocs-convert--status-link-to-run link inherited-props)))
-      (list status)
-    (let* ((url (gdocs-convert--link-url link))
-           (children (org-element-contents link))
-           (props (if url
-                      (plist-put (copy-sequence inherited-props) :link url)
-                    inherited-props)))
-      (if children
-          (let ((runs nil))
-            (dolist (child children)
-              (setq runs (nconc runs
-                                (gdocs-convert--object-to-runs child props))))
-            (or runs (list (gdocs-convert--make-run
-                            (or url (org-element-property :raw-link link))
-                            props))))
-        (list (gdocs-convert--make-run
-               (or url (org-element-property :raw-link link))
-               props))))))
+(defun gdocs-convert--inline-run-policy (run)
+  "Compose feature-owned normalization and addressing policy for RUN."
+  (append (gdocs-convert-date-run-policy run)
+          (gdocs-convert-status-run-policy run)
+          (gdocs-convert-footnote-run-policy run)))
+
+(defun gdocs-convert--inline-link-for-org (link)
+  "Resolve LINK through the current document link context, if available."
+  (if gdocs-convert--link-context (gdocs-convert--reverse-resolve-link link) link))
 
 (defun gdocs-convert--link-url (link)
   "Extract the URL string from a LINK element.
@@ -801,66 +721,6 @@ heading cache and append a #heading=h.ID fragment."
               (concat base "#heading=h." heading-id)
             base))
       base)))
-
-(defun gdocs-convert--timestamp-to-runs (timestamp inherited-props)
-  "Convert TIMESTAMP to a native Google Docs date run.
-INHERITED-PROPS carries parent formatting.  The original Org timestamp
-syntax is kept as the run text so Org output can reconstruct the source
-form when the IR is not pushed to Google Docs."
-  (let ((raw (org-element-interpret-data timestamp))
-        (year (org-element-property :year-start timestamp))
-        (month (org-element-property :month-start timestamp))
-        (day (org-element-property :day-start timestamp)))
-    (list (append (gdocs-convert--make-run raw inherited-props)
-                  (when (and gdocs-convert-native-date-elements
-                             year month day)
-                    (list :date-element
-                          (list :timestamp
-                                (format "%04d-%02d-%02dT00:00:00Z"
-                                        year month day)
-                                :raw raw
-                                :active (eq (org-element-property :type timestamp)
-                                            'active))))))))
-
-(defun gdocs-convert--entity-to-run (entity inherited-props)
-  "Convert an ENTITY object to a text run.
-INHERITED-PROPS carries parent formatting."
-  (let ((utf8 (org-element-property :utf-8 entity)))
-    (list (gdocs-convert--make-run (or utf8 "") inherited-props))))
-
-(defun gdocs-convert--latex-fragment-to-runs (object inherited-props)
-  "Convert a LATEX-FRAGMENT OBJECT to a code text run.
-INHERITED-PROPS carries parent formatting."
-  (let* ((value (org-element-property :value object))
-         (new-props (gdocs-convert--code-props inherited-props)))
-    (list (gdocs-convert--make-run value new-props))))
-
-(defun gdocs-convert--inline-src-block-to-runs (object inherited-props)
-  "Convert an INLINE-SRC-BLOCK OBJECT to a code text run.
-INHERITED-PROPS carries parent formatting."
-  (let* ((value (org-element-property :value object))
-         (new-props (gdocs-convert--code-props inherited-props)))
-    (list (gdocs-convert--make-run value new-props))))
-
-(defun gdocs-convert--footnote-reference-to-runs (object inherited-props)
-  "Convert a FOOTNOTE-REFERENCE OBJECT to a zero-width semantic run.
-INHERITED-PROPS carries parent formatting.  The visible native footnote marker
-is produced by Google Docs, not by literal Org text."
-  (let ((label (org-element-property :label object)))
-    (list (plist-put
-           (gdocs-convert--make-run
-            (if gdocs-convert-footnote-reference-text-function
-                (funcall gdocs-convert-footnote-reference-text-function object)
-              "")
-            inherited-props)
-           :footnote-label label))))
-
-(defun gdocs-convert--fallback-object-to-runs (object inherited-props)
-  "Handle an unknown OBJECT type by interpreting it as text.
-INHERITED-PROPS carries parent formatting."
-  (let ((interpreted (org-element-interpret-data object)))
-    (when (and interpreted (not (string-empty-p interpreted)))
-      (list (gdocs-convert--make-run interpreted inherited-props)))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Lists -> IR
@@ -1368,47 +1228,11 @@ MARKER is a list of marker plists."
 ;; ---------------------------------------------------------------------------
 ;;; Text runs -> org text
 
-(defun gdocs-convert--runs-to-org (runs)
-  "Convert a list of text RUNS to an org-formatted string."
-  (mapconcat #'gdocs-convert--run-to-org runs ""))
-
 (defun gdocs-convert--run-to-org (run)
-  "Convert a single text RUN plist to an org-formatted string.
-When `gdocs-convert--link-context' is bound, reverse-resolves
-Google Docs URLs back to org file: links."
-  (if (plist-get run :status)
-      (gdocs-convert--status-run-to-org run)
-    (if-let* ((label (plist-get run :footnote-label)))
-        (format "[fn:%s]" label)
-      (let ((text (plist-get run :text))
-            (bold (plist-get run :bold))
-            (italic (plist-get run :italic))
-            (underline (plist-get run :underline))
-            (strikethrough (plist-get run :strikethrough))
-            (code (plist-get run :code))
-            (link (plist-get run :link)))
-        (when code
-          (setq text (format "~%s~" text)))
-        ;; Apply link before emphasis so emphasis wraps the whole link,
-        ;; producing *[[url][text]]* rather than [[url][*text*]].
-        (when link
-          (let ((resolved-link (if gdocs-convert--link-context
-                                   (gdocs-convert--reverse-resolve-link link)
-                                 link)))
-            (setq text (format "[[%s][%s]]" resolved-link text))))
-        (when bold
-          (setq text (gdocs-convert--wrap-emphasis "*" text)))
-        (when italic
-          (setq text (gdocs-convert--wrap-emphasis "/" text)))
-        (when underline
-          (setq text (gdocs-convert--wrap-emphasis "_" text)))
-        (when strikethrough
-          (setq text (gdocs-convert--wrap-emphasis "+" text)))
-        (when (plist-get run :subscript)
-          (setq text (format "_{%s}" text)))
-        (when (plist-get run :superscript)
-          (setq text (format "^{%s}" text)))
-        text))))
+  "Compose feature-owned RUN rendering with ordinary rich text."
+  (or (gdocs-convert-status-render-run run)
+      (gdocs-convert-footnote-run-to-org run)
+      (gdocs-convert-inline-plain-run-to-org run)))
 
 (defun gdocs-convert--reverse-resolve-link (url)
   "Reverse-resolve a Google Docs URL to an org link.
@@ -1488,28 +1312,6 @@ Returns the UUID string or nil."
             (when (string= (s-trim (downcase (org-get-heading t t t t)))
                            normalized)
               (throw 'found (org-entry-get nil "ID")))))))))
-
-(defun gdocs-convert--wrap-emphasis (marker text)
-  "Wrap TEXT with emphasis MARKER, moving edge whitespace outside.
-Org-mode emphasis markers require a non-whitespace character
-immediately inside the opening and closing markers.  This
-function moves any leading or trailing whitespace outside the
-markers to produce valid emphasis markup."
-  (if (string-blank-p text)
-      text
-    (let ((leading "")
-          (trailing "")
-          (inner text))
-      (when (string-match "\\`\\([ \t\n]+\\)" inner)
-        (setq leading (match-string 1 inner))
-        (setq inner (substring inner (match-end 1))))
-      (when (and (not (string-empty-p inner))
-                 (string-match "\\([ \t\n]+\\)\\'" inner))
-        (setq trailing (match-string 1 inner))
-        (setq inner (substring inner 0 (match-beginning 1))))
-      (if (string-empty-p inner)
-          text
-        (concat leading marker inner marker trailing)))))
 
 ;; ---------------------------------------------------------------------------
 ;;; IR footnote -> org
@@ -1976,98 +1778,6 @@ subsequent diffs treat the separator as part of the owning callout block."
           (setq remaining (cdr remaining)))))
     (nreverse result)))
 
-(defun gdocs-convert--footnote-label-marker (markers start end)
-  "Return Org footnote label marker overlapping START..END, or nil."
-  (seq-find (lambda (marker)
-              (and (eq (plist-get marker :type) 'footnote-label)
-                   (let ((marker-start (plist-get marker :start))
-                         (marker-end (plist-get marker :end)))
-                     (and marker-start marker-end start end
-                          (< marker-start end)
-                          (> marker-end start)))))
-            markers))
-
-(defun gdocs-convert--footnote-label-for-range (footnote-ref markers start end)
-  "Return Org label for FOOTNOTE-REF at START..END using MARKERS."
-  (or (plist-get (gdocs-convert--footnote-label-marker markers start end)
-                 :data)
-      (alist-get 'footnoteNumber footnote-ref)
-      (alist-get 'footnoteId footnote-ref)))
-
-(defun gdocs-convert--structural-element-footnote-refs (element markers)
-  "Return footnote references found in Google Docs structural ELEMENT.
-Each returned plist has `:id' and `:label' keys.  MARKERS can carry stable Org
-labels for native Google Docs footnote references."
-  (let ((paragraph (alist-get 'paragraph element))
-        (refs nil))
-    (when paragraph
-      (seq-doseq (el (alist-get 'elements paragraph))
-        (when-let* ((footnote-ref (alist-get 'footnoteReference el))
-                    (footnote-id (alist-get 'footnoteId footnote-ref)))
-          (push (list :id footnote-id
-                      :label (gdocs-convert--footnote-label-for-range
-                              footnote-ref markers
-                              (alist-get 'startIndex el)
-                              (alist-get 'endIndex el)))
-                refs))))
-    (nreverse refs)))
-
-(defun gdocs-convert--docs-footnote-reference-to-run
-    (footnote-ref &optional markers start end)
-  "Convert Google Docs FOOTNOTE-REF to a zero-width IR footnote run.
-MARKERS can carry stable Org labels for the reference at START..END."
-  (let ((label (gdocs-convert--footnote-label-for-range
-                footnote-ref markers start end)))
-    (plist-put (gdocs-convert--make-plain-run "") :footnote-label label)))
-
-(defun gdocs-convert--timestamp-kind-marker (markers start end)
-  "Return timestamp kind marker overlapping START..END, or nil."
-  (seq-find (lambda (marker)
-              (and (eq (plist-get marker :type) 'timestamp-kind)
-                   (let ((marker-start (plist-get marker :start))
-                         (marker-end (plist-get marker :end)))
-                     (and marker-start marker-end start end
-                          (< marker-start end)
-                          (> marker-end start)))))
-            markers))
-
-(defun gdocs-convert--timestamp-active-p (markers start end)
-  "Return non-nil when timestamp marker at START..END is active."
-  (not (equal (plist-get (gdocs-convert--timestamp-kind-marker
-                          markers start end)
-                         :data)
-              "inactive")))
-
-(defun gdocs-convert--docs-date-element-to-run
-    (date-element &optional markers start end)
-  "Convert Google Docs DATE-ELEMENT to an Org timestamp run.
-MARKERS can carry active/inactive Org timestamp kind for START..END."
-  (let* ((props (alist-get 'dateElementProperties date-element))
-         (timestamp (alist-get 'timestamp props))
-         (active (gdocs-convert--timestamp-active-p markers start end))
-         (raw (gdocs-convert--docs-date-timestamp-to-org
-               timestamp (if active 'active 'inactive))))
-    (list :text raw
-          :date-element (list :timestamp timestamp
-                              :raw raw
-                              :active active))))
-
-(defun gdocs-convert--docs-date-timestamp-to-org (timestamp &optional kind)
-  "Return an Org timestamp string for Google Docs TIMESTAMP.
-KIND can be `active' or `inactive'; omitted KIND defaults to active."
-  (if (and timestamp
-           (string-match "\\`\\([0-9][0-9][0-9][0-9]\\)-\\([0-9][0-9]\\)-\\([0-9][0-9]\\)" timestamp))
-      (let* ((year (string-to-number (match-string 1 timestamp)))
-             (month (string-to-number (match-string 2 timestamp)))
-             (day (string-to-number (match-string 3 timestamp)))
-             (time (encode-time 0 0 0 day month year t))
-             (weekday (format-time-string "%a" time t)))
-        (format "%s%04d-%02d-%02d %s%s"
-                (if (eq kind 'inactive) "[" "<")
-                year month day weekday
-                (if (eq kind 'inactive) "]" ">")))
-    (if (eq kind 'inactive) "[1970-01-01 Thu]" "<1970-01-01 Thu>")))
-
 (defun gdocs-convert--structural-element-to-ir (element lists-map markers
                                                         &optional inline-objects)
   "Convert a Google Docs structural ELEMENT to IR.
@@ -2178,193 +1888,6 @@ MARKERS may contain original Org source ownership metadata."
   (gdocs-convert--without-inline-status-markers
    (gdocs-convert--markers-for-range markers start end)))
 
-(defun gdocs-convert--docs-elements-to-runs (elements &optional markers)
-  "Convert Google Docs paragraph ELEMENTS to IR text runs.
-ELEMENTS may be a list or a vector.  MARKERS can carry stable Org labels for
-native Google Docs footnote references.  Adjacent runs with identical formatting
-are merged, and edge whitespace on formatted runs is normalized."
-  (let ((runs nil) previous-marker)
-    (seq-doseq (el elements)
-      (let* ((footnote-ref (alist-get 'footnoteReference el))
-             (date-element (alist-get 'dateElement el))
-             (parts
-              (cond
-               ((alist-get 'textRun el) (gdocs-convert--docs-status-text-parts el markers))
-               (footnote-ref
-                (list (cons nil (gdocs-convert--docs-footnote-reference-to-run
-                                 footnote-ref markers (alist-get 'startIndex el) (alist-get 'endIndex el)))))
-               (date-element
-                (list (cons nil (gdocs-convert--docs-date-element-to-run
-                                 date-element markers (alist-get 'startIndex el) (alist-get 'endIndex el)))))
-               ((assq 'dropdown el)
-                (user-error "Native dropdown choices have no static Org status mapping")))))
-        (dolist (part parts)
-          (let ((marker (car part)) (run (cdr part)))
-            (if (and marker (eq marker previous-marker))
-                (plist-put (car runs) :text
-                           (concat (plist-get (car runs) :text) (plist-get run :text)))
-              (push run runs))
-            (setq previous-marker marker)))))
-    (setq runs (nreverse runs))
-    (dolist (run runs)
-      (when-let* ((status (plist-get run :status)))
-        (when (and (not (plist-get status :described))
-                   (not (equal (plist-get run :text) (plist-get status :color))))
-          (plist-put run :status (plist-put (copy-sequence status) :described t)))))
-    (gdocs-convert--normalize-run-whitespace
-     (gdocs-convert--merge-adjacent-runs runs))))
-
-(defun gdocs-convert--merge-adjacent-runs (runs)
-  "Merge adjacent RUNS that have identical formatting.
-Google Docs often fragments text into many runs with the same
-style due to editing history.  This merges them to match the
-coarser run boundaries that org-element produces."
-  (when runs
-    (let ((result (list (car runs))))
-      (dolist (run (cdr runs))
-        (let ((prev (car result)))
-          (if (gdocs-convert--runs-same-format-p prev run)
-              (setcar result
-                      (plist-put (copy-sequence prev) :text
-                                 (concat (plist-get prev :text)
-                                         (plist-get run :text))))
-            (push run result))))
-      (nreverse result))))
-
-(defun gdocs-convert--runs-same-format-p (a b)
-  "Return non-nil if runs A and B have identical formatting."
-  (and (not (or (plist-get a :date-element)
-                (plist-get b :date-element)
-                (plist-get a :status)
-                (plist-get b :status)))
-       (eq (plist-get a :bold) (plist-get b :bold))
-       (eq (plist-get a :italic) (plist-get b :italic))
-       (eq (plist-get a :underline) (plist-get b :underline))
-       (eq (plist-get a :strikethrough) (plist-get b :strikethrough))
-       (eq (plist-get a :code) (plist-get b :code))
-       (equal (plist-get a :link) (plist-get b :link))
-       (eq (plist-get a :subscript) (plist-get b :subscript))
-       (eq (plist-get a :superscript) (plist-get b :superscript))
-       (equal (plist-get a :foreground-color)
-              (plist-get b :foreground-color))
-       (equal (plist-get a :background-color)
-              (plist-get b :background-color))
-       (eql (plist-get a :font-size) (plist-get b :font-size))
-       (equal (plist-get a :footnote-label)
-              (plist-get b :footnote-label))))
-
-(defun gdocs-convert--normalize-run-whitespace (runs)
-  "Normalize whitespace at boundaries of formatted RUNS.
-Move leading and trailing whitespace from formatted runs into
-adjacent plain runs, so that run boundaries match the org-mode
-emphasis model.  This prevents spurious diffs on round-trip."
-  (let ((result nil))
-    (dolist (run runs)
-      (cond
-       ((plist-get run :footnote-label)
-        (push run result))
-       ((not (gdocs-convert--run-has-formatting-p run))
-        (push run result))
-       (t
-        (let ((text (plist-get run :text))
-              (leading "")
-              (trailing ""))
-          (when (string-match "\\`\\([ \t]+\\)" text)
-            (setq leading (match-string 1 text))
-            (setq text (substring text (match-end 1))))
-          (when (and (not (string-empty-p text))
-                     (string-match "\\([ \t]+\\)\\'" text))
-            (setq trailing (match-string 1 text))
-            (setq text (substring text 0 (match-beginning 1))))
-          (when (not (string-empty-p leading))
-            (push (gdocs-convert--make-plain-run leading) result))
-          (unless (string-empty-p text)
-            (push (plist-put (copy-sequence run) :text text) result))
-          (when (not (string-empty-p trailing))
-            (push (gdocs-convert--make-plain-run trailing) result))))))
-    (nreverse result)))
-
-(defun gdocs-convert--run-has-formatting-p (run)
-  "Return non-nil if RUN has any formatting beyond plain text."
-  (or (plist-get run :bold)
-      (plist-get run :italic)
-      (plist-get run :underline)
-      (plist-get run :strikethrough)
-      (plist-get run :code)
-      (plist-get run :link)
-      (plist-get run :subscript)
-      (plist-get run :superscript)
-      (plist-get run :foreground-color)
-      (plist-get run :background-color)
-      (plist-get run :font-size)
-      (plist-get run :footnote-label)))
-
-(defun gdocs-convert--docs-text-run-to-ir (text-run)
-  "Convert a Google Docs TEXT-RUN to an IR text run plist."
-  (let* ((content (gdocs-convert--strip-vertical-tabs
-                   (alist-get 'content text-run)))
-         (style (alist-get 'textStyle text-run))
-         (link-obj (alist-get 'link style))
-         (url (when link-obj
-                (gdocs-convert--extract-link-url link-obj)))
-         (baseline (alist-get 'baselineOffset style))
-         (fg-color (gdocs-convert--extract-color
-                    (alist-get 'foregroundColor style)))
-         (bg-color (gdocs-convert--extract-color
-                    (alist-get 'backgroundColor style)))
-         (font-size (gdocs-convert--extract-font-size
-                     (alist-get 'fontSize style)))
-         (run (list :text content
-                    :bold (eq (alist-get 'bold style) t)
-                    :italic (eq (alist-get 'italic style) t)
-                    ;; Google Docs underlines links by default; suppress the
-                    ;; underline property on linked runs to avoid spurious
-                    ;; markup on round-trip.
-                    :underline (and (eq (alist-get 'underline style) t)
-                                    (not url))
-                    :strikethrough (eq (alist-get 'strikethrough style) t)
-                    :code (gdocs-convert--docs-is-monospace-p style)
-                    :link url)))
-    (when (plist-get run :code)
-      (setq run (plist-put run :style-names '(gdocs-code))))
-    (when (equal baseline "SUPERSCRIPT")
-      (setq run (plist-put run :superscript t)))
-    (when (equal baseline "SUBSCRIPT")
-      (setq run (plist-put run :subscript t)))
-    (when fg-color
-      (setq run (plist-put run :foreground-color fg-color)))
-    (when bg-color
-      (setq run (plist-put run :background-color bg-color)))
-    (when font-size
-      (setq run (plist-put run :font-size font-size)))
-    run))
-
-(defun gdocs-convert--extract-color (color-obj)
-  "Extract a hex color string from a Google Docs COLOR-OBJ.
-Returns a string like \"#FF0000\" or nil."
-  (when color-obj
-    (let* ((color (alist-get 'color color-obj))
-           (rgb (alist-get 'rgbColor color)))
-      (when rgb
-        (let ((r (or (alist-get 'red rgb) 0))
-              (g (or (alist-get 'green rgb) 0))
-              (b (or (alist-get 'blue rgb) 0)))
-          ;; Google Docs returns explicit (0,0,0) for the default text
-          ;; color.  Suppress it to avoid encoding the default as a style.
-          (unless (and (= r 0) (= g 0) (= b 0))
-            (format "#%02X%02X%02X"
-                    (round (* r 255))
-                    (round (* g 255))
-                    (round (* b 255)))))))))
-
-(defun gdocs-convert--extract-font-size (font-size-obj)
-  "Extract a font size in points from a Google Docs FONT-SIZE-OBJ.
-Returns a number or nil."
-  (when font-size-obj
-    ;; The `unit' field (typically "PT") is ignored; Google Docs always
-    ;; returns font sizes in points.
-    (alist-get 'magnitude font-size-obj)))
-
 (defun gdocs-convert--extract-link-url (link-obj)
   "Extract a URL from a Google Docs LINK-OBJ.
 Returns the explicit URL when present.  For internal heading
@@ -2381,35 +1904,6 @@ Requires `gdocs-convert--document-id' to be bound."
   (when (and heading-id gdocs-convert--document-id)
     (format "https://docs.google.com/document/d/%s/edit#heading=h.%s"
             gdocs-convert--document-id heading-id)))
-
-(defun gdocs-convert--docs-is-monospace-p (style)
-  "Return non-nil if STYLE indicates a monospace/code font."
-  (let* ((font (alist-get 'weightedFontFamily style))
-         (family (when font (alist-get 'fontFamily font))))
-    (and family
-         (member family gdocs-convert-monospace-font-families))))
-
-(defun gdocs-convert--trim-trailing-newline-runs (runs)
-  "Remove trailing whitespace from the last run(s) in RUNS.
-Google Docs paragraphs always end with a newline character, and
-may have trailing whitespace-only runs before it."
-  (when runs
-    (let ((result (copy-sequence runs))
-          (done nil))
-      (while (and result (not done))
-        (let* ((last-run (car (last result)))
-               (text (plist-get last-run :text))
-               (trimmed (s-trim-right text)))
-          (cond
-           ((or (plist-get last-run :footnote-label) (plist-get last-run :status))
-            (setq done t))
-           ((string-empty-p trimmed)
-            (setq result (butlast result)))
-           (t
-            (setcar (last result)
-                    (plist-put (copy-sequence last-run) :text trimmed))
-            (setq done t)))))
-      result)))
 
 (defun gdocs-convert--range-marker (markers marker-type start end)
   "Return MARKER-TYPE marker from MARKERS overlapping START..END, or nil."
@@ -2928,57 +2422,11 @@ clear any inherited formatting before per-run styles are applied."
           :index (+ index text-len))))
 
 (defun gdocs-convert--make-inline-insert-requests (runs index &optional prefix)
-  "Return insert requests for PREFIX, RUNS, and paragraph newline at INDEX.
-The returned plist contains :requests and model :length.  Native date runs are
-inserted with `insertDate' and count as one UTF-16 model unit."
+  "Compose semantic and literal insertion plans for RUNS at INDEX with PREFIX."
   (setq prefix (or prefix ""))
-  (if (not (seq-some (lambda (run) (plist-get run :date-element)) runs))
+  (or (gdocs-convert-date-inline-insert-requests runs index prefix)
       (gdocs-convert-paragraph-text-requests
-       (gdocs-convert--runs-to-plain-text runs) index prefix)
-    (let ((requests nil)
-          (cursor index))
-      (unless (string-empty-p prefix)
-        (push (gdocs-convert--make-insert-text-request prefix cursor)
-              requests)
-        (setq cursor (+ cursor (gdocs-convert--string-to-utf16-length prefix))))
-      (dolist (run runs)
-        (if-let ((date (plist-get run :date-element)))
-            (progn
-              (push (gdocs-convert--make-insert-date-request date cursor)
-                    requests)
-              (unless (plist-get date :active)
-                (push (gdocs-convert--make-timestamp-kind-marker-request
-                       date cursor)
-                      requests))
-              (setq cursor (1+ cursor)))
-          (let ((text (plist-get run :text)))
-            (unless (string-empty-p text)
-              (push (gdocs-convert--make-insert-text-request text cursor)
-                    requests)
-              (setq cursor (+ cursor
-                              (gdocs-convert--string-to-utf16-length text)))))))
-      (push (gdocs-convert--make-insert-text-request "\n" cursor) requests)
-      (list :requests (nreverse requests)
-            :length (1+ (- cursor index))))))
-
-(defun gdocs-convert--make-timestamp-kind-marker-request (date index)
-  "Create a named range marker for inactive DATE at INDEX."
-  `((createNamedRange
-     . ((name . ,(format "gdocs-org-marker:timestamp-kind:%s:%s"
-                         index
-                         (if (plist-get date :active) "active" "inactive")))
-        (range . ((startIndex . ,index)
-                  (endIndex . ,(1+ index))))))))
-
-(defun gdocs-convert--make-insert-date-request (date index)
-  "Create an insertDate request for DATE at INDEX."
-  `((insertDate
-     . ((dateElementProperties
-         . ((timestamp . ,(plist-get date :timestamp))
-            (locale . "en")
-            (dateFormat . "DATE_FORMAT_MONTH_DAY_YEAR_ABBREVIATED")
-            (timeFormat . "TIME_FORMAT_DISABLED")))
-        (location . ((index . ,index)))))))
+       (gdocs-convert--runs-to-plain-text runs) index prefix)))
 
 (defun gdocs-convert--logical-paragraph-style-to-docs (style-plist)
   "Resolve logical paragraph STYLE-PLIST to Google Docs ParagraphStyle fields."
@@ -3149,28 +2597,10 @@ BORDERS is an alist of (SIDE . SPEC), where SIDE is one of `top', `bottom',
         ('subtitle "SUBTITLE")
         (_ "NORMAL_TEXT"))))
 
-(defun gdocs-convert--make-footnote-reference-requests (runs start-index)
-  "Create extension requests for semantic footnote RUNS at START-INDEX.
-When `gdocs-convert-footnote-reference-handler' is nil, no requests are emitted.
-The handler receives each zero-width footnote run and its exact body index."
-  (let ((requests nil)
-        (index start-index))
-    (dolist (run runs)
-      (let ((len (gdocs-convert--run-model-length run)))
-        (when (and (plist-get run :footnote-label)
-                   gdocs-convert-footnote-reference-handler)
-          (setq requests
-                (append requests
-                        (funcall gdocs-convert-footnote-reference-handler
-                                 run index))))
-        (setq index (+ index len))))
-    requests))
-
 (defun gdocs-convert--run-model-length (run)
   "Return Google Docs UTF-16 model length for RUN."
-  (if (plist-get run :date-element)
-      1
-    (gdocs-convert--string-to-utf16-length (or (plist-get run :text) ""))))
+  (or (plist-get (gdocs-convert--inline-run-policy run) :model-length)
+      (gdocs-convert--string-to-utf16-length (or (plist-get run :text) ""))))
 
 (defun gdocs-convert--text-range (start end &optional segment-id)
   "Return a Google Docs text range from START to END.
@@ -3195,12 +2625,12 @@ OMIT-STATUS-MARKERS suppresses duplicate markers for unchanged status tokens."
                    . ((textStyle . ,style-fields)
                       (range . ,(gdocs-convert--text-range
                                  index end segment-id))
-                      (fields . ,(concat (gdocs-convert--style-fields-mask style-fields)
-                                         (when (plist-get run :status) ",link"))))))
+                      (fields . ,(gdocs-convert-status-style-fields-mask
+                                  run (gdocs-convert--style-fields-mask style-fields))))))
                 requests))
-        (when (and (plist-get run :status) (not omit-status-markers))
-          (push (gdocs-convert--status-marker-request
-                 (plist-get run :status) index end segment-id) requests))
+        (when-let* ((marker (gdocs-convert-status-run-marker-request
+                             run index end segment-id omit-status-markers)))
+          (push marker requests))
         (setq index end)))
     (nreverse requests)))
 
@@ -3286,8 +2716,7 @@ When SEGMENT-ID is non-nil, target that non-body segment."
 (defun gdocs-convert--run-to-docs-style (run)
   "Convert formatting of a text RUN to a Google Docs textStyle alist.
 Returns nil if no formatting is applied."
-  (let ((style (when (plist-get run :status)
-                 (gdocs-convert--status-docs-style (plist-get run :status)))))
+  (let ((style (gdocs-convert-status-run-docs-style run)))
     (when (plist-get run :link)
       (push `(link . ((url . ,(plist-get run :link)))) style))
     (setq style (append (gdocs-convert--run-logical-style run) style))

@@ -158,6 +158,37 @@ feature roles, logical presentation, remote accounts or transport behavior.
 Document-wide feature assembly, inline feature conversion and publication request
 planning are separate from this paragraph conversion boundary.
 
+## Bidirectional inline conversion
+
+`gdocs-convert-inline-codec.el` owns ordinary Org emphasis/link-description
+conversion, native rich-text decoding, Org rendering, run coalescing and edge
+whitespace normalization. It loads without the facade, feature modules, logical
+style policy or transport. Document link resolution remains an explicit facade
+service; this codec neither discovers documents nor selects accounts.
+
+The facade explicitly composes source-object adapters, native-element adapters,
+semantic rendering and run policies. Status, dates and footnotes own their
+recognition, metadata and normalization rules. Code-like Org objects and native
+monospace recognition belong to the block/code adapter. Status owns marker
+coalescing completion, unsupported dropdown diagnostics and status-specific style
+field/marker requests. `gdocs-convert-dates.el` owns active/inactive timestamp
+markers, atomic native date runs, one-unit model addressing and mixed native-date
+insertion planning. Reference recognition, authored labels, zero-width rendering
+and reference-request extension callbacks belong to footnotes.
+
+A run policy is a plain property list: `:atomic` prevents coalescing; `:identity`
+preserves semantic identity; `:preserve-whitespace` and `:preserve-terminal`
+protect authored boundaries; `:formatted` contributes to formatting detection;
+`:model-length` supplies nonliteral native addressing. Feature modules return
+only their local consequences, and the facade composes them explicitly. Generic
+algorithms inspect these neutral properties, not feature fields or kind names.
+There is no feature registry, discovery mechanism or declaration DSL.
+
+Literal links are composed before emphasis so emphasis encloses the complete
+link. Native default link underlining is not mistaken for authored underline.
+The source adapter preserves post-blank spacing and inherited formatting; native
+inline parts retain their grouping token until feature-owned completion runs.
+
 ## Native footnote conversion
 
 `gdocs-convert-footnotes.el` owns footnote definition/run conversion, native
