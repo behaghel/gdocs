@@ -112,16 +112,6 @@ INHERITED-PROPS must not add invisible emphasis to the generated pill style."
     (gdocs-convert--status-color-key color)
     (list :link-type protocol :color color :described (equal described "1"))))
 
-(defun gdocs-convert--utf16-string-index (text units)
-  "Return the character index in TEXT at exactly UNITS UTF-16 code units."
-  (let ((index 0) (offset 0))
-    (while (and (< offset units) (< index (length text)))
-      (setq offset (+ offset (if (> (aref text index) #xFFFF) 2 1))
-            index (1+ index)))
-    (unless (= offset units)
-      (user-error "Status marker splits a Unicode character or exceeds its text"))
-    index))
-
 (defun gdocs-convert--docs-status-text-parts (element markers)
   "Split text ELEMENT at semantic status MARKERS into (MARKER . RUN) pairs."
   (let* ((run (gdocs-convert--docs-text-run-to-ir (alist-get 'textRun element)))

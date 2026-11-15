@@ -31,7 +31,7 @@
            "{\"startIndex\":1,\"endIndex\":9,\"paragraph\":{\"elements\":[{\"textRun\":{\"content\":\"Bold 😀\\n\",\"textStyle\":{\"italic\":true,\"bold\":true}}}]}},"
            "{\"startIndex\":9,\"endIndex\":14,\"paragraph\":{\"elements\":[{\"textRun\":{\"content\":\"Link\\n\",\"textStyle\":{\"italic\":true,\"link\":{\"url\":\"https://example.org\"}}}}]}},"
            "{\"startIndex\":14,\"endIndex\":15,\"paragraph\":{\"elements\":[{\"textRun\":{\"content\":\"\\n\"}}]}}]},"
-           "\"namedRanges\":{\"gdocs-org-marker:quote-block:quoted\":{\"namedRanges\":[{\"ranges\":[{\"startIndex\":1,\"endIndex\":14}]}]}}}")
+           "\"namedRanges\":{\"gdocs-org-marker:quote-block:quoted:italic-v1-1\":{\"namedRanges\":[{\"ranges\":[{\"startIndex\":1,\"endIndex\":14}]}]}}}")
    :object-type 'alist :array-type 'list :null-object nil :false-object nil))
 
 (ert-deftest gdocs-quotes-bidirectional-publication-and-repeat ()
@@ -69,23 +69,24 @@
         (while t (should-not (gdocs-quotes-test--branch-p (read (current-buffer)))))
       (end-of-file nil))))
 
-(ert-deftest gdocs-quotes-soft-wrap-and-separator-ownership ()
-  "Only same-ID continuations join, one separator is consumed, input stays intact."
+(ert-deftest gdocs-quotes-native-boundaries-and-separator-ownership ()
+  "Native paragraphs and quote IDs retain boundaries; separator ownership is exact."
   (let* ((runs '((:text "Hello" :italic t) (:text "world" :italic t) (:text "again" :italic t)))
          (before (copy-tree runs))
          (paragraphs (cl-loop for run in runs for id in '("one" "one" "two")
                               for start in '(1 7 13) for end in '(7 13 19)
                               collect (list :type 'paragraph :style 'normal :contents (list run)
-                                            :gdocs-marker (list (list :type 'quote-block :id id))
+                                            :gdocs-marker (list (list :type 'quote-block :id id :data "italic-v1-1"))
                                             :doc-start start :doc-end end)))
          (tail '(:type paragraph :style normal :contents ((:text "After"))))
          (ir (append paragraphs (list '(:type paragraph :contents nil :doc-start 19 :doc-end 20) tail)))
          (grouped (gdocs-convert--attach-quote-block-markers ir)))
-    (should (= (length grouped) 2))
+    (should (= (length grouped) 3))
     (should (equal (mapcar #'gdocs-convert--runs-to-plain-text (plist-get (car grouped) :paragraphs))
-                   '("Hello world" "again")))
-    (should (= (plist-get (car grouped) :doc-end) 20))
-    (should (equal (cadr grouped) tail))
+                   '("Hello" "world")))
+    (should (equal (mapcar #'gdocs-convert--runs-to-plain-text (plist-get (cadr grouped) :paragraphs)) '("again")))
+    (should (= (plist-get (cadr grouped) :doc-end) 20))
+    (should (equal (caddr grouped) tail))
     (should (equal runs before))))
 
 (ert-deftest gdocs-quotes-empty-publication-and-style-revision ()

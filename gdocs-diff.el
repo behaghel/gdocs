@@ -184,10 +184,16 @@ Includes type, style, list info, semantic markers, and full run details."
         (push (copy-sequence run) result)))))
 
 (defun gdocs-diff--runs-formatting-key (runs)
-  "Produce a string capturing the formatting of each run in RUNS.
-Adjacent runs with identical semantic formatting are normalized first, because
-Google Docs often splits whitespace into separate text runs after fetch."
-  (mapconcat #'gdocs-diff--run-formatting-key
+  "Capture formatting and semantic span lengths of RUNS.
+Normalize adjacent equal formats before comparing native run fragmentation.
+Feature-provided semantic text keeps temporary insertion sentinels out of
+reference identity."
+  (mapconcat (lambda (run)
+               (let ((semantic (gdocs-diff-semantic-run run)))
+                 (format "%s@%d" (gdocs-diff--run-formatting-key run)
+                         (if (plist-member semantic :text)
+                             (gdocs-convert--string-to-utf16-length (plist-get semantic :text))
+                           (gdocs-convert--run-model-length run)))))
              (gdocs-diff--normalized-runs-for-key runs)
              ";"))
 
@@ -209,6 +215,8 @@ Google Docs often splits whitespace into separate text runs after fetch."
                               (plist-get date :timestamp)
                               (if (plist-get date :active) "active" "inactive"))
                     ""))
+          (when (plist-get run :subscript) "_sub")
+          (when (plist-get run :superscript) "^sup")
           (plist-get (gdocs-diff-semantic-run run) :key)))
 
 (defun gdocs-diff--list-key (list-info)

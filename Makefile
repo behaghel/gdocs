@@ -28,6 +28,7 @@ TEST_FILES = \
   test/gdocs-image-convert-test.el \
   test/gdocs-code-blocks-test.el \
   test/gdocs-quotes-test.el \
+  test/gdocs-fidelity-corrections-test.el \
   test/gdocs-diff-test.el \
   test/gdocs-diff-encapsulation-test.el \
   test/gdocs-diff-status-test.el \

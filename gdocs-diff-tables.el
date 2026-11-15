@@ -3,19 +3,23 @@
 ;;; Commentary:
 ;; Table identity and read-side model length are table policy.  The LCS/index
 ;; kernel consumes the existing neutral element descriptor rather than table
-;; branches.  Identity intentionally preserves the established text-only key.
+;; branches.  Identity preserves row/cell boundaries and authored formatting.
 
 ;;; Code:
 
 (require 'gdocs-convert-tables)
 (defvar gdocs-diff-semantic-element-functions)
+(declare-function gdocs-diff--runs-formatting-key "gdocs-diff" (runs))
 
 (defun gdocs-diff--table-key (element)
-  "Return the established table ELEMENT key, concatenating cell text in order."
-  (let (texts)
-    (dolist (row (plist-get element :rows))
-      (dolist (cell row) (push (gdocs-convert--runs-to-plain-text cell) texts)))
-    (format "table:%s" (mapconcat #'identity (nreverse texts) "|"))))
+  "Return a semantic table ELEMENT key including shape and rich cell content."
+  (format "table:%S"
+          (mapcar (lambda (row)
+                    (mapcar (lambda (cell)
+                              (list (gdocs-convert--runs-to-plain-text cell)
+                                    (gdocs-diff--runs-formatting-key cell)))
+                            row))
+                  (plist-get element :rows))))
 
 (defun gdocs-diff--table-utf16-length (element)
   "Return table ELEMENT's native read-side length, excluding preserved paragraph."

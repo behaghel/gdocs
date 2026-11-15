@@ -245,16 +245,23 @@ Quote identity and read-side geometry belong to `gdocs-diff-quotes.el`, exposed
 through neutral element descriptors; identity includes style revision and rich
 paragraph run formatting/text.
 
-Native grouping preserves authoritative ranges, skips empty marked paragraphs,
-and joins soft-wrap continuations only when marker IDs match. Quote cleanup
-removes visual italic flags without mutating input runs.
+Native grouping preserves authoritative ranges, native paragraph boundaries and
+block IDs. It does not infer paragraph structure from capitalization. Authored
+italic emphasis is independent of quote presentation: displayed italic is the
+exclusive-or of authored italic and the quote style's italic base. Publication
+records the applied base in each quote marker and explicitly writes both italic
+and upright run ranges. Import reverses that recorded mapping, not the current
+local theme, and normalizes whitespace in authored-style space without mutating
+input runs. Missing or unsupported style provenance blocks quote import with an
+actionable diagnostic; authoritative Org can republish the document to establish
+provenance instead of guessing or erasing emphasis.
+
 Publication emits shared paragraph plans with quote-specific logical line roles
 and semantic markers, then one unmarked separator paragraph. Body length counts
 paragraph terminal newlines and that separator. Empty quote publication includes
 an empty content paragraph and the separator.
 
-Shared text supplies only the soft-wrap text heuristic. Shared paragraph
-construction supplies empty-paragraph recognition and neutral separator
+Shared paragraph construction supplies empty-paragraph recognition and neutral separator
 append/consume operations; quote and callout features decide when to invoke
 those operations. Callouts do not depend on quote policy. Logical presentation,
 transport, accounts and asynchronous orchestration remain separate. Existing
@@ -264,13 +271,16 @@ helper APIs remain available through the facade.
 
 `gdocs-convert-code-blocks.el` owns source/example syntax, literal lines,
 language metadata, native marker grouping, Org rendering and publication
-planning. Source markers group consecutive paragraphs by language; example
-markers group by block ID. Grouping retains authoritative document ranges.
+planning. Source markers group consecutive paragraphs only when both language
+and block ID match; example markers group by block ID. Grouping retains authoritative document ranges.
 Legacy unmarked all-code paragraphs group into Org example blocks only when
 normal, unlisted, unaligned and unmarked. The feature supplies a plain grouping
 descriptor to the facade; generic traversal does not inspect code runs or
 assemble block syntax.
 
+Literal block text preserves trailing spaces and authored empty lines; only the
+structural final newline is removed when constructing its line list. Native
+paragraph decoding removes one terminator, not arbitrary trailing whitespace.
 Literal block text does not reinterpret Org emphasis, links or status syntax.
 Publication emits one shared paragraph plan per line, preserving code run
 properties, semantic markers and first/line/last/single logical style roles.
@@ -286,6 +296,21 @@ adapters compose code-block services without moving quotes, callouts or list
 policy into this feature. Existing helper names remain available through the
 facade. Presentation configuration, transport, accounts and asynchronous
 orchestration remain separate responsibilities.
+
+## Inline source fidelity
+
+Inline source IR preserves language, header arguments and literal code as one
+semantic object. Native named ranges carry language/header metadata at exact
+UTF-16 body ranges; import restores those ranges even when native text runs
+have been split or merged. Diff identity includes the language/header data and
+formatting span lengths. Changed or deleted inline source removes stale native
+range IDs before applying edits, without duplicating replacement annotations.
+
+Source and native metadata that cannot be represented faithfully fail before
+publication or source replacement. Inline source inside tables or footnotes,
+empty or multiline native ranges, overlapping semantic markers, discontinuous
+ranges, malformed language/header data and excessive native range-name length
+produce actionable diagnostics rather than plain-code fallbacks.
 
 ## Image conversion and geometry
 
@@ -330,8 +355,8 @@ capped by the available width per column. Requests create the table, set column
 widths, then populate nonempty cells last-to-first to keep insertion indices
 stable. Empty cells still contribute structural markers and terminal newlines.
 
-`gdocs-diff-tables.el` supplies text-only table identity and read-side model
-length through neutral element descriptors. Generic diff algorithms do not
+`gdocs-diff-tables.el` supplies table identity including row/cell shape and rich
+cell formatting spans, plus read-side model length, through neutral descriptors. Generic diff algorithms do not
 classify tables or calculate table geometry. Table width repair pairs local
 content with fetched native table locations, skipping mismatched column counts;
 its pure planner lives with table conversion. Sync owns fetching, callbacks,

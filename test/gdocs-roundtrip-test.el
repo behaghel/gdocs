@@ -516,13 +516,16 @@
 
 (ert-deftest gdocs-roundtrip/org-inline-src-block ()
   "Inline source blocks (src_lang{code}) produce a code run with language info."
-  :expected-result :failed
   (let* ((ir (gdocs-roundtrip-test--org-to-ir "Result: src_python{1+1}"))
          (run (gdocs-roundtrip-test--find-run-with-text ir "1+1")))
     (should run)
     (should (plist-get run :code))
-    ;; Should also have language metadata
-    (should (gdocs-roundtrip-test--find-marker ir 'inline-src-block))))
+    (should (equal (plist-get (plist-get run :inline-source) :language) "python"))
+    (should (equal (gdocs-convert-ir-to-org ir) "Result: src_python{1+1}\n"))
+    (should (seq-some (lambda (request)
+                        (when-let* ((marker (alist-get 'createNamedRange request)))
+                          (string-prefix-p "gdocs-org-marker:inline-src-block:" (alist-get 'name marker))))
+                      (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-statistics-cookie ()
   "Statistics cookies [2/5] survive org→IR→org via fallback."
@@ -726,14 +729,24 @@
     (should (> (length items) 0))))
 
 (ert-deftest gdocs-roundtrip/json-has-checkbox-lists ()
-  "The JSON fixture contains checkbox list items.
-The MCP markdown renderer doesn't produce BULLET_CHECKBOX presets,
-so this requires manual fixture update or a doc created via the GDocs UI."
-  :expected-result :failed
+  "The public specimen plus explicit native checkbox data preserves checked state.
+The unmodified public capture has no checkbox glyph metadata; this addition is
+synthetic fixture coverage, not a claim about that capture or live acceptance."
   (let* ((json (gdocs-roundtrip-test--read-json-fixture))
-         (ir (gdocs-convert-docs-json-to-ir json))
-         (items (gdocs-roundtrip-test--find-ir-list-elements ir 'check)))
-    (should (> (length items) 0))))
+         (body (alist-get 'body json)))
+    (setf (alist-get 'content body)
+          (vconcat (alist-get 'content body)
+                   [((startIndex . 100000) (endIndex . 100018)
+                     (paragraph . ((bullet . ((listId . "fidelity-check") (nestingLevel . 0)))
+                                   (elements . [((textRun . ((content . "Checked synthetic\n"))))]))))]))
+    (setf (alist-get 'lists json)
+          (cons '(fidelity-check . ((listProperties . ((nestingLevels . [((glyphSymbol . "☑") (glyphFormat . "%0"))])))))
+                (alist-get 'lists json)))
+    (let* ((ir (gdocs-convert-docs-json-to-ir json))
+           (items (gdocs-roundtrip-test--find-ir-list-elements ir 'check)))
+      (should (> (length items) 0))
+      (should (seq-some (lambda (item) (plist-get (plist-get item :list) :checked)) items))
+      (should (string-match-p (regexp-quote "- [X] Checked synthetic") (gdocs-convert-ir-to-org ir))))))
 
 (ert-deftest gdocs-roundtrip/json-has-table ()
   "The JSON fixture contains a table element."
@@ -762,17 +775,28 @@ so this requires manual fixture update or a doc created via the GDocs UI."
     (should run)))
 
 (ert-deftest gdocs-roundtrip/json-has-block-quote ()
-  "The JSON fixture contains a quote-styled paragraph."
-  :expected-result :failed  ;; GDocs doesn't have native block quotes
+  "Explicit native quote provenance reconstructs a semantic quote block.
+The public capture lacks these semantic markers; append synthetic native data
+rather than requiring an obsolete quote-styled-paragraph representation."
   (let* ((json (gdocs-roundtrip-test--read-json-fixture))
-         (ir (gdocs-convert-docs-json-to-ir json))
-         (quote-elem (gdocs-roundtrip-test--find-ir-element
-                      ir 'paragraph 'quote)))
-    (should quote-elem)))
+         (body (alist-get 'body json)))
+    (setf (alist-get 'content body)
+          (vconcat (alist-get 'content body)
+                   [((startIndex . 100000) (endIndex . 100010)
+                     (paragraph . ((elements . [((textRun . ((content . "Synthetic\n") (textStyle . ((italic . t))))))]))))]))
+    (setf (alist-get 'namedRanges json)
+          (cons '(gdocs-org-marker:quote-block:synthetic:italic-v1-1
+                  . ((namedRanges . [((ranges . [((startIndex . 100000) (endIndex . 100009))]))])))
+                (alist-get 'namedRanges json)))
+    (let* ((ir (gdocs-convert-docs-json-to-ir json))
+           (quote-elem (gdocs-roundtrip-test--find-ir-element ir 'quote-block)))
+      (should quote-elem)
+      (should (equal (mapcar #'gdocs-convert--runs-to-plain-text (plist-get quote-elem :paragraphs)) '("Synthetic")))
+      (should (string-match-p (regexp-quote "#+BEGIN_QUOTE\nSynthetic\n#+END_QUOTE") (gdocs-convert-ir-to-org ir))))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Suite 2b: GDocs features not yet supported in IR
-;;            These tests document expected failures.
+;;            Explicit coverage distinguishes fixture gaps from runtime defects.
 
 (ert-deftest gdocs-roundtrip/json-has-inline-image ()
   "The JSON fixture's inline image is handled in IR."
@@ -1146,7 +1170,7 @@ so this requires manual fixture update or a doc created via the GDocs UI."
                     ((startIndex . 100010) (endIndex . 100011)
                      (paragraph . ((elements . [((textRun . ((content . "\n"))))]))))]))
     (setf (alist-get 'namedRanges native)
-          (cons '(gdocs-org-marker:quote-block:synthetic
+          (cons '(gdocs-org-marker:quote-block:synthetic:italic-v1-0
                   . ((namedRanges . [((ranges . [((startIndex . 100000) (endIndex . 100010))]))])))
                 (alist-get 'namedRanges native)))
     (dolist (ir (list (gdocs-roundtrip-test--org-to-ir (gdocs-roundtrip-test--read-org-fixture))

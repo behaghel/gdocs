@@ -15,6 +15,8 @@
 (declare-function gdocs-convert--next-id "gdocs-convert" ())
 (declare-function gdocs-convert--trim-runs "gdocs-convert" (runs))
 (declare-function gdocs-convert--paragraph-to-requests "gdocs-convert" (element index))
+(declare-function gdocs-convert--run-model-length "gdocs-convert" (run))
+(declare-function gdocs-convert--logical-style-text-fields "gdocs-style-resolve" (style-name))
 
 (defun gdocs-convert-quote-element-p (element)
   "Return non-nil for semantic quote ELEMENT."
@@ -66,9 +68,22 @@
   (format "#+BEGIN_QUOTE\n%s\n#+END_QUOTE"
           (mapconcat #'gdocs-convert--runs-to-org (plist-get element :paragraphs) "\n\n")))
 
-(defun gdocs-convert--strip-quote-visual-style (runs)
-  "Return RUNS with the established quote visual-italic cleanup."
-  (mapcar (lambda (run) (plist-put (copy-sequence run) :italic nil)) runs))
+(defun gdocs-convert--strip-quote-visual-style (runs &optional marker)
+  "Recover authored italics in RUNS from the applied style snapshot in MARKER.
+Without MARKER, preserve native emphasis rather than guessing at decoration.
+A marked quote without provenance must be republished from authoritative Org."
+  (let* ((data (plist-get marker :data))
+         (base (cond ((null marker) nil)
+                     ((equal data "italic-v1-0") nil)
+                     ((equal data "italic-v1-1") t)
+                     (t (user-error "Quote style provenance is missing or unsupported; push from authoritative Org source before pulling this quote")))))
+    ;; Native normalization happened in displayed-style space.  Normalize again
+    ;; after inversion so edge spaces do not become spurious authored emphasis.
+    (gdocs-convert--merge-adjacent-runs
+     (gdocs-convert--normalize-run-whitespace
+      (mapcar (lambda (run)
+                (plist-put (copy-sequence run) :italic
+                           (not (eq (eq (plist-get run :italic) t) base)))) runs)))))
 
 (defun gdocs-convert--attach-quote-block-markers (ir)
   "Group consecutive marked quote-block paragraphs in IR."
@@ -76,19 +91,17 @@
     (while remaining
       (let ((element (car remaining)))
         (if (gdocs-convert--quote-block-paragraph-p element)
-            (let ((paragraphs nil) (last-marker-id nil)
+            (let ((paragraphs nil)
+                  (block-id (plist-get (gdocs-convert--quote-block-marker element) :id))
                   (start (plist-get element :doc-start)) end)
-              (while (and remaining (gdocs-convert--quote-block-paragraph-p (car remaining)))
+              (while (and remaining (gdocs-convert--quote-block-paragraph-p (car remaining))
+                          (equal block-id (plist-get (gdocs-convert--quote-block-marker (car remaining)) :id)))
                 (unless (gdocs-convert--empty-paragraph-p (car remaining))
                   (let* ((marker (gdocs-convert--quote-block-marker (car remaining)))
-                         (marker-id (plist-get marker :id))
-                         (runs (gdocs-convert--strip-quote-visual-style (plist-get (car remaining) :contents))))
-                    (if (and paragraphs marker-id (equal marker-id last-marker-id)
-                             (gdocs-convert--soft-wrap-continuation-p runs))
-                        (setcar paragraphs (gdocs-convert--merge-adjacent-runs
-                                            (append (car paragraphs) (list (gdocs-convert--make-plain-run " ")) runs)))
-                      (push runs paragraphs))
-                    (setq last-marker-id marker-id)))
+                         (runs (gdocs-convert--strip-quote-visual-style (plist-get (car remaining) :contents) marker)))
+                    ;; Native paragraph breaks are authored structure, not a
+                    ;; casing-based guess at visual line wrapping.
+                    (push runs paragraphs)))
                 (setq end (plist-get (car remaining) :doc-end) remaining (cdr remaining)))
               (let ((separator (gdocs-convert--consume-generated-separator remaining end)))
                 (setq remaining (plist-get separator :remaining) end (plist-get separator :end)))
@@ -109,8 +122,26 @@
          (count (length paragraphs)) (paragraph-index 0) (requests nil) (current index))
     (dolist (runs paragraphs)
       (let* ((paragraph (gdocs-convert--quote-block-paragraph-element element runs paragraph-index count))
-             (result (gdocs-convert--paragraph-to-requests paragraph current)))
-        (setq requests (nconc requests (plist-get result :requests)) current (plist-get result :index))
+             (base (eq (alist-get 'italic (gdocs-convert--logical-style-text-fields
+                                           (plist-get paragraph :style-name))) t))
+             (snapshot (if base "italic-v1-1" "italic-v1-0"))
+             (_ (plist-put (car (plist-get paragraph :gdocs-marker)) :data snapshot))
+             (result (gdocs-convert--paragraph-to-requests paragraph current))
+             (position current))
+        (setq requests (nconc requests (plist-get result :requests)))
+        ;; Apply both true and false explicitly, after logical and authored
+        ;; styles.  This makes displayed italic = authored XOR applied base.
+        (dolist (run runs)
+          (let* ((end (+ position (gdocs-convert--run-model-length run)))
+                 (italic (not (eq (eq (plist-get run :italic) t) base))))
+            (when (> end position)
+              (setq requests (nconc requests
+                                    (list `((updateTextStyle
+                                             . ((textStyle . ((italic . ,(if italic t :json-false))))
+                                                (range . ((startIndex . ,position) (endIndex . ,end)))
+                                                (fields . "italic"))))))))
+            (setq position end)))
+        (setq current (plist-get result :index))
         (cl-incf paragraph-index)))
     (gdocs-convert--append-generated-separator-requests requests current element)))
 

@@ -8,6 +8,9 @@
 
 (require 'gdocs-convert-text)
 (defvar gdocs-diff-semantic-element-functions)
+(defvar gdocs-diff-semantic-run-functions)
+(defvar gdocs-diff-semantic-plan-functions)
+(declare-function gdocs-convert-code-run-marker-request "gdocs-convert-code-blocks" (run start end &optional segment-id))
 
 (defun gdocs-diff--source-block-key (element)
   "Compute a content key for a source-block ELEMENT."
@@ -41,6 +44,37 @@
                           :body-length (gdocs-diff--example-block-utf16-length element)))))
 
 (add-hook 'gdocs-diff-semantic-element-functions #'gdocs-diff-code-blocks--element t)
+
+(defun gdocs-diff-code-blocks--run (run)
+  "Describe inline source RUN's semantic language/header identity."
+  (when-let* ((source (plist-get run :inline-source)))
+    (list :key (format "inline-source:%S" source) :normalize-whitespace nil
+          :requests (lambda (value index)
+                      (list (gdocs-convert-code-run-marker-request
+                             value index (+ index (gdocs-convert--string-to-utf16-length (plist-get value :text)))))))))
+
+(declare-function gdocs-diff--runs-formatting-key "gdocs-diff" (runs))
+
+(defun gdocs-diff-code-blocks--plan (old new operations _start)
+  "Remove stale inline source annotations before OPERATIONS mutate OLD content."
+  (let (ids)
+    (dolist (operation operations)
+      (let* ((kind (plist-get operation :op))
+             (element (when (memq kind '(modify delete)) (nth (plist-get operation :old-index) old)))
+             (updated (when (eq kind 'modify) (nth (plist-get operation :new-index) new))))
+        (when (and element
+                   (or (eq kind 'delete)
+                       (not (equal (gdocs-convert--runs-to-plain-text (plist-get element :contents))
+                                   (gdocs-convert--runs-to-plain-text (plist-get updated :contents))))
+                       (not (equal (gdocs-diff--runs-formatting-key (plist-get element :contents))
+                                   (gdocs-diff--runs-formatting-key (plist-get updated :contents))))))
+          (dolist (run (plist-get element :contents))
+            (setq ids (append ids (plist-get run :inline-source-range-ids)))))))
+    (when ids
+      (list :before (mapcar (lambda (id) `((deleteNamedRange . ((namedRangeId . ,id))))) (delete-dups ids))))))
+
+(add-hook 'gdocs-diff-semantic-run-functions #'gdocs-diff-code-blocks--run t)
+(add-hook 'gdocs-diff-semantic-plan-functions #'gdocs-diff-code-blocks--plan t)
 
 (provide 'gdocs-diff-code-blocks)
 ;;; gdocs-diff-code-blocks.el ends here

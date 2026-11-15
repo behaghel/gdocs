@@ -655,15 +655,15 @@
          (json `((body . ((content . ,body-elements)))
                  (namedRanges
                   . ,(list
-                      (cons (intern "gdocs-org-marker:quote-block:elem-001")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-0")
                             `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 1) (endIndex . 7)))))))))))))
          (ir (gdocs-convert-docs-json-to-ir json)))
     (should (= (length ir) 1))
     (should (eq (plist-get (car ir) :type) 'quote-block))
     (should (= (plist-get (car ir) :doc-end) 9))))
 
-(ert-deftest gdocs-convert-test-docs-json-marked-quote-block-merges-same-marker ()
-  "Quote paragraphs split by an Org soft newline merge when sharing a marker id."
+(ert-deftest gdocs-convert-test-docs-json-marked-quote-block-keeps-paragraphs ()
+  "Native paragraph boundaries survive even when quote markers share a block id."
   (let* ((body-elements
           (vector `((startIndex . 1)
                     (endIndex . 5)
@@ -680,7 +680,7 @@
          (json `((body . ((content . ,body-elements)))
                  (namedRanges
                   . ,(list
-                      (cons (intern "gdocs-org-marker:quote-block:elem-001")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-1")
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 1)
@@ -689,7 +689,7 @@
     (should (eq (plist-get block :type) 'quote-block))
     (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
                            (plist-get block :paragraphs))
-                   '("One two")))))
+                   '("One" "two")))))
 
 (ert-deftest gdocs-convert-test-docs-json-marked-quote-block-ignores-empty-chrome ()
   "Marked empty quote paragraphs are treated as visual chrome, not content."
@@ -715,17 +715,17 @@
          (json `((body . ((content . ,body-elements)))
                  (namedRanges
                   . ,(list
-                      (cons (intern "gdocs-org-marker:quote-block:elem-001")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-1")
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 1)
                                                           (endIndex . 4)))))))))
-                      (cons (intern "gdocs-org-marker:quote-block:elem-002")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-1")
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 5)
                                                           (endIndex . 6)))))))))
-                      (cons (intern "gdocs-org-marker:quote-block:elem-003")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-1")
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 6)
@@ -758,12 +758,12 @@
          (json `((body . ((content . ,body-elements)))
                  (namedRanges
                   . ,(list
-                      (cons (intern "gdocs-org-marker:quote-block:elem-001")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-1")
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 1)
                                                           (endIndex . 11)))))))))
-                      (cons (intern "gdocs-org-marker:quote-block:elem-002")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-1")
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 12)
@@ -2459,7 +2459,7 @@
               "#+BEGIN_QUOTE\nLine one\n\nLine two\n#+END_QUOTE"))
          (requests (gdocs-convert-ir-to-docs-requests ir)))
     (should (member '((createNamedRange
-                       . ((name . "gdocs-org-marker:quote-block:elem-001")
+                       . ((name . "gdocs-org-marker:quote-block:elem-001:italic-v1-0")
                           (range . ((startIndex . 1)
                                     (endIndex . 9))))))
                     requests))

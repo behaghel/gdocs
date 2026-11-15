@@ -85,5 +85,15 @@ When SEGMENT-ID is non-nil, target that segment instead of the body."
            (or (and (>= first ?a) (<= first ?z))
                (member first '(?, ?. ?\; ?: ?\) ?\] ?\})))))))
 
+(defun gdocs-convert--utf16-string-index (text units)
+  "Return the character index in TEXT at exactly UNITS UTF-16 code units."
+  (let ((index 0) (offset 0))
+    (while (and (< offset units) (< index (length text)))
+      (setq offset (+ offset (if (> (aref text index) #xFFFF) 2 1))
+            index (1+ index)))
+    (unless (= offset units)
+      (user-error "Marker splits a Unicode character or exceeds its text"))
+    index))
+
 (provide 'gdocs-convert-text)
 ;;; gdocs-convert-text.el ends here

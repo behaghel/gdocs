@@ -173,16 +173,16 @@
       (plist-get (gdocs-convert--inline-run-policy run) :formatted)))
 
 (defun gdocs-convert--trim-trailing-newline-runs (runs)
-  "Trim trailing whitespace from RUNS unless terminal preservation is requested."
+  "Remove one native paragraph terminator from RUNS without trimming authored text."
   (when runs
-    (let ((result (copy-sequence runs)) done)
-      (while (and result (not done))
-        (let* ((last-run (car (last result)))
-               (trimmed (save-match-data (string-trim-right (plist-get last-run :text)))))
-          (cond
-           ((plist-get (gdocs-convert--inline-run-policy last-run) :preserve-terminal) (setq done t))
-           ((string-empty-p trimmed) (setq result (butlast result)))
-           (t (setcar (last result) (plist-put (copy-sequence last-run) :text trimmed)) (setq done t)))))
+    (let* ((result (copy-sequence runs))
+           (tail (last result)) (run (car tail)) (text (or (plist-get run :text) "")))
+      (when (string-suffix-p "\n" text)
+        (let ((trimmed (substring text 0 -1)))
+          (if (and (string-empty-p trimmed)
+                   (not (plist-get (gdocs-convert--inline-run-policy run) :preserve-terminal)))
+              (setq result (butlast result))
+            (setcar tail (plist-put (copy-sequence run) :text trimmed)))))
       result)))
 
 (defun gdocs-convert--docs-text-run-to-ir (text-run)

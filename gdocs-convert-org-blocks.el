@@ -82,11 +82,6 @@
   (list (gdocs-convert--make-run (org-element-property :value object)
                                  (gdocs-convert--code-props inherited-props))))
 
-(defun gdocs-convert--inline-src-block-to-runs (object inherited-props)
-  "Convert inline source OBJECT to code runs with INHERITED-PROPS."
-  (list (gdocs-convert--make-run (org-element-property :value object)
-                                 (gdocs-convert--code-props inherited-props))))
-
 (defun gdocs-convert--docs-is-monospace-p (style)
   "Return non-nil if native STYLE uses a configured code font."
   (let ((family (alist-get 'fontFamily (alist-get 'weightedFontFamily style))))

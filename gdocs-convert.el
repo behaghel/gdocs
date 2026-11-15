@@ -477,18 +477,21 @@ whitespace from the last.  Returns nil if no text remains."
 
 (defun gdocs-convert--inline-element-parts (element markers)
   "Compose native ELEMENT decoding with semantic MARKERS."
-  (or (gdocs-convert-status-native-parts element markers)
-      (gdocs-convert-footnote-native-parts element markers)
-      (gdocs-convert-date-native-parts element markers)
-      (gdocs-convert-status-unsupported-native element markers)))
+  (gdocs-convert-code-native-parts
+   element markers
+   (or (gdocs-convert-status-native-parts element markers)
+       (gdocs-convert-footnote-native-parts element markers)
+       (gdocs-convert-date-native-parts element markers)
+       (gdocs-convert-status-unsupported-native element markers))))
 
 (defun gdocs-convert--inline-finalize-runs (runs)
   "Compose feature-owned completion of reconstructed RUNS."
-  (gdocs-convert-status-finalize-runs runs))
+  (gdocs-convert-code-finalize-runs (gdocs-convert-status-finalize-runs runs)))
 
 (defun gdocs-convert--inline-run-policy (run)
   "Compose feature-owned normalization and addressing policy for RUN."
-  (append (gdocs-convert-date-run-policy run)
+  (append (gdocs-convert-code-run-policy run)
+          (gdocs-convert-date-run-policy run)
           (gdocs-convert-status-run-policy run)
           (gdocs-convert-footnote-run-policy run)))
 
@@ -859,7 +862,8 @@ MARKER is a list of marker plists."
 
 (defun gdocs-convert--run-to-org (run)
   "Compose feature-owned RUN rendering with ordinary rich text."
-  (or (gdocs-convert-status-render-run run)
+  (or (gdocs-convert-code-render-run run)
+      (gdocs-convert-status-render-run run)
       (gdocs-convert-footnote-run-to-org run)
       (gdocs-convert-inline-plain-run-to-org run)))
 
@@ -1113,6 +1117,7 @@ INLINE-OBJECTS is the document's inline object metadata map."
            (alist-get 'endIndex element)))))
    ((alist-get 'table element)
     (gdocs-convert-status-validate-native-table element markers)
+    (gdocs-convert-code-validate-native-table element markers)
     (gdocs-convert--docs-table-to-ir (alist-get 'table element)))
    ((alist-get 'sectionBreak element)
     nil)
@@ -1159,8 +1164,9 @@ otherwise."
 
 (defun gdocs-convert--paragraph-markers-for-range (markers start end)
   "Compose paragraph annotations from MARKERS overlapping START..END."
-  (gdocs-convert--without-inline-status-markers
-   (gdocs-convert--markers-for-range markers start end)))
+  (gdocs-convert-code-paragraph-markers
+   (gdocs-convert--without-inline-status-markers
+    (gdocs-convert--markers-for-range markers start end))))
 
 (defun gdocs-convert--range-marker (markers marker-type start end)
   "Return MARKER-TYPE marker from MARKERS overlapping START..END, or nil."
@@ -1194,6 +1200,7 @@ the IR element.  Returns marker plists with range metadata when available."
               (let* ((ranges (alist-get 'ranges range-entry))
                      (status-p (equal (nth 1 parts) "status"))
                      (range (progn
+                              (gdocs-convert-code-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
                               (when (and status-p (/= (length ranges) 1))
                                 (user-error "A status marker must have one contiguous range"))
                               (if (vectorp ranges) (aref ranges 0) (car ranges)))))
@@ -1210,7 +1217,8 @@ the IR element.  Returns marker plists with range metadata when available."
                                             (s-join ":" (nthcdr 3 parts)))
                                     :start (alist-get 'startIndex range)
                                     :end (alist-get 'endIndex range))
-                              (when status-p (list :range-id (alist-get 'namedRangeId range-entry))))
+                              (when (alist-get 'namedRangeId range-entry)
+                                (list :range-id (alist-get 'namedRangeId range-entry))))
                       result)))))))
     result))
 
@@ -1517,7 +1525,8 @@ clear any inherited formatting before per-run styles are applied."
   "Create updateTextStyle requests for formatted RUNS starting at START-INDEX.
 Each run that has any formatting generates a request.  When SEGMENT-ID is
 non-nil, requests target that document segment, such as a native footnote.
-OMIT-STATUS-MARKERS suppresses duplicate markers for unchanged status tokens."
+OMIT-STATUS-MARKERS suppresses inline semantic markers emitted
+separately by diff."
   (let ((requests nil)
         (index start-index))
     (dolist (run runs)
@@ -1534,6 +1543,9 @@ OMIT-STATUS-MARKERS suppresses duplicate markers for unchanged status tokens."
                 requests))
         (when-let* ((marker (gdocs-convert-status-run-marker-request
                              run index end segment-id omit-status-markers)))
+          (push marker requests))
+        (when-let* ((marker (and (not omit-status-markers)
+                                 (gdocs-convert-code-run-marker-request run index end segment-id))))
           (push marker requests))
         (setq index end)))
     (nreverse requests)))
