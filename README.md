@@ -235,6 +235,33 @@ prefers an existing Org ID for a same-document heading. Cache ordering,
 normalization and dynamic callback context remain part of link resolution, not
 semantic conversion or typography policy.
 
+## Table conversion and geometry
+
+`gdocs-convert-tables.el` owns Org/native table conversion, Org rendering,
+cell addressing, structural lengths, proportional widths and request planning.
+Cells compose shared inline conversion and native paragraph decoding. Source
+horizontal-rule rows are not content rows; multi-row Org rendering places a
+separator after the first row. Authored cell emphasis and links are reapplied
+following inherited-format resets. Status conversion owns rejection of status
+labels inside source and native tables.
+
+Insertion preserves the paragraph at the insertion point, so its structural
+span is one unit longer than the read-side table body. Cell text and style
+ranges use UTF-16 units; column width proportions use character counts as a
+visual proxy. Column geometry uses 468pt available width and a 36pt minimum,
+capped by the available width per column. Requests create the table, set column
+widths, then populate nonempty cells last-to-first to keep insertion indices
+stable. Empty cells still contribute structural markers and terminal newlines.
+
+`gdocs-diff-tables.el` supplies text-only table identity and read-side model
+length through neutral element descriptors. Generic diff algorithms do not
+classify tables or calculate table geometry. Table width repair pairs local
+content with fetched native table locations, skipping mismatched column counts;
+its pure planner lives with table conversion. Sync owns fetching, callbacks,
+account/source context and push completion, not column geometry. Table modules
+do not discover files, select accounts or perform network I/O. Existing private
+helper names remain available through the facade.
+
 ## Native footnote conversion
 
 `gdocs-convert-footnotes.el` owns footnote definition/run conversion, native

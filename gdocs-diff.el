@@ -94,7 +94,6 @@ that elements with identical content and formatting produce
 identical keys."
   (pcase (plist-get element :type)
     ('paragraph (gdocs-diff--paragraph-key element))
-    ('table (gdocs-diff--table-key element))
     ('horizontal-rule "horizontal-rule")
     ('page-break "page-break")
     ('image (gdocs-diff--image-key element))
@@ -159,15 +158,6 @@ Includes type, style, list info, semantic markers, and full run details."
         (marker-key (gdocs-diff--marker-key element)))
     (format "paragraph:%s:%s:%s:%s:%s:%s"
             style style-name list-key marker-key formatting text)))
-
-(defun gdocs-diff--table-key (element)
-  "Compute a content key for a table ELEMENT.
-Concatenates all cell text across all rows."
-  (let ((cell-texts nil))
-    (dolist (row (plist-get element :rows))
-      (dolist (cell row)
-        (push (gdocs-convert--runs-to-plain-text cell) cell-texts)))
-    (format "table:%s" (s-join "|" (nreverse cell-texts)))))
 
 (defun gdocs-diff--source-block-key (element)
   "Compute a content key for a source-block ELEMENT."
@@ -420,7 +410,6 @@ the UTF-16 index where the first element begins (default 1)."
   "Compute the UTF-16 code unit length of ELEMENT in the document."
   (pcase (plist-get element :type)
     ('paragraph (gdocs-diff--paragraph-utf16-length element))
-    ('table (gdocs-diff--table-utf16-length element))
     ;; Horizontal rules, page breaks, and images each occupy a single
     ;; structural element in the document body (1 UTF-16 unit).
     ('horizontal-rule 1)
@@ -477,25 +466,6 @@ the UTF-16 index where the first element begins (default 1)."
   "Compute UTF-16 length of a paragraph ELEMENT including trailing newline."
   (let ((text (gdocs-convert--runs-to-plain-text (plist-get element :contents))))
     (+ (gdocs-convert--string-to-utf16-length text) 1))) ;trailing \n
-
-(defun gdocs-diff--table-utf16-length (element)
-  "Compute UTF-16 length of a table ELEMENT in the document.
-Tables have structural overhead: 1 for table start, 1 for table
-end, plus for each row 1 marker, plus for each cell 1 marker +
-content length + 1 newline.
-Note: `gdocs-convert--table-to-requests' uses 3 as the base
-instead of 2 because insertTable preserves the existing paragraph
-at the insertion point (an extra +1 not part of the table itself)."
-  (let ((total 2)
-        (rows (plist-get element :rows)))
-    (dolist (row rows)
-      (setq total (+ total 1))
-      (dolist (cell row)
-        (let ((text (gdocs-convert--runs-to-plain-text cell)))
-          (setq total (+ total 1
-                         (gdocs-convert--string-to-utf16-length text)
-                         1)))))
-    total))
 
 ;; ---------------------------------------------------------------------------
 ;;; Request generation from diff operations

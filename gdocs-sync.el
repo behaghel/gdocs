@@ -282,39 +282,6 @@ before finalizing.  Table width fixups still run independently."
       (gdocs-sync--begin-list-nesting-fixup current-ir)
     (gdocs-sync--finalize-push)))
 
-(defun gdocs-sync--ir-has-tables-p (ir)
-  "Return non-nil if IR contains any table elements."
-  (cl-some (lambda (e) (eq (plist-get e :type) 'table)) ir))
-
-(defun gdocs-sync--compute-table-width-fixup-requests (local-ir json)
-  "Compute updateTableColumnProperties requests for all tables.
-LOCAL-IR provides the table content for width calculation.  JSON
-is the fetched document providing actual table start indices.
-Returns a list of requests, or nil if no tables exist."
-  (let* ((body (alist-get 'body json))
-         (content (alist-get 'content body))
-         (local-tables (cl-remove-if-not
-                        (lambda (e) (eq (plist-get e :type) 'table))
-                        local-ir))
-         (tbl-idx 0)
-         (all-reqs nil))
-    (seq-doseq (elem content)
-      (when (alist-get 'table elem)
-        (let* ((table-start (alist-get 'startIndex elem))
-               (ncols (alist-get 'columns (alist-get 'table elem)))
-               (local-tbl (nth tbl-idx local-tables))
-               (rows (when local-tbl (plist-get local-tbl :rows)))
-               (local-ncols (when rows (length (car rows)))))
-          (when (and local-tbl (= ncols local-ncols))
-            (let ((widths (gdocs-convert--table-column-widths
-                           (gdocs-convert--table-column-max-lengths rows))))
-              (setq all-reqs
-                    (append all-reqs
-                            (gdocs-convert--table-column-width-requests
-                             table-start ncols widths)))))
-          (cl-incf tbl-idx))))
-    all-reqs))
-
 (defun gdocs-sync--finalize-push ()
   "Complete the push cycle: set status, release lock, drain queue."
   (gdocs-sync--set-status 'synced)
@@ -1203,11 +1170,7 @@ without quoted text (document-level) are skipped."
   (pcase (plist-get element :type)
     ('paragraph
      (gdocs-convert--runs-to-plain-text (plist-get element :contents)))
-    ('table
-     (mapconcat
-      (lambda (row)
-        (mapconcat #'gdocs-convert--runs-to-plain-text row " "))
-      (plist-get element :rows) " "))
+    ('table (gdocs-convert-table-plain-text element))
     ('footnote
      (gdocs-convert--runs-to-plain-text (plist-get element :contents)))
     (_ "")))

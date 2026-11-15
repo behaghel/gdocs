@@ -1057,5 +1057,25 @@ so this requires manual fixture update or a doc created via the GDocs UI."
     (should (> source-count 0))
     (should (> native-count 0))))
 
+(ert-deftest gdocs-roundtrip/specimen-table-feature-descriptors-and-planning ()
+  "Both specimen tables use feature-owned descriptors and full request planning."
+  (require 'gdocs-diff)
+  (let ((planner (symbol-function 'gdocs-convert--table-to-requests)) (calls 0))
+    (cl-letf (((symbol-function 'gdocs-convert--table-to-requests)
+               (lambda (&rest args) (setq calls (1+ calls)) (apply planner args))))
+      (dolist (ir (list (gdocs-roundtrip-test--org-to-ir (gdocs-roundtrip-test--read-org-fixture))
+                        (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture))))
+        (let* ((table (seq-find (lambda (element) (eq (plist-get element :type) 'table)) ir))
+               (descriptor (gdocs-diff-semantic-element table))
+               (requests (gdocs-convert-ir-to-docs-requests ir)))
+          (should table)
+          (should (equal (plist-get descriptor :key) (gdocs-diff--element-key table)))
+          (should (= (plist-get descriptor :body-length) (gdocs-diff--element-utf16-length table)))
+          (should (seq-some (lambda (request) (alist-get 'insertTable request)) requests))
+          (should (stringp (gdocs-convert-ir-to-org ir)))
+          (should-not (gdocs-diff-generate ir ir))
+          (should-not (gdocs-diff-generate ir ir)))))
+    (should (>= calls 2))))
+
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

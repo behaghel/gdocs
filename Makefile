@@ -24,6 +24,7 @@ TEST_FILES = \
   test/gdocs-styles-test.el \
   test/gdocs-style-resolve-test.el \
   test/gdocs-link-resolve-test.el \
+  test/gdocs-table-convert-test.el \
   test/gdocs-diff-test.el \
   test/gdocs-diff-encapsulation-test.el \
   test/gdocs-diff-status-test.el \

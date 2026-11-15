@@ -31,6 +31,7 @@
 (require 'gdocs-convert-dates)
 (require 'gdocs-convert-paragraphs)
 (require 'gdocs-convert-paragraph-codec)
+(require 'gdocs-convert-tables)
 (require 'gdocs-convert-images)
 (require 'gdocs-convert-lists)
 (require 'gdocs-convert-org-blocks)
@@ -543,36 +544,6 @@ it so the IR text is clean for round-tripping."
                               "\n[ \t]+" "\n" text))
                 run)))
           runs))
-
-;; ---------------------------------------------------------------------------
-;;; Tables -> IR
-
-(defun gdocs-convert--table-to-ir (table)
-  "Convert an org TABLE element to an IR table element."
-  (let ((rows (gdocs-convert--table-rows table)))
-    (list :type 'table
-          :rows rows
-          :id (gdocs-convert--next-id))))
-
-(defun gdocs-convert--table-rows (table)
-  "Extract rows from an org TABLE as a list of lists of text run lists.
-Skips horizontal rule rows."
-  (let ((result nil))
-    (dolist (row (org-element-contents table))
-      (when (and (eq (org-element-type row) 'table-row)
-                 (eq (org-element-property :type row) 'standard))
-        (push (gdocs-convert--table-row-cells row) result)))
-    (nreverse result)))
-
-(defun gdocs-convert--table-row-cells (row)
-  "Extract cells from a table ROW as a list of text run lists."
-  (let ((cells nil))
-    (dolist (cell (org-element-contents row))
-      (when (eq (org-element-type cell) 'table-cell)
-        (push (gdocs-convert--objects-to-runs
-               (org-element-contents cell))
-              cells)))
-    (nreverse cells)))
 
 ;; ---------------------------------------------------------------------------
 ;;; Quote blocks -> IR
@@ -1097,34 +1068,6 @@ MARKER is a list of marker plists."
     (format "%s\n#+BEGIN_CALLOUT\n%s\n#+END_CALLOUT" attrs body)))
 
 ;; ---------------------------------------------------------------------------
-;;; IR table -> org
-
-(defun gdocs-convert--ir-table-to-org (element)
-  "Convert an IR table ELEMENT to an org table string."
-  (let* ((rows (plist-get element :rows))
-         (formatted-rows (mapcar #'gdocs-convert--format-table-row rows))
-         (parts nil))
-    (when formatted-rows
-      (push (car formatted-rows) parts)
-      (when (cdr formatted-rows)
-        (push (gdocs-convert--table-separator (car rows)) parts)
-        (dolist (row (cdr formatted-rows))
-          (push row parts))))
-    (s-join "\n" (nreverse parts))))
-
-(defun gdocs-convert--format-table-row (row)
-  "Format a table ROW (list of cell run lists) as an org table row string."
-  (let ((cells (mapcar (lambda (cell-runs)
-                         (gdocs-convert--runs-to-org cell-runs))
-                       row)))
-    (concat "| " (s-join " | " cells) " |")))
-
-(defun gdocs-convert--table-separator (row)
-  "Generate a table separator string matching the column count of ROW."
-  (let ((cols (length row)))
-    (concat "|" (s-join "+" (make-list cols "---")) "|")))
-
-;; ---------------------------------------------------------------------------
 ;;; Public API: Google Docs JSON -> IR
 
 (defun gdocs-convert-docs-json-to-ir (json)
@@ -1504,13 +1447,7 @@ INLINE-OBJECTS is the document's inline object metadata map."
            (alist-get 'startIndex element)
            (alist-get 'endIndex element)))))
    ((alist-get 'table element)
-    (when (seq-some (lambda (marker)
-                      (and (eq (plist-get marker :type) 'status)
-                           (< (plist-get marker :start) (plist-get marker :end))))
-                    (gdocs-convert--markers-for-range markers
-                                                      (alist-get 'startIndex element)
-                                                      (alist-get 'endIndex element)))
-      (user-error "Status labels inside Google Docs tables are not supported"))
+    (gdocs-convert-status-validate-native-table element markers)
     (gdocs-convert--docs-table-to-ir (alist-get 'table element)))
    ((alist-get 'sectionBreak element)
     nil)
@@ -1647,37 +1584,6 @@ the IR element.  Returns marker plists with range metadata when available."
                               (when status-p (list :range-id (alist-get 'namedRangeId range-entry))))
                       result)))))))
     result))
-
-;; ---------------------------------------------------------------------------
-;;; Google Docs tables -> IR
-
-(defun gdocs-convert--docs-table-to-ir (table)
-  "Convert a Google Docs TABLE to an IR table element."
-  (let* ((table-rows (alist-get 'tableRows table))
-         (rows (seq-map #'gdocs-convert--docs-table-row-to-ir table-rows)))
-    (list :type 'table
-          :rows (seq-into rows 'list)
-          :id (gdocs-convert--next-id))))
-
-(defun gdocs-convert--docs-table-row-to-ir (row)
-  "Convert a Google Docs table ROW to a list of cell run lists."
-  (let ((cells (alist-get 'tableCells row)))
-    (seq-into (seq-map #'gdocs-convert--docs-table-cell-to-runs cells)
-              'list)))
-
-(defun gdocs-convert--docs-table-cell-to-runs (cell)
-  "Convert a Google Docs table CELL to a list of text runs."
-  (let* ((content (alist-get 'content cell))
-         (runs nil))
-    (seq-doseq (element content)
-      (let ((paragraph (alist-get 'paragraph element)))
-        (when paragraph
-          (let* ((elements (alist-get 'elements paragraph))
-                 (cell-runs (gdocs-convert--docs-elements-to-runs elements))
-                 (trimmed (gdocs-convert--trim-trailing-newline-runs
-                           cell-runs)))
-            (setq runs (nconc runs trimmed))))))
-    runs))
 
 ;; ---------------------------------------------------------------------------
 ;;; Public API: IR -> Google Docs batchUpdate requests
@@ -2537,186 +2443,6 @@ covering their newline, because Google Docs rejects zero-length named ranges."
                         (range . ((startIndex . ,start)
                                   (endIndex . ,range-end))))))))
               marker))))
-
-;; ---------------------------------------------------------------------------
-;;; Table -> requests
-
-(defconst gdocs-convert--table-page-width-pt 468
-  "Usable page width in points for table column width calculation.
-Based on standard Google Docs Letter page (612pt) with 1-inch
-margins (72pt each side): 612 - 72 - 72 = 468.")
-
-(defconst gdocs-convert--table-min-column-width-pt 36
-  "Minimum column width in points.
-Prevents columns from becoming unreadably narrow.  The Google
-Docs API requires at least 5pt, but 36pt (0.5 inch) is a
-practical minimum for readability.")
-
-(defconst gdocs-convert--table-insert-overhead 3
-  "Structural overhead of `insertTable' beyond the table itself.
-Accounts for: preserved paragraph (+1, insertTable keeps the
-paragraph at the insertion point), table-start (+1), table-end (+1).
-See `gdocs-diff--table-utf16-length' for the read-side formula,
-which uses 2 instead of 3 because the preserved paragraph is not
-part of the table itself.")
-
-(defun gdocs-convert--table-to-requests (element index)
-  "Convert an IR table ELEMENT to requests starting at INDEX.
-Returns a plist (:requests LIST :index NEW-INDEX).
-After the insertTable request, generates updateTableColumnProperties
-requests to set proportional column widths based on content, then
-insertText requests for each non-empty cell (processed last-to-first
-so indices stay stable)."
-  (let* ((rows (plist-get element :rows))
-         (nrows (length rows))
-         (ncols (length (car rows)))
-         (insert-req `((insertTable
-                        . ((rows . ,nrows)
-                           (columns . ,ncols)
-                           (location . ((index . ,index)))))))
-         (cell-text-len (gdocs-convert--table-total-cell-text-length rows))
-         ;; Per-row: 1 row-start marker + ncols * 2 (cell-start + cell-newline).
-         (table-overhead (+ gdocs-convert--table-insert-overhead
-                            (* nrows (+ 1 (* ncols 2)))
-                            cell-text-len))
-         (new-index (+ index table-overhead))
-         ;; Column widths: compute proportional widths from content.
-         ;; Table start is at index + 1 (insertTable preserves the
-         ;; paragraph at the insertion point).
-         (col-widths (gdocs-convert--table-column-widths
-                      (gdocs-convert--table-column-max-lengths rows)))
-         (col-width-reqs (gdocs-convert--table-column-width-requests
-                          (1+ index) ncols col-widths))
-         (cell-reqs (gdocs-convert--table-cell-requests rows index ncols))
-         (requests (append (list insert-req) col-width-reqs cell-reqs)))
-    (list :requests requests
-          :index new-index)))
-
-(defconst gdocs-convert--table-base-cell-offset 4
-  "Offset from `insertTable' index to the first cell's content.
-Accounts for: preserved paragraph (+1), table-start structural
-element (+1), first row-start marker (+1), first cell-start
-marker (+1).")
-
-(defun gdocs-convert--table-cell-requests (rows table-index ncols)
-  "Generate insertText and text-style-reset requests for cells in ROWS.
-TABLE-INDEX is the insertTable location index.  NCOLS is the
-column count.  The table body starts at TABLE-INDEX + 1 because
-insertTable preserves the existing paragraph at the location.
-
-For each non-empty cell, generates an insertText followed by a
-text-style reset to clear inherited formatting (font size, font
-family, colors).  Without the reset, cells inherit the style at
-the insertion point, which may be a heading or other non-body
-style.
-
-Iterates forward and pushes, so the result is in reverse order
-\(last cell first) for stable index processing."
-  (let ((reqs nil)
-        (r 0))
-    (dolist (row rows)
-      (let ((c 0))
-        (dolist (cell row)
-          (let* ((text (gdocs-convert--runs-to-plain-text cell))
-                 (text-len (gdocs-convert--string-to-utf16-length text)))
-            (when (> text-len 0)
-              (let ((cell-start (+ table-index
-                                   gdocs-convert--table-base-cell-offset
-                                   (* r (+ 1 (* ncols 2)))
-                                   (* c 2))))
-                ;; Reset formatting so cells don't inherit heading styles or
-                ;; other non-body formatting, then reapply semantic cell-run
-                ;; formatting.  Push style requests first, then reset, then
-                ;; insertText, so the returned last-to-first batch order is:
-                ;; insertText -> reset -> semantic styles.
-                (dolist (style-req (reverse
-                                     (gdocs-convert--make-text-style-requests
-                                      cell cell-start)))
-                  (push style-req reqs))
-                (push (gdocs-convert--make-text-style-reset-request
-                       cell-start (+ cell-start text-len))
-                      reqs)
-                (push (gdocs-convert--make-insert-text-request
-                       text cell-start)
-                      reqs))))
-          (setq c (1+ c))))
-      (setq r (1+ r)))
-    reqs))
-
-(defun gdocs-convert--table-total-cell-text-length (rows)
-  "Return total UTF-16 length of all cell text in ROWS."
-  (let ((total 0))
-    (dolist (row rows)
-      (dolist (cell row)
-        (setq total (+ total (gdocs-convert--string-to-utf16-length
-                              (gdocs-convert--runs-to-plain-text cell))))))
-    total))
-
-(defun gdocs-convert--table-column-max-lengths (rows)
-  "Return a list of maximum text lengths per column in ROWS.
-Each entry is the character count of the longest cell text in
-that column, used as a proxy for visual width."
-  (let* ((ncols (length (car rows)))
-         (maxes (make-list ncols 0)))
-    (dolist (row rows)
-      (let ((c 0))
-        (dolist (cell row)
-          (when (< c ncols)
-            (let ((len (length (gdocs-convert--runs-to-plain-text cell))))
-              (when (> len (nth c maxes))
-                (setf (nth c maxes) len))))
-          (setq c (1+ c)))))
-    maxes))
-
-(defun gdocs-convert--table-column-widths (max-lengths)
-  "Convert MAX-LENGTHS to proportional column widths in points.
-Distributes `gdocs-convert--table-page-width-pt' proportionally
-based on max content lengths.  Columns whose proportional share
-falls below `gdocs-convert--table-min-column-width-pt' receive
-the minimum; the remaining page width is distributed among the
-larger columns so that the total sums exactly to page width."
-  (let* ((ncols (length max-lengths))
-         (page-width (float gdocs-convert--table-page-width-pt))
-         (min-width (min (float gdocs-convert--table-min-column-width-pt)
-                         (/ page-width ncols)))
-         (total-len (apply #'+ max-lengths)))
-    (if (zerop total-len)
-        (make-list ncols (/ page-width ncols))
-      (let* ((proportional (mapcar (lambda (len)
-                                     (* (/ (float len) total-len) page-width))
-                                   max-lengths))
-             (min-count 0)
-             (remaining-prop-total 0.0))
-        (dolist (w proportional)
-          (if (< w min-width)
-              (setq min-count (1+ min-count))
-            (setq remaining-prop-total (+ remaining-prop-total w))))
-        (let ((remaining-width (- page-width (* min-count min-width))))
-          (if (<= remaining-prop-total 0)
-              (make-list ncols (/ page-width ncols))
-            (mapcar (lambda (w)
-                      (if (< w min-width)
-                          min-width
-                        (* (/ w remaining-prop-total) remaining-width)))
-                    proportional)))))))
-
-(defun gdocs-convert--table-column-width-requests (table-start-index ncols widths)
-  "Generate updateTableColumnProperties requests.
-TABLE-START-INDEX is the document index of the table start element.
-NCOLS is the number of columns.  WIDTHS is a list of widths in points."
-  (let ((reqs nil))
-    (dotimes (c ncols)
-      (push `((updateTableColumnProperties
-               . ((tableStartLocation
-                   . ((index . ,table-start-index)))
-                  (columnIndices . ,(vector c))
-                  (tableColumnProperties
-                   . ((widthType . "FIXED_WIDTH")
-                      (width . ((magnitude . ,(nth c widths))
-                                (unit . "PT")))))
-                  (fields . "*"))))
-            reqs))
-    (nreverse reqs)))
 
 ;; ---------------------------------------------------------------------------
 ;;; Horizontal rule -> requests

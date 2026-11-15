@@ -20,6 +20,18 @@
 (require 'gdocs-convert-inline-codec)
 
 
+(declare-function gdocs-convert--markers-for-range "gdocs-convert" (markers start end))
+
+(defun gdocs-convert-status-validate-native-table (element markers)
+  "Reject status MARKERS in the native table ELEMENT before decoding."
+  (when (seq-some (lambda (marker)
+                    (and (eq (plist-get marker :type) 'status)
+                         (< (plist-get marker :start) (plist-get marker :end))))
+                  (gdocs-convert--markers-for-range markers
+                                                    (alist-get 'startIndex element)
+                                                    (alist-get 'endIndex element)))
+    (user-error "Status labels inside Google Docs tables are not supported")))
+
 (defun gdocs-convert--status-docs-style (status)
   "Return the Docs text style for semantic STATUS."
   (let* ((key (gdocs-convert--status-color-key (plist-get status :color)))
