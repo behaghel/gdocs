@@ -398,11 +398,11 @@ properties are preserved and revision ID is stored."
                        "unordered@0:off"))))))
 
 (ert-deftest gdocs-sync-test-list-structure-diagnostic-is-actionable ()
-  "List structure diagnostics report counts and first difference."
+  "List structure diagnostics identify the authored shape and count lost."
   (should (equal (gdocs-sync--list-structure-diagnostics
                   '("unordered@0:plain" "unordered@1:plain")
                   '("unordered@0:plain" "unordered@0:plain"))
-                 '("list structure changed: count 2 -> 2; first difference at item 2: `unordered@1:plain' -> `unordered@0:plain'"))))
+                 '("list structure `unordered@1:plain' count dropped from 1 to 0"))))
 
 (ert-deftest gdocs-sync-test-pull-aborts-on-dropped-list-item ()
   "Pull refuses to mutate when a list item disappears."

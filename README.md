@@ -72,6 +72,22 @@ The `gdocs-mode` minor mode activates automatically on linked buffers, providing
 
 Once a buffer is linked, changes are pushed to Google Docs on every save (when `gdocs-auto-push-on-save` is non-nil), and you can pull remote changes at any time with `M-x gdocs-pull`.
 
+## Pull preservation and safety
+
+Full replacement during an ordinary pull preserves the local Org preamble:
+metadata values, keyword spelling, property data and leading local comments.
+`gdocs-preamble.el` locates the raw boundary without converting document content;
+body-owned affiliated attributes remain with the body. Without local metadata,
+the rendered remote preamble is retained.
+
+`gdocs-sync-safety.el` owns semantic inventories and validation policy. The sync
+orchestrator retains fetch, conflict handling, validation invocation, backup and
+replacement. Remote list additions are accepted when existing structural counts
+remain intact; lost nesting, task state, blocks and other protected structure
+still block replacement. Parsing does not run user Org-mode hooks. File mtime
+is not proof that local content is unchanged: hash/shadow checks remain the
+source of that decision.
+
 ## Semantic encapsulation
 
 Generic conversion/diff engines own traversal, sequence comparison, indexing and

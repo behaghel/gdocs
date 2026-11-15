@@ -23,6 +23,7 @@ TEST_FILES = \
   test/gdocs-diff-encapsulation-test.el \
   test/gdocs-diff-status-test.el \
   test/gdocs-sync-test.el \
+  test/gdocs-pull-preservation-test.el \
   test/gdocs-sync-status-test.el \
   test/gdocs-merge-test.el \
   test/gdocs-roundtrip-test.el \

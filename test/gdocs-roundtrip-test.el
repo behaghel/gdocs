@@ -921,5 +921,15 @@ so this requires manual fixture update or a doc created via the GDocs UI."
                       "Specimen Serif"))
              (gdocs-convert-ir-to-docs-requests after)))))
 
+(ert-deftest gdocs-roundtrip/specimen-local-preamble-preservation ()
+  "Preserve the standard specimen's raw metadata without touching its body."
+  (require 'gdocs-preamble)
+  (let* ((source (gdocs-roundtrip-test--read-org-fixture))
+         (parts (gdocs-preamble-split source))
+         (remote (concat "#+TITLE: Different remote title\n\n" (plist-get parts :body))))
+    (should (string-match-p "GDOCS_DOCUMENT_ID" (plist-get parts :preamble)))
+    (should (string-match-p "#\\+AUTHOR:" (plist-get parts :preamble)))
+    (should (equal (gdocs-preamble-preserve source remote) source))))
+
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

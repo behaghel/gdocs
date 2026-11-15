@@ -22,6 +22,8 @@
 (require 'gdocs-convert)
 (require 'gdocs-diff)
 (require 'gdocs-merge)
+(require 'gdocs-preamble)
+(require 'gdocs-sync-safety)
 (declare-function gdocs--update-modeline "gdocs")
 (declare-function gdocs--ensure-org-tag "gdocs")
 (declare-function gdocs--remove-org-tag "gdocs")
@@ -628,6 +630,12 @@ REVISION-ID is the remote revision to store on success."
            (gdocs-sync--apply-pull json rev))))
      gdocs-sync--account)))
 
+(defun gdocs-sync--render-pull-content (remote-ir)
+  "Render REMOTE-IR while preserving the current source's local preamble."
+  (gdocs-preamble-preserve
+   (buffer-substring-no-properties (point-min) (point-max))
+   (gdocs-convert-ir-to-org remote-ir)))
+
 (defun gdocs-sync--apply-pull (json revision-id)
   "Apply the pulled document JSON to the current buffer.
 REVISION-ID is the remote revision to store on success.
@@ -651,14 +659,14 @@ on elements that were not changed remotely."
         (if (null gdocs-sync--shadow-ir)
             ;; No shadow (first pull after link): full replacement
             (gdocs-sync--replace-buffer-content
-             (gdocs-convert-ir-to-org remote-ir) revision-id)
+             (gdocs-sync--render-pull-content remote-ir) revision-id)
           ;; If local content still matches the shadow, no user edits need
           ;; preserving.  Prefer a full remote render over three-way merge so
           ;; pull-only semantic changes (e.g. Docs-created footnote labels or
           ;; smart chips) cannot confuse LCS and duplicate structural content.
           (if (gdocs-sync--local-unchanged-p)
               (gdocs-sync--replace-buffer-content
-               (gdocs-convert-ir-to-org remote-ir) revision-id)
+               (gdocs-sync--render-pull-content remote-ir) revision-id)
             (gdocs-sync--abort-unsafe-semantic-merge-if-needed remote-ir)
             ;; Have shadow and local edits: three-way merge.
             (let ((result (gdocs-sync--three-way-merge remote-ir)))
@@ -667,22 +675,6 @@ on elements that were not changed remotely."
                    (plist-get result :merged-org) revision-id)
                 (gdocs-sync--replace-buffer-content
                  (plist-get result :merged-org) revision-id)))))))))
-
-(defun gdocs-sync--semantic-ir-element-p (element)
-  "Return non-nil when ELEMENT is unsafe for automatic text merge."
-  (let ((type (plist-get element :type)))
-    (or (memq type '(table horizontal-rule page-break image source-block
-                           example-block quote-block callout-block footnote))
-        (and (eq type 'paragraph)
-             (or (not (eq (or (plist-get element :style) 'normal) 'normal))
-                 (plist-get element :list)
-                 (seq-some (lambda (run) (plist-get run :status))
-                           (plist-get element :contents)))))))
-
-(defun gdocs-sync--semantic-ir-p (ir)
-  "Return non-nil when IR contains rich semantic structure."
-  (seq-some #'gdocs-sync--semantic-ir-element-p
-            (gdocs-sync--filter-title ir)))
 
 (defun gdocs-sync--abort-unsafe-semantic-merge-if-needed (remote-ir)
   "Abort automatic merge when local and remote semantic docs both changed."
@@ -743,225 +735,6 @@ markers do not cause false mismatches."
            (gdocs-diff--element-keys
             (gdocs-sync--filter-title
              (gdocs-sync--normalize-shadow-ir gdocs-sync--shadow-ir))))))
-
-(defun gdocs-sync--org-semantic-inventory (org-string)
-  "Return a semantic safety inventory for ORG-STRING."
-  (with-temp-buffer
-    (org-mode)
-    (insert org-string)
-    (let ((tree (org-element-parse-buffer)))
-      (list
-       :headings
-       (org-element-map tree 'headline
-         (lambda (headline)
-           (format "%s:%s"
-                   (org-element-property :level headline)
-                   (org-element-property :raw-value headline))))
-       :list-structure
-       (org-element-map tree 'item #'gdocs-sync--list-structure-entry)
-       :footnote-definitions
-       (org-element-map tree 'footnote-definition
-         (lambda (definition)
-           (org-element-property :label definition)))
-       :footnote-structure
-       (org-element-map tree 'footnote-definition
-         (lambda (definition)
-           (gdocs-sync--footnote-structure-entry definition)))
-       :tasks
-       (org-element-map tree 'item
-         (lambda (item)
-           (org-element-property :checkbox item)))
-       :blocks
-       (let ((counts nil))
-         (dolist (type '(quote-block src-block example-block special-block))
-           (push (cons type 0) counts))
-         (org-element-map tree '(quote-block src-block example-block special-block)
-           (lambda (block)
-             (let ((type (org-element-type block)))
-               (when (or (not (eq type 'special-block))
-                         (string= (org-element-property :type block) "CALLOUT"))
-                 (cl-incf (alist-get type counts))))))
-         counts)
-       :block-structure
-       (org-element-map tree '(quote-block src-block example-block special-block)
-         (lambda (block)
-           (gdocs-sync--org-block-structure-entry block)))))))
-
-(defun gdocs-sync--list-structure-entry (item)
-  "Return a semantic structure entry for Org list ITEM."
-  (let* ((lineage (org-element-lineage item))
-         (lists (seq-filter (lambda (element)
-                              (eq (org-element-type element) 'plain-list))
-                            lineage))
-         (parent-list (car lists))
-         (type (or (org-element-property :type parent-list) 'unknown))
-         (level (max 0 (1- (length lists))))
-         (checkbox (or (org-element-property :checkbox item) 'plain)))
-    (format "%s@%d:%s" type level checkbox)))
-
-(defun gdocs-sync--footnote-structure-entry (definition)
-  "Return a semantic structure entry for footnote DEFINITION."
-  (let ((label (org-element-property :label definition))
-        (rich-types nil))
-    (org-element-map definition
-        '(bold italic underline strike-through code verbatim link)
-      (lambda (object)
-        (push (org-element-type object) rich-types)))
-    (format "%s:%s" label (mapconcat #'symbol-name (nreverse rich-types) ","))))
-
-(defun gdocs-sync--block-line-count (value)
-  "Return the line count for block VALUE."
-  (length (split-string (string-trim-right (or value "")) "\n")))
-
-(defun gdocs-sync--org-block-structure-entry (block)
-  "Return a semantic structure entry for Org BLOCK, or nil."
-  (let ((type (org-element-type block)))
-    (pcase type
-      ('quote-block
-       (format "quote:%d"
-               (length (seq-filter
-                        (lambda (child)
-                          (eq (org-element-type child) 'paragraph))
-                        (org-element-contents block)))))
-      ('src-block
-       (format "src:%s:%d"
-               (or (org-element-property :language block) "")
-               (gdocs-sync--block-line-count
-                (org-element-property :value block))))
-      ('example-block
-       (format "example:%d"
-               (gdocs-sync--block-line-count
-                (org-element-property :value block))))
-      ('special-block
-       (when (string= (org-element-property :type block) "CALLOUT")
-         (format "callout:%d"
-                 (length (seq-filter
-                          (lambda (child)
-                            (memq (org-element-type child) '(paragraph item plain-list)))
-                          (org-element-contents block)))))))))
-
-(defun gdocs-sync--counts (values)
-  "Return a hash table counting VALUES."
-  (let ((table (make-hash-table :test #'equal)))
-    (dolist (value values table)
-      (puthash value (1+ (gethash value table 0)) table))))
-
-(defun gdocs-sync--dropped-values-diagnostics (label old-values new-values)
-  "Return diagnostics for values under LABEL dropped from OLD-VALUES to NEW-VALUES."
-  (let ((old-counts (gdocs-sync--counts old-values))
-        (new-counts (gdocs-sync--counts new-values))
-        diagnostics)
-    (maphash (lambda (value old-count)
-               (let ((new-count (gethash value new-counts 0)))
-                 (when (< new-count old-count)
-                   (push (format "%s `%s' count dropped from %d to %d"
-                                 label value old-count new-count)
-                         diagnostics))))
-             old-counts)
-    diagnostics))
-
-(defun gdocs-sync--introduced-duplicate-heading-diagnostics (old-headings new-headings)
-  "Return diagnostics for suspicious heading duplicates introduced by pull."
-  (let ((old-counts (gdocs-sync--counts old-headings))
-        (new-counts (gdocs-sync--counts new-headings))
-        diagnostics)
-    (maphash (lambda (heading new-count)
-               (let ((old-count (gethash heading old-counts 0)))
-                 (when (and (> new-count 1) (> new-count old-count))
-                   (push (format "heading `%s' duplicated from %d to %d"
-                                 heading old-count new-count)
-                         diagnostics))))
-             new-counts)
-    diagnostics))
-
-(defun gdocs-sync--heading-outline-diagnostics (old-headings new-headings)
-  "Return diagnostics when pull would change authored heading outline."
-  (unless (equal old-headings new-headings)
-    (list (format "heading outline changed from `%s' to `%s'"
-                  (string-join old-headings " > ")
-                  (string-join new-headings " > ")))))
-
-(defun gdocs-sync--first-sequence-difference (old new)
-  "Return the first differing index between OLD and NEW, or nil."
-  (let ((index 0)
-        found)
-    (while (and (not found) (or old new))
-      (unless (equal (car old) (car new))
-        (setq found index))
-      (setq old (cdr old)
-            new (cdr new)
-            index (1+ index)))
-    found))
-
-(defun gdocs-sync--format-structure-diff (label old new)
-  "Return an actionable structure diff message for LABEL, OLD, and NEW."
-  (let ((first-diff (gdocs-sync--first-sequence-difference old new)))
-    (format "%s changed: count %d -> %d%s"
-            label (length old) (length new)
-            (if first-diff
-                (format "; first difference at item %d: `%s' -> `%s'"
-                        (1+ first-diff)
-                        (or (nth first-diff old) "<missing>")
-                        (or (nth first-diff new) "<missing>"))
-              ""))))
-
-(defun gdocs-sync--list-structure-diagnostics (old-list new-list)
-  "Return diagnostics when pull would change authored list structure."
-  (unless (equal old-list new-list)
-    (list (gdocs-sync--format-structure-diff
-           "list structure" old-list new-list))))
-
-(defun gdocs-sync--footnote-structure-diagnostics (old-footnotes new-footnotes)
-  "Return diagnostics when pull changes footnote body semantics."
-  (unless (equal old-footnotes new-footnotes)
-    (list (format "footnote structure changed from `%s' to `%s'"
-                  (string-join old-footnotes " > ")
-                  (string-join new-footnotes " > ")))))
-
-(defun gdocs-sync--block-count-diagnostics (old-blocks new-blocks)
-  "Report semantic block count drops from OLD-BLOCKS to NEW-BLOCKS."
-  (let (diagnostics)
-    (dolist (entry old-blocks diagnostics)
-      (let* ((type (car entry))
-             (old-count (cdr entry))
-             (new-count (or (alist-get type new-blocks) 0)))
-        (when (< new-count old-count)
-          (push (format "%s count dropped from %d to %d"
-                        type old-count new-count)
-                diagnostics))))))
-
-(defun gdocs-sync--block-structure-diagnostics (old-blocks new-blocks)
-  "Return diagnostics when pull changes semantic block shape."
-  (let ((old-blocks (delq nil old-blocks))
-        (new-blocks (delq nil new-blocks)))
-    (unless (equal old-blocks new-blocks)
-      (list (gdocs-sync--format-structure-diff
-             "block structure" old-blocks new-blocks)))))
-
-(defun gdocs-sync--pull-integrity-diagnostics (old-org new-org)
-  "Return semantic integrity diagnostics for replacing OLD-ORG with NEW-ORG."
-  (let* ((old (gdocs-sync--org-semantic-inventory old-org))
-         (new (gdocs-sync--org-semantic-inventory new-org)))
-    (append
-     (gdocs-sync--heading-outline-diagnostics
-      (plist-get old :headings) (plist-get new :headings))
-     (gdocs-sync--introduced-duplicate-heading-diagnostics
-      (plist-get old :headings) (plist-get new :headings))
-     (gdocs-sync--list-structure-diagnostics
-      (plist-get old :list-structure) (plist-get new :list-structure))
-     (gdocs-sync--dropped-values-diagnostics
-      "footnote definition"
-      (plist-get old :footnote-definitions)
-      (plist-get new :footnote-definitions))
-     (gdocs-sync--footnote-structure-diagnostics
-      (plist-get old :footnote-structure) (plist-get new :footnote-structure))
-     (gdocs-sync--dropped-values-diagnostics
-      "task checkbox"
-      (plist-get old :tasks) (plist-get new :tasks))
-     (gdocs-sync--block-count-diagnostics
-      (plist-get old :blocks) (plist-get new :blocks))
-     (gdocs-sync--block-structure-diagnostics
-      (plist-get old :block-structure) (plist-get new :block-structure)))))
 
 (defun gdocs-sync--validate-pull-replacement (org-string)
   "Signal if replacing current buffer with ORG-STRING looks lossy."
