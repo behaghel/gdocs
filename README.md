@@ -213,6 +213,28 @@ direction's IR, regenerated Org, semantic diff identity or non-style requests.
 Status presentation calls the resolver directly; choosing a status colour and
 maintaining its semantic markers remain status responsibilities.
 
+## Document-link resolution
+
+`gdocs-link-resolve.el` owns explicit source-file context, native document IDs,
+heading caches, local document-ID lookup, forward link targets and reverse Org
+link resolution. It loads without conversion, presentation, diff, transport or
+accounts. Existing helper names and dynamically bound context/cache variables
+remain available through the facade. Generic inline conversion declares this
+lookup service without requiring it or acquiring filesystem responsibilities.
+
+Loading the service does not discover notes. Callers provide directories and
+source context; scans inspect immediate Org files only and retain the bounded
+file-level property read. Cached Org-ID lookup suppresses broad location rescans.
+Metadata parsing, including Org-ID's temporary buffer, inhibits user mode hooks
+and Org startup actions. Lookup does not choose accounts or perform network I/O.
+
+Known file/ID/heading links map to document URLs and cached anchors. Unpublished
+Org targets remain plain text; ordinary file and web URLs retain their prior
+forms. Reverse resolution preserves unknown URLs and relative file links, and
+prefers an existing Org ID for a same-document heading. Cache ordering,
+normalization and dynamic callback context remain part of link resolution, not
+semantic conversion or typography policy.
+
 ## Native footnote conversion
 
 `gdocs-convert-footnotes.el` owns footnote definition/run conversion, native

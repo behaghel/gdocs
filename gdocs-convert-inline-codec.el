@@ -18,9 +18,9 @@
 (declare-function gdocs-convert--inline-finalize-runs "gdocs-convert" (runs))
 (declare-function gdocs-convert--inline-run-policy "gdocs-convert" (run))
 (declare-function gdocs-convert--run-to-org "gdocs-convert" (run))
-(declare-function gdocs-convert--link-url "gdocs-convert" (link))
-(declare-function gdocs-convert--inline-link-for-org "gdocs-convert" (link))
-(declare-function gdocs-convert--extract-link-url "gdocs-convert" (link-obj))
+(declare-function gdocs-convert--link-url "gdocs-link-resolve" (link))
+(declare-function gdocs-convert--inline-link-for-org "gdocs-link-resolve" (link))
+(declare-function gdocs-convert--extract-link-url "gdocs-link-resolve" (link-obj))
 (declare-function gdocs-convert--docs-is-monospace-p "gdocs-convert-org-blocks" (style))
 
 (defun gdocs-convert--objects-to-runs (objects)
