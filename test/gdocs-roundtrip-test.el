@@ -465,11 +465,12 @@
     (should (gdocs-roundtrip-test--find-ir-element ir 'footnote))))
 
 (ert-deftest gdocs-roundtrip/org-footnote-reference ()
-  "Footnote references produce a dedicated IR marker, not just text."
-  :expected-result :failed
+  "Footnote references produce zero-width semantic runs, not literal text."
   (let* ((ir (gdocs-roundtrip-test--org-to-ir "Text[fn:1]."))
-         (elem (gdocs-roundtrip-test--find-marker ir 'footnote)))
-    (should elem)))
+         (run (seq-find (lambda (entry) (equal (plist-get entry :footnote-label) "1"))
+                        (plist-get (car ir) :contents))))
+    (should run)
+    (should (equal (plist-get run :text) ""))))
 
 (ert-deftest gdocs-roundtrip/org-latex-fragment ()
   "LaTeX fragments produce a code-formatted run preserving the LaTeX source."

@@ -72,6 +72,29 @@ The `gdocs-mode` minor mode activates automatically on linked buffers, providing
 
 Once a buffer is linked, changes are pushed to Google Docs on every save (when `gdocs-auto-push-on-save` is non-nil), and you can pull remote changes at any time with `M-x gdocs-pull`.
 
+## Native footnote conversion
+
+`gdocs-convert-footnotes.el` owns footnote definition/run conversion, native
+segment import and segment-local text/style request planning. Transport and
+asynchronous native-reference creation remain adapter responsibilities. The
+conversion facade loads this module alongside headings and status conversion.
+
+Native footnote IR carries its authored `:label`, rich `:contents`, and remote
+`:segment-id` / `:segment-start` addressing metadata. Addressing metadata does not
+change semantic equality. Footnote-only text or emphasis/link changes target
+that existing segment; unchanged notes produce no requests. Existing segment
+updates precede body edits that may remove native references. The segment's
+terminal newline is not deleted.
+
+The native mapping preserves a single paragraph of ordinary rich text. Native
+dates, nested references, status labels, paragraph breaks and non-text segment
+objects fail closed rather than being flattened. Adapters can use
+`gdocs-convert-footnote-body-runs` for preflight,
+`gdocs-convert-footnote-body-requests` for newly created segments and
+`gdocs-convert-footnote-label-requests` to preserve authored labels. While the
+native reference text seam is active, definitions remain in semantic IR for
+diffing but are not emitted as literal document-body text.
+
 ## Documentation
 
 For a comprehensive description of all user options, commands, and functions, see the [manual](https://stafforini.com/notes/gdocs/).

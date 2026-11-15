@@ -2814,5 +2814,20 @@ Regression test: the Google API rejects ranges where startIndex == endIndex."
       (should (< (alist-get 'startIndex range)
                  (alist-get 'endIndex range))))))
 
+(ert-deftest gdocs-convert-test-native-footnote-rejects-unpreservable-content ()
+  "Unsupported native segment content must not disappear during import."
+  (dolist (content '([((paragraph . ((elements . [((textRun . ((content . "One\n"))))]))))
+                      ((paragraph . ((elements . [((textRun . ((content . "Two\n"))))]))))]
+                     [((table . ((rows . 1))))]
+                     [((paragraph . ((elements . [((inlineObjectElement . ((inlineObjectId . "image"))))]))))]))
+    (should-error (gdocs-convert--docs-footnote-content-to-runs content) :type 'user-error)))
+
+(ert-deftest gdocs-convert-test-native-footnote-implicit-zero-index ()
+  "An omitted first startIndex is zero, before Google's native prefix."
+  (let* ((content [((paragraph . ((elements . [((textRun . ((content . " Body.\n"))))]))))])
+         (ir (gdocs-convert--docs-footnotes-to-ir
+              `((fn-one . ((content . ,content)))) '((:id "fn-one" :label "one")))))
+    (should (= (plist-get (car ir) :segment-start) 1))))
+
 (provide 'gdocs-convert-test)
 ;;; gdocs-convert-test.el ends here

@@ -1234,5 +1234,32 @@ at D's position, not to keep(C)."
     (let ((loc (alist-get 'location (alist-get 'insertText z-req))))
       (should (= (alist-get 'index loc) 13)))))
 
+(ert-deftest gdocs-diff-test-native-footnote-formatting-only-change ()
+  "Changing only note emphasis updates its segment, never the document body."
+  (let* ((old '(:type footnote :label "one" :segment-id "fn-one"
+                      :segment-start 1 :contents ((:text "😀 note"))))
+         (new '(:type footnote :label "one" :contents ((:text "😀 note" :bold t))))
+         (requests (gdocs-diff-generate (list old) (list new))))
+    (should requests)
+    (should (seq-some (lambda (request) (alist-get 'updateTextStyle request)) requests))
+    (dolist (request requests)
+      (let* ((operation (cdar request))
+             (range (or (alist-get 'range operation) (alist-get 'location operation))))
+        (should (equal (alist-get 'segmentId range) "fn-one"))))
+    (should-not (gdocs-diff-generate (list old) (list old)))))
+
+(ert-deftest gdocs-diff-test-native-footnote-and-body-edits-are-both-retained ()
+  "Pairing note deletion with a body insertion must not discard the body edit."
+  (let* ((old '(:type footnote :label "one" :segment-id "fn-one"
+                      :segment-start 1 :contents ((:text "note"))))
+         (paragraph '(:type paragraph :style normal :contents ((:text "New paragraph."))))
+         (new '(:type footnote :label "one" :contents ((:text "note" :bold t))))
+         (requests (gdocs-diff-generate (list old) (list paragraph new))))
+    (should (seq-some (lambda (request)
+                        (let ((insert (alist-get 'insertText request)))
+                          (and insert (equal (alist-get 'text insert) "New paragraph.\n")))) requests))
+    (should (seq-some (lambda (request)
+                        (equal (alist-get 'segmentId (alist-get 'range (alist-get 'updateTextStyle request))) "fn-one")) requests))))
+
 (provide 'gdocs-diff-test)
 ;;; gdocs-diff-test.el ends here

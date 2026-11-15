@@ -26,6 +26,7 @@
 (require 'gdocs-styles)
 (require 'gdocs-convert-headings)
 (require 'gdocs-convert-status)
+(require 'gdocs-convert-footnotes)
 
 ;; ---------------------------------------------------------------------------
 ;;; ID generation
@@ -1302,26 +1303,6 @@ the Google Docs representation."
 ;; ---------------------------------------------------------------------------
 ;;; Footnote definitions -> IR
 
-(defun gdocs-convert--footnote-definition-to-ir (footnote-def)
-  "Convert a FOOTNOTE-DEF element to an IR element."
-  (let* ((label (org-element-property :label footnote-def))
-         (runs (gdocs-convert--footnote-body-runs footnote-def)))
-    (list :type 'footnote
-          :label label
-          :contents (or runs (list (gdocs-convert--make-plain-run "")))
-          :id (gdocs-convert--next-id))))
-
-(defun gdocs-convert--footnote-body-runs (footnote-def)
-  "Extract text runs from the body of FOOTNOTE-DEF."
-  (let ((all-runs nil))
-    (org-element-map footnote-def 'paragraph
-      (lambda (para)
-        (let ((runs (gdocs-convert--objects-to-runs
-                     (org-element-contents para))))
-          (setq all-runs (nconc all-runs runs)))))
-    (gdocs-convert--trim-runs all-runs)))
-
-;; ---------------------------------------------------------------------------
 ;;; Drawers -> IR
 
 (defun gdocs-convert--drawer-to-ir (drawer)
@@ -1751,12 +1732,6 @@ markers to produce valid emphasis markup."
 
 ;; ---------------------------------------------------------------------------
 ;;; IR footnote -> org
-
-(defun gdocs-convert--ir-footnote-to-org (element)
-  "Convert an IR footnote ELEMENT to an org footnote definition string."
-  (let ((label (plist-get element :label))
-        (text (gdocs-convert--runs-to-org (plist-get element :contents))))
-    (format "[fn:%s] %s" (or label "") text)))
 
 ;; ---------------------------------------------------------------------------
 ;;; IR image -> org
@@ -2311,54 +2286,6 @@ KIND can be `active' or `inactive'; omitted KIND defaults to active."
                 year month day weekday
                 (if (eq kind 'inactive) "]" ">")))
     (if (eq kind 'inactive) "[1970-01-01 Thu]" "<1970-01-01 Thu>")))
-
-(defun gdocs-convert--trim-leading-footnote-space-runs (runs)
-  "Return RUNS with Google Docs' leading native-footnote space removed."
-  (if-let* ((first (car runs))
-            (text (plist-get first :text))
-            ((string-match-p "\\`[[:space:]]+" text)))
-      (let* ((trimmed-first (copy-sequence first))
-             (trimmed-text (string-trim-left text)))
-        (plist-put trimmed-first :text trimmed-text)
-        (if (string-empty-p trimmed-text)
-            (cdr runs)
-          (cons trimmed-first (cdr runs))))
-    runs))
-
-(defun gdocs-convert--docs-footnote-content-to-runs (content)
-  "Convert Google Docs footnote CONTENT to IR text runs."
-  (let ((runs nil)
-        (first-paragraph-p t))
-    (seq-doseq (element content)
-      (when-let* ((paragraph (alist-get 'paragraph element)))
-        (unless first-paragraph-p
-          (push (gdocs-convert--make-plain-run "\n") runs))
-        (setq first-paragraph-p nil)
-        (setq runs
-              (append (nreverse
-                       (gdocs-convert--trim-trailing-newline-runs
-                        (gdocs-convert--docs-elements-to-runs
-                         (alist-get 'elements paragraph))))
-                      runs))))
-    (gdocs-convert--trim-leading-footnote-space-runs (nreverse runs))))
-
-(defun gdocs-convert--docs-footnotes-to-ir (footnotes footnote-refs)
-  "Convert top-level Google Docs FOOTNOTES for encountered FOOTNOTE-REFS to IR."
-  (let ((seen (make-hash-table :test 'equal))
-        (result nil))
-    (dolist (ref footnote-refs)
-      (let* ((footnote-id (plist-get ref :id))
-             (label (plist-get ref :label))
-             (footnote (and footnotes (alist-get (intern footnote-id) footnotes))))
-        (unless (or (gethash footnote-id seen) (not footnote))
-          (puthash footnote-id t seen)
-          (push (list :type 'footnote
-                      :label label
-                      :contents (gdocs-convert--docs-footnote-content-to-runs
-                                 (alist-get 'content footnote))
-                      :id (gdocs-convert--next-id))
-                result))))
-    (nreverse result)))
 
 (defun gdocs-convert--structural-element-to-ir (element lists-map markers
                                                         &optional inline-objects)
@@ -4371,19 +4298,6 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
   (list :requests (list `((insertPageBreak
                             . ((location . ((index . ,index)))))))
         :index (+ index 1)))
-
-(defun gdocs-convert--footnote-to-requests (element index)
-  "Create requests for a footnote ELEMENT at INDEX.
-Returns a plist (:requests LIST :index NEW-INDEX)."
-  (let* ((text (gdocs-convert--runs-to-plain-text
-                (plist-get element :contents)))
-         (full-text (concat "[fn:" (or (plist-get element :label) "") "] "
-                            text "\n"))
-         (len (gdocs-convert--string-to-utf16-length full-text))
-         (insert-req (gdocs-convert--make-insert-text-request
-                      full-text index)))
-    (list :requests (list insert-req)
-          :index (+ index len))))
 
 ;; ---------------------------------------------------------------------------
 ;;; UTF-16 helper

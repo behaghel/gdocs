@@ -54,8 +54,38 @@ Operations: :keep, :delete, :insert, :modify."
 OLD-IR and NEW-IR are the element lists.  DIFF-OPS is the output
 of `gdocs-diff-compute-operations'.  START-INDEX is the UTF-16
 index where the first element begins (default 1)."
-  (gdocs-diff--filter-invalid-requests
-   (gdocs-diff--generate-requests old-ir new-ir diff-ops (or start-index 1))))
+  (let* ((native (or gdocs-convert-footnote-reference-text-function
+                     (seq-some (lambda (element) (plist-get element :segment-id)) old-ir)))
+         (body-ops (if native
+                       (mapcan
+                        (lambda (op)
+                          (let ((old-note (and (plist-member op :old-index)
+                                               (eq (plist-get (nth (plist-get op :old-index) old-ir) :type) 'footnote)))
+                                (new-note (and (plist-member op :new-index)
+                                               (eq (plist-get (nth (plist-get op :new-index) new-ir) :type) 'footnote))))
+                            (cond
+                             ((and old-note new-note) nil)
+                             (old-note (when (eq (plist-get op :op) 'modify)
+                                         (list (list :op 'insert :new-index (plist-get op :new-index)))))
+                             (new-note (when (eq (plist-get op :op) 'modify)
+                                         (list (list :op 'delete :old-index (plist-get op :old-index)))))
+                             (t (list op)))))
+                        diff-ops)
+                     diff-ops))
+         segment-requests)
+    (when native
+      (dolist (old old-ir)
+        (when (and (eq (plist-get old :type) 'footnote) (plist-get old :segment-id))
+          (when-let* ((new (seq-find (lambda (entry)
+                                       (and (eq (plist-get entry :type) 'footnote)
+                                            (equal (plist-get old :label) (plist-get entry :label)))) new-ir)))
+            (unless (equal (gdocs-diff--footnote-key old) (gdocs-diff--footnote-key new))
+              (setq segment-requests
+                    (append segment-requests (gdocs-convert-footnote-update-requests old new))))))))
+    ;; Existing segments must be updated before body edits can remove references.
+    (gdocs-diff--filter-invalid-requests
+     (append segment-requests
+             (gdocs-diff--generate-requests old-ir new-ir body-ops (or start-index 1))))))
 
 (defun gdocs-diff--non-empty-delete-request-p (request)
   "Return non-nil if REQUEST is a non-empty deleteContentRange request."
@@ -221,7 +251,8 @@ URIs.  This keeps create/fetch stable after native image insertion."
   "Compute a content key for a footnote ELEMENT."
   (let ((label (or (plist-get element :label) ""))
         (text (gdocs-convert--runs-to-plain-text (plist-get element :contents))))
-    (format "footnote:%s:%s" label text)))
+    (format "footnote:%s:%s:%s" label text
+            (gdocs-diff--runs-formatting-key (plist-get element :contents)))))
 
 (defun gdocs-diff--normalized-runs-for-key (runs)
   "Return RUNS merged for formatting-key comparison."
