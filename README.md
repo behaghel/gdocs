@@ -130,6 +130,34 @@ publishing compose this same literal insertion envelope; feature-specific
 requests and configurable styling remain outside it. Footnotes and status
 conversion require their shared text dependency directly.
 
+## Bidirectional paragraph conversion
+
+`gdocs-convert-paragraph-codec.el` owns plain Org paragraph run decoding,
+plain/native paragraph IR assembly, alignment decoding and paragraph text
+rendering. Generic inline conversion and ID allocation are explicit document
+services; the codec does not require the conversion facade or interpret feature
+kinds. Feature renderers receive the paragraph and decoded text, returning a
+string when handled or nil otherwise. Composition is explicit and ordered,
+without a registry or discovery layer.
+
+The facade composes paragraph adapters rather than recognizing their syntax:
+
+- `gdocs-convert-images.el` claims standalone source images before inline parsing.
+- `gdocs-convert-org-blocks.el` owns paragraph-level code/block syntax and rendering.
+- `gdocs-convert-lists.el` owns native list paragraph roles, nesting/task state,
+  counters and Org list rendering. List roles take precedence over heading styles.
+- `gdocs-convert-headings.el` owns native heading/title roles, heading emphasis
+  normalization and Org heading/title rendering.
+- Native footnotes reuse paragraph run decoding after their feature-owned
+  single-paragraph/text-only validation; segment addressing remains footnote policy.
+- Status conversion owns removal of inline-only status markers from paragraph
+  annotations; those markers remain attached to their semantic runs.
+
+Each paragraph's inline content is decoded once. The plain codec does not choose
+feature roles, logical presentation, remote accounts or transport behavior.
+Document-wide feature assembly, inline feature conversion and publication request
+planning are separate from this paragraph conversion boundary.
+
 ## Native footnote conversion
 
 `gdocs-convert-footnotes.el` owns footnote definition/run conversion, native

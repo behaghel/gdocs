@@ -152,5 +152,9 @@ INHERITED-PROPS must not add invisible emphasis to the generated pill style."
           (setq cuts (cdr cuts)))
         (nreverse parts)))))
 
+(defun gdocs-convert--without-inline-status-markers (markers)
+  "Return MARKERS without inline status annotations owned by status runs."
+  (seq-remove (lambda (marker) (eq (plist-get marker :type) 'status)) markers))
+
 (provide 'gdocs-convert-status)
 ;;; gdocs-convert-status.el ends here

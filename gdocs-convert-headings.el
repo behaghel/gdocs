@@ -13,6 +13,7 @@
 (require 'org-element)
 (require 'seq)
 (require 'subr-x)
+(require 'gdocs-convert-paragraph-codec)
 
 (declare-function gdocs-convert--objects-to-runs "gdocs-convert" (objects &optional inherited-props))
 (declare-function gdocs-convert--next-id "gdocs-convert" ())
@@ -113,6 +114,40 @@ whitespace runs introduced by text-run normalization when checking uniformity."
         (gdocs-convert--merge-adjacent-runs
          (mapcar (lambda (run) (plist-put (copy-sequence run) :bold nil)) runs))
       runs)))
+
+(defun gdocs-convert-heading-paragraph-from-docs (paragraph runs markers start end)
+  "Decode heading/title PARAGRAPH from RUNS, MARKERS and START..END, or nil."
+  (let ((style (gdocs-convert--docs-style-to-ir
+                (alist-get 'namedStyleType (alist-get 'paragraphStyle paragraph)))))
+    (unless (eq style 'normal)
+      (gdocs-convert-paragraph-from-docs
+       paragraph (if (gdocs-convert--heading-style-p style)
+                     (gdocs-convert--normalize-heading-bold runs) runs)
+       markers start end style
+       (when-let* ((name (gdocs-convert--docs-logical-style-name style)))
+         (list :style-name name))))))
+
+(defun gdocs-convert-heading-paragraph-to-org (element text)
+  "Render heading/title paragraph ELEMENT and TEXT, or nil when unhandled."
+  (let ((style (plist-get element :style)))
+    (cond ((eq style 'title) (format "#+TITLE: %s" text))
+          ((eq style 'subtitle) (format "#+SUBTITLE: %s" text))
+          ((gdocs-convert--heading-style-p style)
+           (gdocs-convert--format-heading style text (plist-get element :gdocs-marker))))))
+
+(defun gdocs-convert--docs-style-to-ir (named-style)
+  "Convert a Google Docs NAMED-STYLE string to an IR style symbol."
+  (or (gdocs-convert--heading-docs-to-style named-style)
+      (pcase named-style ("TITLE" 'title) ("SUBTITLE" 'subtitle) (_ 'normal))))
+
+(defun gdocs-convert--docs-logical-style-name (style)
+  "Return the logical style name inferred from fetched Docs STYLE."
+  (pcase style
+    ('title 'gdocs-title)
+    ('normal 'gdocs-body)
+    ((and (pred gdocs-convert--heading-style-p) heading-style)
+     (gdocs-convert--heading-logical-style-name heading-style))
+    (_ nil)))
 
 (provide 'gdocs-convert-headings)
 ;;; gdocs-convert-headings.el ends here

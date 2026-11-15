@@ -11,14 +11,13 @@
 (require 'seq)
 (require 'subr-x)
 (require 'gdocs-convert-text)
+(require 'gdocs-convert-paragraph-codec)
 
 (defvar gdocs-convert-footnote-reference-text-function)
 (declare-function gdocs-convert--objects-to-runs "gdocs-convert" (objects))
 (declare-function gdocs-convert--trim-runs "gdocs-convert" (runs))
 (declare-function gdocs-convert--next-id "gdocs-convert" ())
 (declare-function gdocs-convert--runs-to-org "gdocs-convert" (runs))
-(declare-function gdocs-convert--docs-elements-to-runs "gdocs-convert" (elements &optional markers))
-(declare-function gdocs-convert--trim-trailing-newline-runs "gdocs-convert" (runs))
 (declare-function gdocs-convert--text-range "gdocs-convert" (start end &optional segment-id))
 (declare-function gdocs-convert--make-text-style-reset-request "gdocs-convert" (start end))
 (declare-function gdocs-convert-make-text-style-requests "gdocs-convert"
@@ -141,9 +140,7 @@ Reject structures that the single-paragraph native mapping cannot preserve."
           (push (gdocs-convert--make-plain-run "\n") runs))
         (setq first-paragraph-seen t
               runs (append (nreverse
-                            (gdocs-convert--trim-trailing-newline-runs
-                             (gdocs-convert--docs-elements-to-runs
-                              (alist-get 'elements paragraph))))
+                            (gdocs-convert-paragraph-docs-runs paragraph nil))
                            runs))))
     (gdocs-convert--trim-leading-footnote-space-runs (nreverse runs))))
 

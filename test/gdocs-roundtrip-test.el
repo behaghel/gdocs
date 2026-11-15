@@ -950,5 +950,28 @@ so this requires manual fixture update or a doc created via the GDocs UI."
         (should (equal actual (gdocs-convert-ir-to-docs-requests ir))))
       (should (> calls 0)))))
 
+(ert-deftest gdocs-roundtrip/specimen-bidirectional-paragraph-codec ()
+  "Both standard specimens compose the paragraph codec through complete flows."
+  (require 'gdocs-diff)
+  (let ((source-decoder (symbol-function 'gdocs-convert-paragraph-org-runs))
+        (native-decoder (symbol-function 'gdocs-convert-paragraph-docs-runs))
+        (renderer (symbol-function 'gdocs-convert-paragraph-to-org))
+        (source-count 0) (native-count 0) (render-count 0))
+    (cl-letf (((symbol-function 'gdocs-convert-paragraph-org-runs)
+               (lambda (&rest args) (setq source-count (1+ source-count)) (apply source-decoder args)))
+              ((symbol-function 'gdocs-convert-paragraph-docs-runs)
+               (lambda (&rest args) (setq native-count (1+ native-count)) (apply native-decoder args)))
+              ((symbol-function 'gdocs-convert-paragraph-to-org)
+               (lambda (&rest args) (setq render-count (1+ render-count)) (apply renderer args))))
+      (dolist (ir (list (gdocs-roundtrip-test--org-to-ir (gdocs-roundtrip-test--read-org-fixture))
+                        (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture))))
+        (should (stringp (gdocs-convert-ir-to-org ir)))
+        (should (gdocs-convert-ir-to-docs-requests ir))
+        (should-not (gdocs-diff-generate ir ir))
+        (should-not (gdocs-diff-generate ir ir))))
+    (should (> source-count 0))
+    (should (> native-count 0))
+    (should (> render-count 0))))
+
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

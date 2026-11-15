@@ -16,6 +16,7 @@ TEST_FILES = \
   test/gdocs-api-test.el \
   test/gdocs-convert-test.el \
   test/gdocs-text-paragraphs-test.el \
+  test/gdocs-paragraph-codec-test.el \
   test/gdocs-convert-headings-test.el \
   test/gdocs-footnote-reference-seam-test.el \
   test/gdocs-convert-status-test.el \

@@ -26,6 +26,10 @@
 (require 'gdocs-styles)
 (require 'gdocs-convert-text)
 (require 'gdocs-convert-paragraphs)
+(require 'gdocs-convert-paragraph-codec)
+(require 'gdocs-convert-images)
+(require 'gdocs-convert-lists)
+(require 'gdocs-convert-org-blocks)
 (require 'gdocs-convert-headings)
 (require 'gdocs-convert-status)
 (require 'gdocs-convert-footnotes)
@@ -464,17 +468,6 @@ a paragraph inside a quote block is handled by the quote walker."
     (or (eq parent-type 'section)
         (eq parent-type 'org-data))))
 
-(defun gdocs-convert--paragraph-child-to-ir (paragraph)
-  "Convert Org PARAGRAPH child to paragraph IR, or nil if empty."
-  (let* ((runs (gdocs-convert--objects-to-runs
-                (org-element-contents paragraph)))
-         (trimmed (gdocs-convert--trim-runs runs)))
-    (when trimmed
-      (list :type 'paragraph
-            :style 'normal
-            :contents trimmed
-            :id (gdocs-convert--next-id)))))
-
 (defun gdocs-convert--block-paragraph-runs (block)
   "Return non-empty paragraph run lists from Org BLOCK."
   (let (paragraphs)
@@ -546,101 +539,14 @@ paragraphs is more surprising than preserving them remotely."
 ;;; Paragraph -> IR
 
 (defun gdocs-convert--paragraph-to-ir (paragraph)
-  "Convert an org PARAGRAPH element to a list of IR elements.
-Multi-line inline code paragraphs (consecutive ~...~ lines) are
-split into individual monospace paragraphs.  Standalone local image links become
-image IR elements.  Returns nil if the paragraph contains only whitespace."
-  (if-let* ((image (gdocs-convert--standalone-image-paragraph-to-ir paragraph)))
-      (list image)
-    (let* ((contents (org-element-contents paragraph))
-           (runs (gdocs-convert--objects-to-runs contents))
-           (trimmed (gdocs-convert--trim-runs runs)))
-      (cond
-       ((null trimmed) nil)
-       ((gdocs-convert--multiline-code-paragraph-p trimmed)
-        (gdocs-convert--split-code-paragraph-runs trimmed))
-       (t (let ((style (gdocs-convert--paragraph-style paragraph)))
-            (list (append (list :type 'paragraph
-                                :style style
-                                :contents trimmed
-                                :id (gdocs-convert--next-id))
-                          (when (eq style 'normal)
-                            (list :style-name 'gdocs-body))))))))))
-
-(defconst gdocs-convert-image-file-extensions
-  '("png" "jpg" "jpeg" "gif" "webp" "svg")
-  "Local image file extensions that can be represented as image IR.")
-
-(defun gdocs-convert--standalone-image-paragraph-to-ir (paragraph)
-  "Return image IR when PARAGRAPH is a standalone local image link."
-  (let ((objects (seq-filter (lambda (object)
-                               (not (and (stringp object) (string-blank-p object))))
-                             (org-element-contents paragraph))))
-    (when (and (= (length objects) 1)
-               (gdocs-convert--standalone-image-link-p (car objects)))
-      (let* ((link (car objects))
-             (path (org-element-property :path link))
-             (caption (gdocs-convert--paragraph-caption paragraph)))
-        (append (list :type 'image
-                      :path path
-                      :id (gdocs-convert--next-id))
-                (when caption (list :caption caption)))))))
-
-(defun gdocs-convert--standalone-image-link-p (object)
-  "Return non-nil when OBJECT is an undescribed local image link."
-  (and (not (stringp object))
-       (eq (org-element-type object) 'link)
-       (string= (org-element-property :type object) "file")
-       (null (org-element-contents object))
-       (member (downcase (or (file-name-extension
-                              (org-element-property :path object))
-                             ""))
-               gdocs-convert-image-file-extensions)))
-
-(defun gdocs-convert--paragraph-caption (paragraph)
-  "Return Org caption text affiliated with PARAGRAPH, or nil."
-  (when-let* ((caption (org-element-property :caption paragraph)))
-    (s-trim (org-element-interpret-data caption))))
-
-(defun gdocs-convert--paragraph-style (paragraph)
-  "Determine the IR style for PARAGRAPH based on its context."
-  (let ((parent (org-element-parent paragraph)))
-    (if (eq (org-element-type parent) 'quote-block)
-        'quote
-      'normal)))
-
-(defun gdocs-convert--multiline-code-paragraph-p (runs)
-  "Return non-nil if RUNS represent consecutive inline code lines.
-Detected when all non-code runs are whitespace-only and at least
-one contains a newline, indicating multiple ~...~ lines parsed as
-one paragraph by org-element."
-  (and runs
-       (cl-some (lambda (r)
-                  (and (not (plist-get r :code))
-                       (string-match-p "\n" (plist-get r :text))))
-                runs)
-       (cl-every (lambda (r)
-                   (or (plist-get r :code)
-                       (string-blank-p (plist-get r :text))))
-                 runs)))
-
-(defun gdocs-convert--split-code-paragraph-runs (runs)
-  "Split multi-line inline code RUNS into individual code paragraphs.
-Concatenates all run text and splits by newlines.  Each line
-becomes a separate paragraph with a single code run, matching the
-Google Docs representation of monospace blocks."
-  (let* ((full-text (mapconcat (lambda (r) (plist-get r :text)) runs ""))
-         (lines (split-string full-text "\n"))
-         (lines (if (and lines (string-empty-p (car (last lines))))
-                    (butlast lines)
-                  lines)))
-    (mapcar (lambda (line)
-              (list :type 'paragraph
-                    :style 'normal
-                    :contents (list (gdocs-convert--make-run
-                                    line (gdocs-convert--code-props)))
-                    :id (gdocs-convert--next-id)))
-            lines)))
+  "Compose source PARAGRAPH conversion from feature adapters and plain runs."
+  (or (gdocs-convert-image-paragraph-to-ir paragraph)
+      (let ((runs (gdocs-convert-paragraph-org-runs paragraph)))
+        (or (gdocs-convert-code-paragraph-to-ir runs)
+            (gdocs-convert-block-paragraph-to-ir paragraph runs)
+            (when-let* ((ir (gdocs-convert-paragraph-from-runs
+                             runs nil '(:style-name gdocs-body))))
+              (list ir))))))
 
 (defun gdocs-convert--trim-runs (runs)
   "Trim leading and trailing whitespace from RUNS.
@@ -753,13 +659,6 @@ keyword to set (e.g. :bold)."
         (setq runs (nconc runs
                           (gdocs-convert--object-to-runs child new-props))))
       runs)))
-
-(defun gdocs-convert--code-props (&optional inherited-props)
-  "Return code formatting props derived from INHERITED-PROPS."
-  (let ((props (copy-sequence inherited-props)))
-    (setq props (plist-put props :code t))
-    (plist-put props :style-names
-               (cons 'gdocs-code (plist-get props :style-names)))))
 
 (defun gdocs-convert--code-object-to-run (object inherited-props)
   "Convert a code or verbatim OBJECT to a text run with :code t.
@@ -1452,37 +1351,11 @@ merge the heading text into that list item."
     ('callout-block (gdocs-convert--ir-callout-block-to-org element))))
 
 (defun gdocs-convert--ir-paragraph-to-org (element)
-  "Convert an IR paragraph ELEMENT to an org string."
-  (let ((style (plist-get element :style))
-        (list-info (plist-get element :list))
-        (marker (plist-get element :gdocs-marker))
-        (text (gdocs-convert--runs-to-org (plist-get element :contents))))
-    (cond
-     (list-info
-      (gdocs-convert--format-list-item list-info text))
-     ((eq style 'title)
-      (format "#+TITLE: %s" text))
-     ((eq style 'subtitle)
-      (format "#+SUBTITLE: %s" text))
-     ((gdocs-convert--heading-style-p style)
-      (gdocs-convert--format-heading style text marker))
-     ((eq style 'quote)
-      (format "#+BEGIN_QUOTE\n%s\n#+END_QUOTE" text))
-     ((when-let* ((data (gdocs-convert--extract-marker-field marker 'src-block)))
-        (gdocs-convert--format-src-block data element)))
-     ((when-let* ((data (gdocs-convert--extract-marker-field marker 'keyword)))
-        (format "#+%s: %s" (plist-get data :key) (plist-get data :value))))
-     ((gdocs-convert--extract-marker-field marker 'verse-block)
-      (format "#+BEGIN_VERSE\n%s\n#+END_VERSE" text))
-     ((when-let* ((block-type (gdocs-convert--extract-marker-field marker 'special-block)))
-        (format "#+BEGIN_%s\n%s\n#+END_%s" block-type text block-type)))
-     ((when-let* ((data (gdocs-convert--extract-marker-field marker 'latex-environment)))
-        data))
-     ((when-let* ((data (gdocs-convert--extract-marker-field marker 'drawer)))
-        (s-trim (plist-get data :raw))))
-     ((eq (plist-get element :alignment) 'center)
-      (format "#+BEGIN_CENTER\n%s\n#+END_CENTER" text))
-     (t text))))
+  "Compose paragraph ELEMENT rendering with ordered feature-owned adapters."
+  (gdocs-convert-paragraph-to-org
+   element '(gdocs-convert-list-paragraph-to-org
+             gdocs-convert-heading-paragraph-to-org
+             gdocs-convert-block-paragraph-to-org)))
 
 (defun gdocs-convert--extract-marker-field (marker type-sym)
   "Extract the :data value for TYPE-SYM from MARKER.
@@ -1491,48 +1364,6 @@ MARKER is a list of marker plists."
     (cl-loop for m in marker
              when (eq (plist-get m :type) type-sym)
              return (plist-get m :data))))
-
-(defun gdocs-convert--format-list-item (list-info text)
-  "Format a list item with LIST-INFO plist and TEXT content.
-If TEXT contains newlines (from vertical tabs in Google Docs),
-indent continuation lines to keep them inside the list item."
-  (let* ((type (plist-get list-info :type))
-         (level (plist-get list-info :level))
-         (indent (make-string (* level 2) ?\s))
-         (marker (gdocs-convert--list-marker type list-info))
-         (cont-indent (make-string (+ (* level 2) (length marker)) ?\s))
-         (indented-text (replace-regexp-in-string
-                         "\n" (concat "\n" cont-indent) text)))
-    (concat indent marker indented-text)))
-
-(defun gdocs-convert--list-marker (type list-info)
-  "Return the org list marker string for TYPE and LIST-INFO."
-  (pcase type
-    ('bullet "- ")
-    ('number (format "%d. " (or (plist-get list-info :counter) 1)))
-    ('check (cond
-             ((plist-get list-info :partial) "- [-] ")
-             ((plist-get list-info :checked) "- [X] ")
-             (t "- [ ] ")))))
-
-(defun gdocs-convert--format-src-block-from-lines (language lines)
-  "Format a source block with LANGUAGE from code LINES."
-  (concat "#+BEGIN_SRC" (if (s-present? language)
-                            (concat " " language)
-                          "")
-          "\n" (s-join "\n" lines) "\n#+END_SRC"))
-
-(defun gdocs-convert--format-src-block (data element)
-  "Format a src block from marker DATA and paragraph ELEMENT."
-  (let* ((legacy-data-p (listp data))
-         (language (if legacy-data-p
-                       (plist-get data :language)
-                     data))
-         (value (if legacy-data-p
-                    (plist-get data :value)
-                  (concat (gdocs-convert--plain-text element) "\n"))))
-    (gdocs-convert--format-src-block-from-lines
-     language (split-string (s-trim-right value) "\n"))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Text runs -> org text
@@ -2334,66 +2165,18 @@ MARKERS may contain original Org source ownership metadata."
                        (> marker-end start))))
               markers))
 
-(defun gdocs-convert--docs-paragraph-to-ir (paragraph lists-map markers
-                                                      &optional start end)
-  "Convert a Google Docs PARAGRAPH to an IR element.
-LISTS-MAP is the document lists property.  MARKERS is parsed
-named-range marker data.  START and END are document indices."
-  (let* ((elements (alist-get 'elements paragraph))
-         (style-obj (alist-get 'paragraphStyle paragraph))
-         (named-style (alist-get 'namedStyleType style-obj))
-         (alignment (alist-get 'alignment style-obj))
-         (bullet (alist-get 'bullet paragraph))
-         (ir-style (gdocs-convert--docs-style-to-ir named-style))
-         (runs (gdocs-convert--docs-elements-to-runs elements markers))
-         (trimmed (gdocs-convert--trim-trailing-newline-runs runs))
-         (list-info (when bullet
-                      (gdocs-convert--docs-bullet-to-list
-                       bullet lists-map markers start end style-obj)))
-         (contents (if (and (not list-info)
-                            (gdocs-convert--heading-style-p ir-style))
-                       (gdocs-convert--normalize-heading-bold trimmed)
-                     trimmed))
-         (ir-alignment (gdocs-convert--docs-alignment-to-ir alignment)))
-    (append (list :type 'paragraph
-                  :style (if list-info 'normal ir-style)
-                  :contents contents
-                  :id (gdocs-convert--next-id))
-            (unless list-info
-              (when-let* ((style-name
-                           (gdocs-convert--docs-logical-style-name ir-style)))
-                (list :style-name style-name)))
-            (when list-info (list :list list-info))
-            (when ir-alignment (list :alignment ir-alignment))
-            (when-let* ((paragraph-markers
-                         (seq-remove (lambda (marker) (eq (plist-get marker :type) 'status))
-                                     (gdocs-convert--markers-for-range markers start end))))
-              (list :gdocs-marker paragraph-markers)))))
+(defun gdocs-convert--docs-paragraph-to-ir (paragraph lists-map markers &optional start end)
+  "Compose native PARAGRAPH decoding with LISTS-MAP, MARKERS and START..END."
+  (let ((runs (gdocs-convert-paragraph-docs-runs paragraph markers)))
+    (or (gdocs-convert-list-paragraph-from-docs paragraph lists-map markers runs start end)
+        (gdocs-convert-heading-paragraph-from-docs paragraph runs markers start end)
+        (gdocs-convert-paragraph-from-docs
+         paragraph runs markers start end 'normal '(:style-name gdocs-body)))))
 
-(defun gdocs-convert--docs-alignment-to-ir (alignment)
-  "Convert a Google Docs ALIGNMENT string to an IR alignment symbol."
-  (pcase alignment
-    ("CENTER" 'center)
-    ("END" 'end)
-    ("JUSTIFIED" 'justified)
-    (_ nil)))
-
-(defun gdocs-convert--docs-style-to-ir (named-style)
-  "Convert a Google Docs NAMED-STYLE string to an IR style symbol."
-  (or (gdocs-convert--heading-docs-to-style named-style)
-      (pcase named-style
-        ("TITLE" 'title)
-        ("SUBTITLE" 'subtitle)
-        (_ 'normal))))
-
-(defun gdocs-convert--docs-logical-style-name (style)
-  "Return the logical style name inferred from fetched Docs STYLE."
-  (pcase style
-    ('title 'gdocs-title)
-    ('normal 'gdocs-body)
-    ((and (pred gdocs-convert--heading-style-p) heading-style)
-     (gdocs-convert--heading-logical-style-name heading-style))
-    (_ nil)))
+(defun gdocs-convert--paragraph-markers-for-range (markers start end)
+  "Compose paragraph annotations from MARKERS overlapping START..END."
+  (gdocs-convert--without-inline-status-markers
+   (gdocs-convert--markers-for-range markers start end)))
 
 (defun gdocs-convert--docs-elements-to-runs (elements &optional markers)
   "Convert Google Docs paragraph ELEMENTS to IR text runs.
@@ -2638,179 +2421,6 @@ may have trailing whitespace-only runs before it."
                           (< marker-start end)
                           (> marker-end start)))))
             markers))
-
-(defun gdocs-convert--task-state-marker (markers start end)
-  "Return task-state marker overlapping START..END, or nil."
-  (gdocs-convert--range-marker markers 'task-state start end))
-
-(defun gdocs-convert--list-state-marker (markers start end)
-  "Return list-state marker overlapping START..END, or nil."
-  (gdocs-convert--range-marker markers 'list-state start end))
-
-(defun gdocs-convert--list-state-data (data)
-  "Return list plist decoded from list-state DATA."
-  (when data
-    (pcase-let* ((`(,type ,level) (s-split ":" data)))
-      (list :type (intern type)
-            :level (string-to-number level)))))
-
-(defconst gdocs-convert--unchecked-checkbox-glyphs
-  '("☐" "□" "❏" "❑" "◻" "⬜")
-  "Google Docs glyph symbols observed for unchecked checklist items.")
-
-(defconst gdocs-convert--checked-checkbox-glyphs
-  '("☑" "✓" "✔")
-  "Google Docs glyph symbols observed for checked checklist items.")
-
-(defconst gdocs-convert--partial-checkbox-glyphs
-  '("☒")
-  "Google Docs glyph symbols observed for partial checklist items.")
-
-(defun gdocs-convert--docs-check-state (list-props nesting-level)
-  "Return checkbox state plist from LIST-PROPS at NESTING-LEVEL."
-  (let* ((nesting (alist-get 'listProperties list-props))
-         (levels (alist-get 'nestingLevels nesting))
-         (level-info (when (and levels (> (length levels) nesting-level))
-                       (aref levels nesting-level)))
-         (glyph-symbol (when level-info
-                         (alist-get 'glyphSymbol level-info))))
-    (cond
-     ((member glyph-symbol gdocs-convert--checked-checkbox-glyphs)
-      '(:checked t))
-     ((member glyph-symbol gdocs-convert--partial-checkbox-glyphs)
-      '(:partial t))
-     (t '(:checked nil)))))
-
-(defun gdocs-convert--docs-bullet-to-list
-    (bullet lists-map &optional markers start end paragraph-style)
-  "Convert a Google Docs BULLET object to an IR :list plist.
-LISTS-MAP is the document's lists property for type lookup.  MARKERS may carry
-Org task state for the paragraph at START..END.  PARAGRAPH-STYLE is used as a
-fallback for visual nesting when the list definition omits indentation.
-Computes the visual nesting level from indentation, since Google Docs
-represents mixed-type nested lists as separate list objects where the sub-list
-has nestingLevel 0."
-  (let* ((list-id (alist-get 'listId bullet))
-         (nesting-level (or (alist-get 'nestingLevel bullet) 0))
-         (list-props (when list-id
-                       (alist-get (intern list-id) lists-map)))
-         (list-type (gdocs-convert--docs-list-type list-props nesting-level))
-         (level (gdocs-convert--docs-visual-nesting-level
-                 list-props nesting-level paragraph-style))
-         (task-state (plist-get (gdocs-convert--task-state-marker
-                                 markers start end)
-                                :data))
-         (list-state (gdocs-convert--list-state-data
-                      (plist-get (gdocs-convert--list-state-marker
-                                  markers start end)
-                                 :data)))
-         (effective-type (or (plist-get list-state :type)
-                             (if task-state 'check list-type)))
-         (effective-level (or (plist-get list-state :level) level)))
-    (append (list :type effective-type :level effective-level)
-            (when (eq effective-type 'check)
-              (cond
-               ((equal task-state "partial") '(:checked nil :partial t))
-               ((equal task-state "on") '(:checked t :partial nil))
-               ((equal task-state "off") '(:checked nil :partial nil))
-               (t (gdocs-convert--docs-check-state
-                   list-props nesting-level)))))))
-
-(defun gdocs-convert--assign-list-counters (ir)
-  "Assign sequential :counter values to numbered list items in IR.
-Mutates the :list plists in place.  Consecutive numbered items at
-the same level share a counter that increments from 1; any change
-in level, type, or a non-list element resets the counter."
-  (let ((counter 0)
-        (prev-level nil))
-    (dolist (element ir)
-      (let* ((list-info (plist-get element :list))
-             (list-type (when list-info (plist-get list-info :type)))
-             (level (when list-info (plist-get list-info :level))))
-        (if (eq list-type 'number)
-            (progn
-              (if (eql level prev-level)
-                  (cl-incf counter)
-                (setq counter 1))
-              (plist-put list-info :counter counter)
-              (setq prev-level level))
-          (setq counter 0 prev-level nil))))))
-
-(defconst gdocs-convert--list-indent-pt 36
-  "Points of indentation per list nesting level in Google Docs.
-The first-line indent is half this value (18pt) less, leaving
-room for the bullet glyph.")
-
-(defun gdocs-convert--dimension-magnitude (object field)
-  "Return numeric magnitude for FIELD on Google Docs style OBJECT."
-  (alist-get 'magnitude (alist-get field object)))
-
-(defun gdocs-convert--nesting-level-from-indent (indent-first indent-start)
-  "Return visual nesting level from INDENT-FIRST or INDENT-START."
-  (cond
-   (indent-first
-    ;; indentFirstLine = bullet glyph position, half an indent less than the
-    ;; continuation-line margin.  Recover the nesting level by inverting:
-    ;; level = (indent - half-indent) / indent-per-level.
-    (let ((half-indent (/ (float gdocs-convert--list-indent-pt) 2)))
-      (max 0 (round (/ (- indent-first half-indent)
-                       (float gdocs-convert--list-indent-pt))))))
-   (indent-start
-    ;; Fallback: indentStart = continuation margin = (level + 1) * indent.
-    (max 0 (1- (round (/ indent-start
-                         (float gdocs-convert--list-indent-pt))))))))
-
-(defun gdocs-convert--docs-visual-nesting-level
-    (list-props nesting-level &optional paragraph-style)
-  "Compute the visual nesting level for NESTING-LEVEL.
-LIST-PROPS is preferred, but PARAGRAPH-STYLE is used as a fallback when Google
-Docs omits indentation from the list definition.  Google Docs encodes mixed-type
-nested lists as separate list objects where the sub-list has nestingLevel 0
- despite being visually nested."
-  (let* ((nesting (alist-get 'listProperties list-props))
-         (levels (alist-get 'nestingLevels nesting))
-         (level-info (when (and levels (> (length levels) nesting-level))
-                       (aref levels nesting-level)))
-         (indent-first (or (gdocs-convert--dimension-magnitude
-                            level-info 'indentFirstLine)
-                           (gdocs-convert--dimension-magnitude
-                            paragraph-style 'indentFirstLine)))
-         (indent-start (or (gdocs-convert--dimension-magnitude
-                            level-info 'indentStart)
-                           (gdocs-convert--dimension-magnitude
-                            paragraph-style 'indentStart))))
-    (or (gdocs-convert--nesting-level-from-indent indent-first indent-start)
-        nesting-level)))
-
-(defun gdocs-convert--docs-list-type (list-props nesting-level)
-  "Determine the IR list type from Google Docs LIST-PROPS at NESTING-LEVEL."
-  (if (null list-props)
-      'bullet
-    (let* ((nesting (alist-get 'listProperties list-props))
-           (levels (alist-get 'nestingLevels nesting))
-           (level-info (when (and levels (> (length levels) nesting-level))
-                         (aref levels nesting-level)))
-           (glyph-type (when level-info
-                         (alist-get 'glyphType level-info)))
-           (glyph-symbol (when level-info
-                           (alist-get 'glyphSymbol level-info))))
-      (cond
-       ((gdocs-convert--checkbox-glyph-p glyph-type glyph-symbol)
-        'check)
-       ((and glyph-type
-             (member glyph-type '("DECIMAL" "ALPHA" "ROMAN"
-                                  "ZERO_DECIMAL")))
-        'number)
-       (t 'bullet)))))
-
-(defun gdocs-convert--checkbox-glyph-p (glyph-type glyph-symbol)
-  "Return non-nil if GLYPH-TYPE or GLYPH-SYMBOL indicates a checkbox."
-  (or (equal glyph-type "CHECKBOX")
-      (and glyph-symbol
-           (member glyph-symbol
-                   (append gdocs-convert--unchecked-checkbox-glyphs
-                           gdocs-convert--checked-checkbox-glyphs
-                           gdocs-convert--partial-checkbox-glyphs)))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Named range markers
