@@ -34,5 +34,21 @@ by callers without changing this literal envelope."
     (list :requests (list (gdocs-convert--make-insert-text-request full-text index))
           :length (gdocs-convert--string-to-utf16-length full-text))))
 
+(defun gdocs-convert--block-line-style-name (base-style index count)
+  "Return logical line role for BASE-STYLE at INDEX of COUNT lines."
+  (intern (format "%s-%s" base-style
+                  (cond ((= count 1) "single") ((= index 0) "first")
+                        ((= index (1- count)) "last") (t "line")))))
+
+(defun gdocs-convert--typographic-block-paragraph
+    (element contents style-base marker index count)
+  "Construct shared paragraph IR for ELEMENT and CONTENTS.
+STYLE-BASE supplies neutral first/line/last/single roles.  MARKER is opaque
+feature metadata; INDEX and COUNT describe position within the group."
+  (gdocs-convert-make-paragraph
+   contents :style 'normal
+   :style-name (gdocs-convert--block-line-style-name style-base index count)
+   :gdocs-marker (list marker) :id (plist-get element :id)))
+
 (provide 'gdocs-convert-paragraphs)
 ;;; gdocs-convert-paragraphs.el ends here

@@ -1103,5 +1103,35 @@ so this requires manual fixture update or a doc created via the GDocs UI."
           (should-not (gdocs-diff-generate ir ir)))))
     (should (>= calls 2))))
 
+(ert-deftest gdocs-roundtrip/specimen-code-block-feature-composition ()
+  "Both specimen flows compose code/example rendering, planning and descriptors."
+  (require 'gdocs-diff)
+  (let* ((native (gdocs-roundtrip-test--read-json-fixture))
+         (body (alist-get 'body native)))
+    ;; The returned specimen has no semantic block markers.  Extend its native
+    ;; input explicitly, keeping the unmodified specimen fingerprints separate.
+    (setf (alist-get 'content body)
+          (vconcat (alist-get 'content body)
+                   [((startIndex . 100000) (endIndex . 100012)
+                     (paragraph . ((elements . [((textRun . ((content . "specimen 😀\n"))))]))))]))
+    (setf (alist-get 'namedRanges native)
+          (cons '(gdocs-org-marker:src-block:synthetic:text
+                  . ((namedRanges . [((ranges . [((startIndex . 100000) (endIndex . 100012))]))])))
+                (alist-get 'namedRanges native)))
+    (dolist (ir (list (gdocs-roundtrip-test--org-to-ir (gdocs-roundtrip-test--read-org-fixture))
+                      (gdocs-convert-docs-json-to-ir native)))
+      (let* ((rendered (gdocs-convert-ir-to-org ir))
+             (parsed (gdocs-roundtrip-test--org-to-ir rendered))
+             (blocks (seq-filter #'gdocs-convert-code-block-element-p parsed))
+             (requests (gdocs-convert-ir-to-docs-requests parsed)))
+        (should blocks)
+        (should requests)
+        (dolist (block blocks)
+          (let ((descriptor (gdocs-diff-semantic-element block)))
+            (should (equal (plist-get descriptor :key) (gdocs-diff--element-key block)))
+            (should (= (plist-get descriptor :body-length) (gdocs-diff--element-utf16-length block)))))
+        (should-not (gdocs-diff-generate parsed parsed))
+        (should-not (gdocs-diff-generate parsed parsed))))))
+
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

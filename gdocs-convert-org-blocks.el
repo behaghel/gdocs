@@ -11,6 +11,7 @@
 (require 's)
 (require 'subr-x)
 (require 'gdocs-convert-paragraph-codec)
+(require 'gdocs-convert-code-blocks)
 
 (declare-function gdocs-convert--extract-marker-field "gdocs-convert" (marker type-sym))
 (declare-function gdocs-convert--plain-text "gdocs-convert" (element))
@@ -48,12 +49,6 @@
               (gdocs-convert-paragraph-from-runs
                (list (gdocs-convert--make-run line (gdocs-convert--code-props))))) lines)))
 
-(defun gdocs-convert--code-props (&optional inherited-props)
-  "Return code formatting props derived from INHERITED-PROPS."
-  (let ((props (copy-sequence inherited-props)))
-    (setq props (plist-put props :code t))
-    (plist-put props :style-names (cons 'gdocs-code (plist-get props :style-names)))))
-
 (defun gdocs-convert-block-paragraph-to-org (element text)
   "Render block paragraph ELEMENT and TEXT, or nil when unhandled."
   (let ((style (plist-get element :style)) (marker (plist-get element :gdocs-marker)))
@@ -72,20 +67,6 @@
         (s-trim (plist-get data :raw))))
      ((eq (plist-get element :alignment) 'center)
       (format "#+BEGIN_CENTER\n%s\n#+END_CENTER" text)))))
-
-(defun gdocs-convert--format-src-block-from-lines (language lines)
-  "Format a source block with LANGUAGE from code LINES."
-  (concat "#+BEGIN_SRC" (if (s-present? language) (concat " " language) "")
-          "\n" (s-join "\n" lines) "\n#+END_SRC"))
-
-(defun gdocs-convert--format-src-block (data element)
-  "Format a src block from marker DATA and paragraph ELEMENT."
-  (let* ((legacy-data-p (listp data))
-         (language (if legacy-data-p (plist-get data :language) data))
-         (value (if legacy-data-p (plist-get data :value)
-                  (concat (gdocs-convert--plain-text element) "\n"))))
-    (gdocs-convert--format-src-block-from-lines
-     language (split-string (s-trim-right value) "\n"))))
 
 (defvar gdocs-convert-monospace-font-families)
 

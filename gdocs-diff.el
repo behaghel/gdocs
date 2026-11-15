@@ -96,8 +96,6 @@ identical keys."
     ('paragraph (gdocs-diff--paragraph-key element))
     ('horizontal-rule "horizontal-rule")
     ('page-break "page-break")
-    ('source-block (gdocs-diff--source-block-key element))
-    ('example-block (gdocs-diff--example-block-key element))
     ('quote-block (gdocs-diff--quote-block-key element))
     ('callout-block (gdocs-diff--callout-block-key element))
     (_ (or (plist-get (gdocs-diff-semantic-element element) :key)
@@ -157,17 +155,6 @@ Includes type, style, list info, semantic markers, and full run details."
         (marker-key (gdocs-diff--marker-key element)))
     (format "paragraph:%s:%s:%s:%s:%s:%s"
             style style-name list-key marker-key formatting text)))
-
-(defun gdocs-diff--source-block-key (element)
-  "Compute a content key for a source-block ELEMENT."
-  (format "source-block:%s:%s:%s"
-          (or (plist-get element :language) "")
-          (or (plist-get element :style-revision) "")
-          (s-join "\n" (plist-get element :lines))))
-
-(defun gdocs-diff--example-block-key (element)
-  "Compute a content key for example-block ELEMENT."
-  (format "example-block:%s" (s-join "\n" (plist-get element :lines))))
 
 (defun gdocs-diff--quote-block-key (element)
   "Compute a content key for quote-block ELEMENT."
@@ -400,26 +387,10 @@ the UTF-16 index where the first element begins (default 1)."
     ;; structural element in the document body (1 UTF-16 unit).
     ('horizontal-rule 1)
     ('page-break 1)
-    ('source-block (gdocs-diff--source-block-utf16-length element))
-    ('example-block (gdocs-diff--example-block-utf16-length element))
     ('quote-block (gdocs-diff--quote-block-utf16-length element))
     ('callout-block (gdocs-diff--callout-block-utf16-length element))
     (_ (or (plist-get (gdocs-diff-semantic-element element) :body-length)
            (error "gdocs-diff: unknown element type: %s" (plist-get element :type))))))
-
-(defun gdocs-diff--source-block-utf16-length (element)
-  "Compute UTF-16 length of source-block ELEMENT."
-  (apply #'+
-         (mapcar (lambda (line)
-                   (1+ (gdocs-convert--string-to-utf16-length line)))
-                 (or (plist-get element :lines) '("")))))
-
-(defun gdocs-diff--example-block-utf16-length (element)
-  "Compute UTF-16 length of example-block ELEMENT."
-  (apply #'+
-         (mapcar (lambda (line)
-                   (1+ (gdocs-convert--string-to-utf16-length line)))
-                 (or (plist-get element :lines) '("")))))
 
 (defun gdocs-diff--quote-block-utf16-length (element)
   "Compute UTF-16 length of quote-block ELEMENT."

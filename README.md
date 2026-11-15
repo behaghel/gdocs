@@ -235,6 +235,33 @@ prefers an existing Org ID for a same-document heading. Cache ordering,
 normalization and dynamic callback context remain part of link resolution, not
 semantic conversion or typography policy.
 
+## Source and example block conversion
+
+`gdocs-convert-code-blocks.el` owns source/example syntax, literal lines,
+language metadata, native marker grouping, Org rendering and publication
+planning. Source markers group consecutive paragraphs by language; example
+markers group by block ID. Grouping retains authoritative document ranges.
+Legacy unmarked all-code paragraphs group into Org example blocks only when
+normal, unlisted, unaligned and unmarked. The feature supplies a plain grouping
+descriptor to the facade; generic traversal does not inspect code runs or
+assemble block syntax.
+
+Literal block text does not reinterpret Org emphasis, links or status syntax.
+Publication emits one shared paragraph plan per line, preserving code run
+properties, semantic markers and first/line/last/single logical style roles.
+Empty blocks still publish a terminal newline. UTF-16 body lengths count each
+literal line plus its newline. Shared paragraph construction owns only the
+neutral line-position role constructor and opaque metadata assembly; code,
+quote and callout features choose their own roles and markers.
+
+`gdocs-diff-code-blocks.el` supplies neutral identity/length descriptors. Source
+identity includes language, style revision and lines; example identity includes
+lines. Generic diff does not classify these block kinds. Inline/contextual Org
+adapters compose code-block services without moving quotes, callouts or list
+policy into this feature. Existing helper names remain available through the
+facade. Presentation configuration, transport, accounts and asynchronous
+orchestration remain separate responsibilities.
+
 ## Image conversion and geometry
 
 `gdocs-convert-images.el` owns standalone source-image recognition, native

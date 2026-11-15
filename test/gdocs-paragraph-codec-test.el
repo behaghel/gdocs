@@ -76,7 +76,7 @@
   "Feature helpers are not left behind as policy branches in the facade."
   (dolist (entry '((gdocs-convert--standalone-image-paragraph-to-ir . "images")
                    (gdocs-convert--multiline-code-paragraph-p . "org-blocks")
-                   (gdocs-convert--format-src-block . "org-blocks")
+                   (gdocs-convert--format-src-block . "code-blocks")
                    (gdocs-convert--docs-bullet-to-list . "lists")
                    (gdocs-convert--format-list-item . "lists")
                    (gdocs-convert--docs-style-to-ir . "headings")))

@@ -34,6 +34,7 @@
 (require 'gdocs-convert-tables)
 (require 'gdocs-convert-images)
 (require 'gdocs-convert-lists)
+(require 'gdocs-convert-code-blocks)
 (require 'gdocs-convert-org-blocks)
 (require 'gdocs-convert-headings)
 (require 'gdocs-convert-status)
@@ -551,62 +552,6 @@ it so the IR text is clean for round-tripping."
 ;; ---------------------------------------------------------------------------
 ;;; Src blocks / keywords -> IR (org-only markers)
 
-(defun gdocs-convert--block-line-style-name (base-style index count)
-  "Return logical block-line style from BASE-STYLE, INDEX, and COUNT.
-The naming convention is shared by typographic block renderers:
-BASE-STYLE-first, BASE-STYLE-line, BASE-STYLE-last, and BASE-STYLE-single."
-  (intern (format "%s-%s"
-                  base-style
-                  (cond
-                   ((= count 1) "single")
-                   ((= index 0) "first")
-                   ((= index (1- count)) "last")
-                   (t "line")))))
-
-(defun gdocs-convert--typographic-block-paragraph
-    (element contents style-base marker index count)
-  "Return shared paragraph IR for typographic block ELEMENT.
-CONTENTS is a run list, STYLE-BASE is the logical style family,
-MARKER is a marker plist, and INDEX/COUNT select first/line/last/single
-line style names."
-  (gdocs-convert-make-paragraph
-   contents
-   :style 'normal
-   :style-name (gdocs-convert--block-line-style-name
-                style-base index count)
-   :gdocs-marker (list marker)
-   :id (plist-get element :id)))
-
-(defun gdocs-convert--src-block-to-ir (src-block)
-  "Convert a SRC-BLOCK to a semantic source-block IR element."
-  (let* ((language (or (org-element-property :language src-block) ""))
-         (value (s-trim-right (or (org-element-property :value src-block) "")))
-         (lines (split-string value "\n")))
-    (list :type 'source-block
-          :language language
-          :lines lines
-          :id (gdocs-convert--next-id))))
-
-(defun gdocs-convert--lines-to-monospace-ir (lines)
-  "Convert LINES to a list of monospace paragraph IR elements.
-Each line becomes a separate paragraph with a code run, matching
-the Google Docs representation."
-  (mapcar (lambda (line)
-            (list :type 'paragraph
-                  :style 'normal
-                  :contents (list (gdocs-convert--make-run
-                                  line (gdocs-convert--code-props)))
-                  :id (gdocs-convert--next-id)))
-          lines))
-
-(defun gdocs-convert--example-block-to-ir (example-block)
-  "Convert an EXAMPLE-BLOCK to semantic example-block IR."
-  (let* ((value (or (org-element-property :value example-block) ""))
-         (lines (split-string (s-trim-right value) "\n")))
-    (list :type 'example-block
-          :lines lines
-          :id (gdocs-convert--next-id))))
-
 (defun gdocs-convert--keyword-to-ir (keyword)
   "Convert a preservable org KEYWORD to an IR element with a marker."
   (let ((key (org-element-property :key keyword))
@@ -811,38 +756,30 @@ collected at the end under a conventional `* Footnotes' section."
   (let* ((split (gdocs-convert--split-footnote-elements ir))
          (footnotes (plist-get split :footnotes))
          (parts nil)
-        (prev-element nil)
-        (prev-type nil)
-        (elements (seq-into (plist-get split :body) 'vector))
-        (i 0)
-        (len (length (plist-get split :body)))
-        (list-counter 0)
-        (prev-list-level nil))
+         (prev-element nil)
+         (prev-type nil)
+         (elements (seq-into (plist-get split :body) 'vector))
+         (i 0)
+         (len (length (plist-get split :body)))
+         (list-counter 0)
+         (prev-list-level nil))
     (while (< i len)
-      (let ((element (aref elements i)))
+      (let ((element (aref elements i)) group)
         (cond
          ;; Empty paragraph (nil contents): skip in org output but
          ;; preserve in IR for correct index computation.
          ((and (eq (plist-get element :type) 'paragraph)
                (null (plist-get element :contents)))
           (setq i (1+ i)))
-         ;; Collect consecutive all-code paragraphs into an example block
-         ((gdocs-convert--all-code-paragraph-p element)
-          (let ((code-lines nil))
-            (while (and (< i len)
-                        (gdocs-convert--all-code-paragraph-p
-                         (aref elements i)))
-              (push (gdocs-convert--plain-text (aref elements i))
-                    code-lines)
-              (setq i (1+ i)))
-            (when (and parts prev-type)
-              (push "" parts))
-            (push (format "#+BEGIN_EXAMPLE\n%s\n#+END_EXAMPLE"
-                          (s-join "\n" (nreverse code-lines)))
-                  parts)
-            (setq prev-element (list :type 'example-block)
-                  prev-type 'example-block)
-            (setq list-counter 0 prev-list-level nil)))
+         ;; Feature-owned grouping supplies text and the following position.
+         ((setq group (gdocs-convert-code-block-org-group elements i))
+          (when (and parts prev-type (plist-get group :blank-before))
+            (push "" parts))
+          (push (plist-get group :org-text) parts)
+          (setq i (plist-get group :next-index)
+                prev-element (plist-get group :element)
+                prev-type (plist-get prev-element :type)
+                list-counter 0 prev-list-level nil))
          ;; Normal element
          (t
           (let* ((type (plist-get element :type))
@@ -873,26 +810,6 @@ collected at the end under a conventional `* Footnotes' section."
      (concat (s-join "\n" (nreverse parts)) "\n")
      footnotes)))
 
-(defun gdocs-convert--src-block-data (element)
-  "Return source-block marker data from ELEMENT, or nil."
-  (gdocs-convert--extract-marker-field
-   (plist-get element :gdocs-marker) 'src-block))
-
-(defun gdocs-convert--example-block-data (element)
-  "Return example-block marker data from ELEMENT, or nil."
-  (gdocs-convert--extract-marker-field
-   (plist-get element :gdocs-marker) 'example-block))
-
-(defun gdocs-convert--src-block-paragraph-p (element)
-  "Return non-nil if ELEMENT is a marked source-block paragraph."
-  (and (eq (plist-get element :type) 'paragraph)
-       (gdocs-convert--src-block-data element)))
-
-(defun gdocs-convert--example-block-paragraph-p (element)
-  "Return non-nil if ELEMENT is a marked example-block paragraph."
-  (and (eq (plist-get element :type) 'paragraph)
-       (gdocs-convert--example-block-data element)))
-
 (defun gdocs-convert--quote-block-marker (element)
   "Return the quote-block marker on ELEMENT, or nil."
   (seq-find (lambda (marker)
@@ -903,18 +820,6 @@ collected at the end under a conventional `* Footnotes' section."
   "Return non-nil if ELEMENT is a marked quote-block paragraph."
   (and (eq (plist-get element :type) 'paragraph)
        (gdocs-convert--quote-block-marker element)))
-
-(defun gdocs-convert--all-code-paragraph-p (element)
-  "Return non-nil if ELEMENT is a normal paragraph with all-code runs.
-Paragraphs that carry any marker are excluded, since they
-already round-trip via named ranges."
-  (and (eq (plist-get element :type) 'paragraph)
-       (eq (plist-get element :style) 'normal)
-       (not (plist-get element :list))
-       (not (plist-get element :gdocs-marker))
-       (not (plist-get element :alignment))
-       (let ((runs (plist-get element :contents)))
-         (and runs (seq-every-p (lambda (r) (plist-get r :code)) runs)))))
 
 (defun gdocs-convert--plain-text (element)
   "Return the concatenated plain text of ELEMENT's runs."
@@ -932,8 +837,10 @@ merge the heading text into that list item."
           (previous-style (plist-get previous :style))
           (type (plist-get element :type))
           (list-info (plist-get element :list))
-          (block-types '(source-block example-block quote-block callout-block)))
-      (or (memq previous-type block-types)
+          (block-types '(quote-block callout-block)))
+      (or (gdocs-convert-code-block-element-p previous)
+          (gdocs-convert-code-block-element-p element)
+          (memq previous-type block-types)
           (memq type block-types)
           (and list-info (not (plist-get previous :list)))
           (and (eq previous-type 'paragraph)
@@ -986,17 +893,6 @@ MARKER is a list of marker plists."
 
 ;; ---------------------------------------------------------------------------
 ;;; IR footnote -> org
-
-(defun gdocs-convert--ir-source-block-to-org (element)
-  "Convert source-block IR ELEMENT to Org source block text."
-  (gdocs-convert--format-src-block-from-lines
-   (plist-get element :language)
-   (plist-get element :lines)))
-
-(defun gdocs-convert--ir-example-block-to-org (element)
-  "Convert example-block IR ELEMENT to Org example block text."
-  (format "#+BEGIN_EXAMPLE\n%s\n#+END_EXAMPLE"
-          (s-join "\n" (or (plist-get element :lines) '("")))))
 
 (defun gdocs-convert--ir-quote-block-to-org (element)
   "Convert quote-block IR ELEMENT to Org quote block text."
@@ -1308,65 +1204,6 @@ subsequent diffs treat the separator as part of the owning callout block."
                 (setq end (plist-get separator :end)))
               (push (append (list :type 'quote-block
                                   :paragraphs (nreverse paragraphs)
-                                  :id (gdocs-convert--next-id))
-                            (when start (list :doc-start start))
-                            (when end (list :doc-end end)))
-                    result))
-          (push element result)
-          (setq remaining (cdr remaining)))))
-    (nreverse result)))
-
-(defun gdocs-convert--attach-example-block-markers (ir)
-  "Group consecutive marked example-block paragraphs in IR."
-  (let ((result nil)
-        (remaining ir))
-    (while remaining
-      (let ((element (car remaining)))
-        (if (gdocs-convert--example-block-paragraph-p element)
-            (let ((block-id (gdocs-convert--example-block-data element))
-                  (lines nil)
-                  (start (plist-get element :doc-start))
-                  end)
-              (while (and remaining
-                          (gdocs-convert--example-block-paragraph-p
-                           (car remaining))
-                          (equal block-id
-                                 (gdocs-convert--example-block-data
-                                  (car remaining))))
-                (push (gdocs-convert--plain-text (car remaining)) lines)
-                (setq end (plist-get (car remaining) :doc-end))
-                (setq remaining (cdr remaining)))
-              (push (append (list :type 'example-block
-                                  :lines (nreverse lines)
-                                  :id (gdocs-convert--next-id))
-                            (when start (list :doc-start start))
-                            (when end (list :doc-end end)))
-                    result))
-          (push element result)
-          (setq remaining (cdr remaining)))))
-    (nreverse result)))
-
-(defun gdocs-convert--attach-source-block-markers (ir)
-  "Group consecutive marked source-block paragraphs in IR."
-  (let ((result nil)
-        (remaining ir))
-    (while remaining
-      (let ((element (car remaining)))
-        (if (gdocs-convert--src-block-paragraph-p element)
-            (let ((language (gdocs-convert--src-block-data element))
-                  (lines nil)
-                  (start (plist-get element :doc-start))
-                  end)
-              (while (and remaining
-                          (gdocs-convert--src-block-paragraph-p (car remaining))
-                          (equal language
-                                 (gdocs-convert--src-block-data (car remaining))))
-                (push (gdocs-convert--plain-text (car remaining)) lines)
-                (setq end (plist-get (car remaining) :doc-end))
-                (setq remaining (cdr remaining)))
-              (push (append (list :type 'source-block
-                                  :language language
-                                  :lines (nreverse lines)
                                   :id (gdocs-convert--next-id))
                             (when start (list :doc-start start))
                             (when end (list :doc-end end)))
@@ -1719,58 +1556,6 @@ indent after bullet creation."
 
 ;; ---------------------------------------------------------------------------
 ;;; Source block -> requests
-
-(defun gdocs-convert--source-block-line-element (element line line-index line-count)
-  "Return paragraph IR for source-block ELEMENT LINE at LINE-INDEX."
-  (gdocs-convert--typographic-block-paragraph
-   element
-   (list (gdocs-convert--make-run line (gdocs-convert--code-props)))
-   'gdocs-source-block
-   (list :type 'src-block :data (or (plist-get element :language) ""))
-   line-index
-   line-count))
-
-(defun gdocs-convert--example-block-line-element (element line line-index line-count)
-  "Return paragraph IR for example-block ELEMENT LINE at LINE-INDEX."
-  (gdocs-convert--typographic-block-paragraph
-   element
-   (list (gdocs-convert--make-run line (gdocs-convert--code-props)))
-   'gdocs-source-block
-   (list :type 'example-block :data (plist-get element :id))
-   line-index
-   line-count))
-
-(defun gdocs-convert--example-block-to-requests (element index)
-  "Create paragraph requests for example-block ELEMENT at INDEX."
-  (let* ((lines (or (plist-get element :lines) '("")))
-         (line-count (length lines))
-         (line-index 0)
-         (requests nil)
-         (current index))
-    (dolist (line lines)
-      (let* ((paragraph (gdocs-convert--example-block-line-element
-                         element line line-index line-count))
-             (result (gdocs-convert--paragraph-to-requests paragraph current)))
-        (setq requests (nconc requests (plist-get result :requests)))
-        (setq current (plist-get result :index))
-        (cl-incf line-index)))
-    (list :requests requests :index current)))
-
-(defun gdocs-convert--source-block-to-requests (element index)
-  "Create paragraph requests for source-block ELEMENT at INDEX."
-  (let* ((lines (or (plist-get element :lines) '("")))
-         (line-count (length lines))
-         (line-index 0)
-         (requests nil)
-         (current index))
-    (dolist (line lines)
-      (let* ((paragraph (gdocs-convert--source-block-line-element
-                         element line line-index line-count))
-             (result (gdocs-convert--paragraph-to-requests paragraph current)))
-        (setq requests (nconc requests (plist-get result :requests)))
-        (setq current (plist-get result :index))
-        (cl-incf line-index)))
-    (list :requests requests :index current)))
 
 ;; ---------------------------------------------------------------------------
 ;;; Image -> requests
