@@ -24,6 +24,7 @@
 (require 's)
 (require 'gdocs-convert)
 (require 'gdocs-diff-status)
+(require 'gdocs-diff-semantics)
 
 ;; ---------------------------------------------------------------------------
 ;;; Public API
@@ -54,38 +55,12 @@ Operations: :keep, :delete, :insert, :modify."
 OLD-IR and NEW-IR are the element lists.  DIFF-OPS is the output
 of `gdocs-diff-compute-operations'.  START-INDEX is the UTF-16
 index where the first element begins (default 1)."
-  (let* ((native (or gdocs-convert-footnote-reference-text-function
-                     (seq-some (lambda (element) (plist-get element :segment-id)) old-ir)))
-         (body-ops (if native
-                       (mapcan
-                        (lambda (op)
-                          (let ((old-note (and (plist-member op :old-index)
-                                               (eq (plist-get (nth (plist-get op :old-index) old-ir) :type) 'footnote)))
-                                (new-note (and (plist-member op :new-index)
-                                               (eq (plist-get (nth (plist-get op :new-index) new-ir) :type) 'footnote))))
-                            (cond
-                             ((and old-note new-note) nil)
-                             (old-note (when (eq (plist-get op :op) 'modify)
-                                         (list (list :op 'insert :new-index (plist-get op :new-index)))))
-                             (new-note (when (eq (plist-get op :op) 'modify)
-                                         (list (list :op 'delete :old-index (plist-get op :old-index)))))
-                             (t (list op)))))
-                        diff-ops)
-                     diff-ops))
-         segment-requests)
-    (when native
-      (dolist (old old-ir)
-        (when (and (eq (plist-get old :type) 'footnote) (plist-get old :segment-id))
-          (when-let* ((new (seq-find (lambda (entry)
-                                       (and (eq (plist-get entry :type) 'footnote)
-                                            (equal (plist-get old :label) (plist-get entry :label)))) new-ir)))
-            (unless (equal (gdocs-diff--footnote-key old) (gdocs-diff--footnote-key new))
-              (setq segment-requests
-                    (append segment-requests (gdocs-convert-footnote-update-requests old new))))))))
-    ;; Existing segments must be updated before body edits can remove references.
+  (let* ((start (or start-index 1))
+         (plan (gdocs-diff-semantic-plan old-ir new-ir diff-ops start)))
     (gdocs-diff--filter-invalid-requests
-     (append segment-requests
-             (gdocs-diff--generate-requests old-ir new-ir body-ops (or start-index 1))))))
+     (append (plist-get plan :before)
+             (gdocs-diff--generate-requests
+              old-ir new-ir (plist-get plan :operations) start)))))
 
 (defun gdocs-diff--non-empty-delete-request-p (request)
   "Return non-nil if REQUEST is a non-empty deleteContentRange request."
@@ -127,8 +102,8 @@ identical keys."
     ('example-block (gdocs-diff--example-block-key element))
     ('quote-block (gdocs-diff--quote-block-key element))
     ('callout-block (gdocs-diff--callout-block-key element))
-    ('footnote (gdocs-diff--footnote-key element))
-    (_ (format "unknown:%s" (plist-get element :type)))))
+    (_ (or (plist-get (gdocs-diff-semantic-element element) :key)
+           (format "unknown:%s" (plist-get element :type))))))
 
 (defun gdocs-diff--marker-key (element)
   "Return a stable key fragment for semantic markers on ELEMENT."
@@ -157,19 +132,17 @@ identical keys."
       (format "@date(%s:%s)"
               (plist-get date :timestamp)
               (if (plist-get date :active) "active" "inactive"))))
-   ((plist-get run :footnote-label)
-    (format "@footnote(%s)" (plist-get run :footnote-label)))
+   ((plist-get (gdocs-diff-semantic-run run) :text))
    (t (or (plist-get run :text) ""))))
 
 (defun gdocs-diff--runs-semantic-text (runs)
   "Return stable semantic text for RUNS.
-When native date chips or footnote references are present, Google Docs may split
-or trim adjacent whitespace around the non-text element.  Collapse whitespace in
-that case while keeping a semantic token for the element itself."
+Non-text inline elements may split or trim adjacent whitespace on import.
+Normalize whitespace when requested by their semantic descriptors."
   (let ((text (mapconcat #'gdocs-diff--run-semantic-text runs "")))
     (if (seq-some (lambda (run)
                     (or (plist-get run :date-element)
-                        (plist-get run :footnote-label)))
+                        (plist-get (gdocs-diff-semantic-run run) :normalize-whitespace)))
                   runs)
         (string-trim (replace-regexp-in-string "[[:space:]]+" " " text))
       text)))
@@ -247,13 +220,6 @@ URIs.  This keeps create/fetch stable after native image insertion."
               "")
           (or (plist-get element :caption) "")))
 
-(defun gdocs-diff--footnote-key (element)
-  "Compute a content key for a footnote ELEMENT."
-  (let ((label (or (plist-get element :label) ""))
-        (text (gdocs-convert--runs-to-plain-text (plist-get element :contents))))
-    (format "footnote:%s:%s:%s" label text
-            (gdocs-diff--runs-formatting-key (plist-get element :contents)))))
-
 (defun gdocs-diff--normalized-runs-for-key (runs)
   "Return RUNS merged for formatting-key comparison."
   (let (result)
@@ -277,7 +243,7 @@ Google Docs often splits whitespace into separate text runs after fetch."
 (defun gdocs-diff--run-formatting-key (run)
   "Produce a formatting fingerprint string for RUN."
   (concat (when (plist-get run :status) (format "T%S" (plist-get run :status)))
-          (format "%s%s%s%s%s%s%s%s%s"
+          (format "%s%s%s%s%s%s%s%s"
                   (if (plist-get run :bold) "B" "")
                   (if (plist-get run :italic) "I" "")
                   (if (plist-get run :underline) "U" "")
@@ -291,10 +257,8 @@ Google Docs often splits whitespace into separate text runs after fetch."
                       (format "D(%s:%s)"
                               (plist-get date :timestamp)
                               (if (plist-get date :active) "active" "inactive"))
-                    "")
-                  (if (plist-get run :footnote-label)
-                      (format "F(%s)" (plist-get run :footnote-label))
-                    ""))))
+                    ""))
+          (plist-get (gdocs-diff-semantic-run run) :key)))
 
 (defun gdocs-diff--list-key (list-info)
   "Produce a key fragment for LIST-INFO, or empty string if nil."
@@ -466,10 +430,8 @@ the UTF-16 index where the first element begins (default 1)."
     ('example-block (gdocs-diff--example-block-utf16-length element))
     ('quote-block (gdocs-diff--quote-block-utf16-length element))
     ('callout-block (gdocs-diff--callout-block-utf16-length element))
-    ;; Footnotes are inline references; their content lives in a
-    ;; separate segment and does not consume body UTF-16 units.
-    ('footnote 0)
-    (_ (error "gdocs-diff: unknown element type: %s" (plist-get element :type)))))
+    (_ (or (plist-get (gdocs-diff-semantic-element element) :body-length)
+           (error "gdocs-diff: unknown element type: %s" (plist-get element :type))))))
 
 (defun gdocs-diff--source-block-utf16-length (element)
   "Compute UTF-16 length of source-block ELEMENT."
@@ -636,7 +598,7 @@ START-INDEX is the UTF-16 index where the first element begins."
      . ((range . ((startIndex . ,start)
                   (endIndex . ,end)
                   ;; Empty segmentId targets the document body
-                  ;; (as opposed to headers, footers, or footnotes)
+                  ;; rather than another document segment
                   (segmentId . "")))))))
 
 (defun gdocs-diff--make-delete-bullets-request (start end)
@@ -874,14 +836,13 @@ followed by per-run style requests for the new formatting."
          (logical-request (gdocs-convert--paragraph-logical-text-request
                            new-elem start reset-end))
          (style-reqs (gdocs-convert-make-text-style-requests runs start nil t))
-         (footnote-reqs
-          (gdocs-convert--make-footnote-reference-requests runs start)))
+         (semantic-reqs (gdocs-diff-semantic-run-requests runs start)))
     (list :delete-reqs nil
           :insert-reqs nil
           :style-reqs (append (when reset-req (list reset-req))
                               (when logical-request (list logical-request))
                               style-reqs
-                              footnote-reqs))))
+                              semantic-reqs))))
 
 (defun gdocs-diff--content-modification (old-elem new-elem range)
   "Generate delete+insert requests for a content change.
@@ -1095,7 +1056,7 @@ tokens so that comment anchors on unchanged text survive."
                 (list reset))))
            (logical-reqs
             (when-let* ((request (gdocs-convert--paragraph-logical-text-request
-                                 new-elem start (+ start new-text-len))))
+                                  new-elem start (+ start new-text-len))))
               (list request)))
            (run-reqs (gdocs-convert-make-text-style-requests runs start nil has-status))
            (status-markers
@@ -1108,12 +1069,11 @@ tokens so that comment anchors on unchanged text survive."
                                 (+ start (plist-get token :offset) (plist-get token :length))))))
            (list-reqs (gdocs-convert--make-list-requests
                        new-elem start para-end))
-           (footnote-reqs
-            (gdocs-convert--make-footnote-reference-requests runs start)))
+           (semantic-reqs (gdocs-diff-semantic-run-requests runs start)))
       (list :delete-reqs (append marker-deletions (unless same-visible-text delete-reqs))
             :insert-reqs (append (unless same-visible-text insert-reqs)
                                  style-reqs reset-reqs logical-reqs
-                                 run-reqs status-markers list-reqs footnote-reqs)
+                                 run-reqs status-markers list-reqs semantic-reqs)
             :style-reqs nil))))
 
 (defun gdocs-diff--deleted-token-ranges (old-tokens old-kept start)

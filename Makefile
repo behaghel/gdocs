@@ -20,6 +20,7 @@ TEST_FILES = \
   test/gdocs-convert-status-test.el \
   test/gdocs-styles-test.el \
   test/gdocs-diff-test.el \
+  test/gdocs-diff-encapsulation-test.el \
   test/gdocs-diff-status-test.el \
   test/gdocs-sync-test.el \
   test/gdocs-sync-status-test.el \

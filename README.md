@@ -72,6 +72,30 @@ The `gdocs-mode` minor mode activates automatically on linked buffers, providing
 
 Once a buffer is linked, changes are pushed to Google Docs on every save (when `gdocs-auto-push-on-save` is non-nil), and you can pull remote changes at any time with `M-x gdocs-pull`.
 
+## Semantic encapsulation
+
+Generic conversion/diff engines own traversal, sequence comparison, indexing and
+request assembly—not individual feature policy. Adding or modifying a semantic
+feature keeps its recognition, identity, normalization, model lengths, addressing
+and request rules in the feature's own modules. Moving only request construction
+while leaving feature branches in the engine does not satisfy this boundary.
+
+`gdocs-diff.el` depends on a semantic-neutral contract, not concrete feature
+modules. `gdocs-diff-semantics.el` defines three ordinary Emacs hooks and explicitly
+composes implementations:
+
+- Element descriptors supply content identity and body-model length.
+- Run descriptors supply semantic text/fingerprints, whitespace policy and an
+  optional reference-request emitter.
+- Request plans supply body operations and requests that precede body mutation.
+
+`gdocs-diff-footnotes.el` implements all footnote diff policy through those
+contracts, including zero-width references, native-segment matching and ordering.
+There is no runtime discovery, declaration DSL or custom feature registry. New
+extension points require a concrete behavior that the existing contract cannot
+express. Architecture tests enforce the boundary and exercise an unrelated
+synthetic semantic kind so the contract is not a renamed feature-specific API.
+
 ## Native footnote conversion
 
 `gdocs-convert-footnotes.el` owns footnote definition/run conversion, native
