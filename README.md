@@ -235,6 +235,36 @@ prefers an existing Org ID for a same-document heading. Cache ordering,
 normalization and dynamic callback context remain part of link resolution, not
 semantic conversion or typography policy.
 
+## List feature ownership
+
+`gdocs-convert-list-source.el` owns Org list and item recognition, top-level
+selection, positioned traversal and structural indentation cleanup.
+`gdocs-convert-lists.el` owns native roles, list rendering, counters and managed
+continuation semantics. `gdocs-convert-list-publish.el` owns native presets,
+nesting tabs, group assembly, alternating numbered presets and post-removal
+coordinates. Peer callout/task/continuation features supply their own repairs;
+publication keeps their established ordering. Existing helper APIs remain
+available through explicit module composition.
+
+`gdocs-diff-lists.el` owns list identity and membership, native prefixes,
+bullet request emission, preservation of existing list objects and removal of
+residual bullets from surviving paragraphs. Full structural replacement does
+not run bullet cleanup against the new non-paragraph element. Partial task
+state participates in identity, including inside callouts.
+
+The semantic composition module supplies a neutral paragraph descriptor with
+`:structure-key`, `:prefix`, `:compatible` and a `:requests` function. A separate
+finisher composes content and modification stages. Generic diff compares opaque
+structure and measures physical prefixes in UTF-16; it does not inspect list
+fields or native bullet types. Structure compatibility gates style-only and
+formatting-only shortcuts as well as word-level editing. An unrelated synthetic
+paragraph policy exercises this contract without list syntax or a registry.
+
+Description terms retain their rich inline content as visible `term :: body`
+text in ordinary Docs bullet paragraphs. Rendering and reparsing the standard
+Org description syntax preserves terms without duplicating them or requiring
+hidden term snapshots. Description syntax is not a native Docs control.
+
 ## List paragraph fidelity
 
 List counters retain independent state at each nesting level. Returning from a

@@ -12,6 +12,8 @@
 (require 'subr-x)
 (require 'gdocs-convert-paragraph-codec)
 (require 'gdocs-convert-tasks)
+(require 'gdocs-convert-list-source)
+(require 'gdocs-convert-list-publish)
 
 (declare-function gdocs-convert--range-marker "gdocs-convert" (markers type start end))
 (declare-function gdocs-convert--next-id "gdocs-convert" ())
@@ -129,9 +131,6 @@
                 (plist-put info :counter counter))
             (setq counters (assq-delete-all level counters))))))))
 
-(defconst gdocs-convert--list-indent-pt 36
-  "Points of indentation per list nesting level in Google Docs.")
-
 (defun gdocs-convert--dimension-magnitude (object field)
   "Return numeric magnitude for FIELD on Google Docs style OBJECT."
   (alist-get 'magnitude (alist-get field object)))
@@ -175,18 +174,12 @@
                                         gdocs-convert--checked-checkbox-glyphs
                                         gdocs-convert--partial-checkbox-glyphs)))))
 
-(defun gdocs-convert--list-type-to-preset (type)
-  "Convert an IR list TYPE to a Google Docs bullet preset string."
-  (pcase type
-    ('bullet "BULLET_DISC_CIRCLE_SQUARE")
-    ('number "NUMBERED_DECIMAL_ALPHA_ROMAN")
-    ('check (user-error "Task lists require managed glyph projection before native list planning"))))
-
 (defun gdocs-convert-list-item-positioned (item fallback depth)
   "Convert ITEM at DEPTH, retaining each direct paragraph and child list.
 FALLBACK is the containing list's type.  Continuations have no new bullet."
   (let* ((type (gdocs-convert--item-list-type item fallback))
          (state (org-element-property :checkbox item))
+         (tag (org-element-property :tag item))
          (first t) result)
     (cl-labels ((emit (paragraph)
                   (let* ((info (list :type type :level depth))
@@ -194,8 +187,13 @@ FALLBACK is the containing list's type.  Continuations have no new bullet."
                                  (gdocs-convert--trim-runs
                                   (gdocs-convert--strip-continuation-indent
                                    (gdocs-convert--objects-to-runs (org-element-contents paragraph))))))
+                         (body (if (and first tag)
+                                   (append (gdocs-convert--trim-runs
+                                            (gdocs-convert--objects-to-runs (if (stringp tag) (list tag) tag)))
+                                           (list (gdocs-convert--make-plain-run " :: ")) runs)
+                                 runs))
                          (element (list :type 'paragraph :style 'normal
-                                        :contents (or runs (list (gdocs-convert--make-plain-run "")))
+                                        :contents (or body (list (gdocs-convert--make-plain-run "")))
                                         :id (gdocs-convert--next-id))))
                     (if first
                         (progn
@@ -332,6 +330,14 @@ FALLBACK is the containing list's type.  Continuations have no new bullet."
   (when (seq-some #'gdocs-convert-list-continuation-p ir)
     (gdocs-convert--assign-list-counters ir))
   ir)
+
+(defun gdocs-convert-list-compact-p (element)
+  "Return non-nil when ELEMENT is a compact primary list paragraph."
+  (plist-get element :list))
+
+(defun gdocs-convert-list-boundary-p (previous element)
+  "Return non-nil when ELEMENT starts a list after non-list PREVIOUS."
+  (and (gdocs-convert-list-compact-p element) (not (gdocs-convert-list-compact-p previous))))
 
 (provide 'gdocs-convert-lists)
 ;;; gdocs-convert-lists.el ends here

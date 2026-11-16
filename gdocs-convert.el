@@ -160,87 +160,86 @@ with :ir (the IR element) and :begin (buffer position).
 The result is sorted by buffer position."
   (let ((result nil))
     (org-element-map ast '(headline paragraph plain-list table
-                           horizontal-rule keyword src-block
-                           example-block quote-block center-block
-                           verse-block special-block fixed-width
-                           latex-environment footnote-definition
-                           drawer)
-      (lambda (el)
-        (let ((parent-type (org-element-type (org-element-parent el))))
-          (pcase (org-element-type el)
-            ('headline
-             (push (list :ir (gdocs-convert--headline-to-ir el)
-                         :begin (org-element-property :begin el))
-                   result))
-            ('paragraph
-             (when (gdocs-convert--top-level-paragraph-p el)
-               (let ((begin (org-element-property :begin el)))
-                 (dolist (ir (gdocs-convert--paragraph-to-ir el))
-                   (push (list :ir ir :begin begin) result)))))
-            ('plain-list
-             (when (gdocs-convert--top-level-list-p el)
-               (dolist (entry (gdocs-convert--plain-list-positioned el 0))
-                 (push entry result))))
-            ('table
-             (when (eq (org-element-property :type el) 'org)
-               (push (list :ir (gdocs-convert--table-to-ir el)
-                           :begin (org-element-property :begin el))
-                     result)))
-            ('horizontal-rule
-             (push (list :ir (list :type 'horizontal-rule
-                                   :id (gdocs-convert--next-id))
-                         :begin (org-element-property :begin el))
-                   result))
-            ('quote-block
-             (when (not (eq parent-type 'item))
-               (push (list :ir (gdocs-convert--quote-block-to-ir el)
-                           :begin (org-element-property :begin el))
-                     result)))
-            ('src-block
-             (push (list :ir (gdocs-convert--src-block-to-ir el)
-                         :begin (org-element-property :begin el))
-                   result))
-            ('example-block
-             (push (list :ir (gdocs-convert--example-block-to-ir el)
-                         :begin (org-element-property :begin el))
-                   result))
-            ('keyword
-             (when (gdocs-convert--preservable-keyword-p el)
-               (push (list :ir (gdocs-convert--keyword-to-ir el)
-                           :begin (org-element-property :begin el))
-                     result)))
-            ('center-block
-             (when (not (eq parent-type 'item))
-               (let ((begin (org-element-property :begin el)))
-                 (dolist (ir-elem (gdocs-convert--center-block-to-ir el))
-                   (push (list :ir ir-elem :begin begin) result)))))
-            ('verse-block
-             (when (not (eq parent-type 'item))
-               (push (list :ir (gdocs-convert--verse-block-to-ir el)
-                           :begin (org-element-property :begin el))
-                     result)))
-            ('special-block
-             (when (not (eq parent-type 'item))
-               (let ((begin (org-element-property :begin el)))
-                 (dolist (ir-elem (gdocs-convert--special-block-to-ir el))
-                   (push (list :ir ir-elem :begin begin) result)))))
-            ('fixed-width
-             (let ((begin (org-element-property :begin el)))
-               (dolist (ir-elem (gdocs-convert--fixed-width-to-ir el))
-                 (push (list :ir ir-elem :begin begin) result))))
-            ('latex-environment
-             (let ((begin (org-element-property :begin el)))
-               (dolist (ir-elem (gdocs-convert--latex-environment-to-ir el))
-                 (push (list :ir ir-elem :begin begin) result))))
-            ('footnote-definition
-             (push (list :ir (gdocs-convert--footnote-definition-to-ir el)
-                         :begin (org-element-property :begin el))
-                   result))
-            ('drawer
-             (push (list :ir (gdocs-convert--drawer-to-ir el)
-                         :begin (org-element-property :begin el))
-                   result))
-            (_ nil)))))
+                                    horizontal-rule keyword src-block
+                                    example-block quote-block center-block
+                                    verse-block special-block fixed-width
+                                    latex-environment footnote-definition
+                                    drawer)
+                     (lambda (el)
+                       (let ((parent-type (org-element-type (org-element-parent el))))
+                         (pcase (org-element-type el)
+                           ('headline
+                            (push (list :ir (gdocs-convert--headline-to-ir el)
+                                        :begin (org-element-property :begin el))
+                                  result))
+                           ('paragraph
+                            (when (gdocs-convert--top-level-paragraph-p el)
+                              (let ((begin (org-element-property :begin el)))
+                                (dolist (ir (gdocs-convert--paragraph-to-ir el))
+                                  (push (list :ir ir :begin begin) result)))))
+                           ('plain-list
+                            (dolist (entry (gdocs-convert-list-source-positioned el))
+                              (push entry result)))
+                           ('table
+                            (when (eq (org-element-property :type el) 'org)
+                              (push (list :ir (gdocs-convert--table-to-ir el)
+                                          :begin (org-element-property :begin el))
+                                    result)))
+                           ('horizontal-rule
+                            (push (list :ir (list :type 'horizontal-rule
+                                                  :id (gdocs-convert--next-id))
+                                        :begin (org-element-property :begin el))
+                                  result))
+                           ('quote-block
+                            (when (not (eq parent-type 'item))
+                              (push (list :ir (gdocs-convert--quote-block-to-ir el)
+                                          :begin (org-element-property :begin el))
+                                    result)))
+                           ('src-block
+                            (push (list :ir (gdocs-convert--src-block-to-ir el)
+                                        :begin (org-element-property :begin el))
+                                  result))
+                           ('example-block
+                            (push (list :ir (gdocs-convert--example-block-to-ir el)
+                                        :begin (org-element-property :begin el))
+                                  result))
+                           ('keyword
+                            (when (gdocs-convert--preservable-keyword-p el)
+                              (push (list :ir (gdocs-convert--keyword-to-ir el)
+                                          :begin (org-element-property :begin el))
+                                    result)))
+                           ('center-block
+                            (when (not (eq parent-type 'item))
+                              (let ((begin (org-element-property :begin el)))
+                                (dolist (ir-elem (gdocs-convert--center-block-to-ir el))
+                                  (push (list :ir ir-elem :begin begin) result)))))
+                           ('verse-block
+                            (when (not (eq parent-type 'item))
+                              (push (list :ir (gdocs-convert--verse-block-to-ir el)
+                                          :begin (org-element-property :begin el))
+                                    result)))
+                           ('special-block
+                            (when (not (eq parent-type 'item))
+                              (let ((begin (org-element-property :begin el)))
+                                (dolist (ir-elem (gdocs-convert--special-block-to-ir el))
+                                  (push (list :ir ir-elem :begin begin) result)))))
+                           ('fixed-width
+                            (let ((begin (org-element-property :begin el)))
+                              (dolist (ir-elem (gdocs-convert--fixed-width-to-ir el))
+                                (push (list :ir ir-elem :begin begin) result))))
+                           ('latex-environment
+                            (let ((begin (org-element-property :begin el)))
+                              (dolist (ir-elem (gdocs-convert--latex-environment-to-ir el))
+                                (push (list :ir ir-elem :begin begin) result))))
+                           ('footnote-definition
+                            (push (list :ir (gdocs-convert--footnote-definition-to-ir el)
+                                        :begin (org-element-property :begin el))
+                                  result))
+                           ('drawer
+                            (push (list :ir (gdocs-convert--drawer-to-ir el)
+                                        :begin (org-element-property :begin el))
+                                  result))
+                           (_ nil)))))
     (sort (nreverse result)
           (lambda (a b) (< (plist-get a :begin) (plist-get b :begin))))))
 
@@ -249,49 +248,11 @@ The result is sorted by buffer position."
   (mapcar (lambda (entry) (plist-get entry :ir))
           (gdocs-convert--walk-org-data-positioned ast)))
 
-(defun gdocs-convert--plain-list-positioned (plain-list depth)
-  "Convert PLAIN-LIST to positioned IR entries at nesting DEPTH.
-Returns a list of (:ir ELEMENT :begin POS) plists."
-  (let ((list-type (gdocs-convert--org-list-type plain-list))
-        (result nil))
-    (dolist (item (org-element-contents plain-list))
-      (when (eq (org-element-type item) 'item)
-        (setq result
-              (nconc result
-                     (gdocs-convert--item-positioned
-                      item list-type depth)))))
-    result))
-
-(defun gdocs-convert--item-list-type (item fallback-type)
-  "Return list type for ITEM, falling back to FALLBACK-TYPE.
-A checkbox on one Org item does not make sibling plain bullets into tasks, even
-when the containing plain-list uses checklist rendering for mixed items."
-  (let ((bullet (or (org-element-property :bullet item) "")))
-    (cond
-     ((org-element-property :checkbox item) 'check)
-     ((string-match-p "\\`[0-9]+[.)][[:space:]]+" bullet) 'number)
-     ((string-match-p "\\`[A-Za-z]+[.)][[:space:]]+" bullet) 'number)
-     ((eq fallback-type 'check) 'bullet)
-     (t fallback-type))))
-
-(defun gdocs-convert--item-positioned (item list-type depth)
-  "Convert list ITEM to positioned IR entries.
-LIST-TYPE is `bullet', `number', or `check'.  DEPTH is the
-0-based nesting level.
-Returns a list of (:ir ELEMENT :begin POS) plists."
-  (gdocs-convert-list-item-positioned item list-type depth))
-
 (defun gdocs-convert--top-level-paragraph-p (paragraph)
   "Return non-nil if PARAGRAPH is a direct section child.
 A paragraph inside a list item is handled by the list walker, and
 a paragraph inside a quote block is handled by the quote walker."
   (let ((parent-type (org-element-type (org-element-parent paragraph))))
-    (or (eq parent-type 'section)
-        (eq parent-type 'org-data))))
-
-(defun gdocs-convert--top-level-list-p (plain-list)
-  "Return non-nil if PLAIN-LIST is a direct document/section child."
-  (let ((parent-type (org-element-type (org-element-parent plain-list))))
     (or (eq parent-type 'section)
         (eq parent-type 'org-data))))
 
@@ -404,38 +365,6 @@ whitespace from the last.  Returns nil if no text remains."
 
 ;; ---------------------------------------------------------------------------
 ;;; Lists -> IR
-
-(defun gdocs-convert--org-list-type (plain-list)
-  "Determine the IR list type symbol for PLAIN-LIST.
-Returns `bullet', `number', or `check'."
-  (let ((type (org-element-property :type plain-list)))
-    (pcase type
-      ('ordered 'number)
-      ('descriptive 'bullet)
-      (_ (if (gdocs-convert--list-has-checkboxes-p plain-list)
-             'check
-           'bullet)))))
-
-(defun gdocs-convert--list-has-checkboxes-p (plain-list)
-  "Return non-nil if any item in PLAIN-LIST has a checkbox."
-  (org-element-map plain-list 'item
-    (lambda (item)
-      (org-element-property :checkbox item))
-    nil t))
-
-(defun gdocs-convert--strip-continuation-indent (runs)
-  "Strip continuation line indentation from list item RUNS.
-When `org-element' parses a multi-line list item, it preserves
-the structural indentation in the text.  This function removes
-it so the IR text is clean for round-tripping."
-  (mapcar (lambda (run)
-            (let ((text (plist-get run :text)))
-              (if (string-match-p "\n" text)
-                  (plist-put (copy-sequence run) :text
-                             (replace-regexp-in-string
-                              "\n[ \t]+" "\n" text))
-                run)))
-          runs))
 
 ;; ---------------------------------------------------------------------------
 ;;; Quote blocks -> IR
@@ -643,7 +572,7 @@ merge the heading text into that list item."
     (let ((previous-type (plist-get previous :type))
           (previous-style (plist-get previous :style))
           (type (plist-get element :type))
-          (list-info (plist-get element :list)))
+          (compact (gdocs-convert-list-compact-p element)))
       (or (gdocs-convert-list-continuation-p element)
           (gdocs-convert-callout-element-p previous)
           (gdocs-convert-callout-element-p element)
@@ -651,7 +580,7 @@ merge the heading text into that list item."
           (gdocs-convert-quote-element-p element)
           (gdocs-convert-code-block-element-p previous)
           (gdocs-convert-code-block-element-p element)
-          (and list-info (not (plist-get previous :list)))
+          (gdocs-convert-list-boundary-p previous element)
           (and (eq previous-type 'paragraph)
                (gdocs-convert--heading-style-p previous-style))
           (eq type 'table)
@@ -659,7 +588,7 @@ merge the heading text into that list item."
           (eq type 'footnote)
           (gdocs-convert-image-element-p element)
           (and (eq type 'paragraph)
-               (not list-info)
+               (not compact)
                (not (eq previous-type 'horizontal-rule)))))))
 
 (defun gdocs-convert--ir-element-to-org (element)
@@ -949,16 +878,6 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
 ;; ---------------------------------------------------------------------------
 ;;; Paragraph -> requests
 
-(defun gdocs-convert--list-leading-prefix (element)
-  "Return leading tab prefix for ELEMENT's list nesting level.
-Google Docs `createParagraphBullets' determines native nesting by counting and
-removing leading tabs, not by paragraph indentation alone."
-  (let* ((list-info (plist-get element :list))
-         (level (and list-info (or (plist-get list-info :level) 0))))
-    (if (and level (> level 0))
-        (make-string level ?\t)
-      "")))
-
 (defun gdocs-convert--paragraph-logical-text-request (element start end)
   "Return logical text styling for paragraph ELEMENT between START and END.
 Normal paragraphs, including lists, inherit configured body text styling
@@ -1146,267 +1065,6 @@ Returns nil if no formatting is applied."
     (when-let ((size (plist-get run :font-size)))
       (push `(fontSize . ((magnitude . ,size) (unit . "PT"))) style))
     style))
-
-(defun gdocs-convert--make-list-requests (element start end)
-  "Create bullet/list requests for ELEMENT from START to END."
-  (let ((list-info (plist-get element :list)))
-    (when list-info
-      (let* ((type (plist-get list-info :type))
-             (level (plist-get list-info :level))
-             (preset (gdocs-convert--list-type-to-preset type))
-             (bullet-req `((createParagraphBullets
-                            . ((range . ((startIndex . ,start)
-                                         (endIndex . ,(1- end))))
-                               (bulletPreset . ,preset)))))
-             (indent-req (gdocs-convert--make-list-indent-request
-                          level start end)))
-        (if indent-req
-            (list indent-req bullet-req)
-          (list bullet-req))))))
-
-(defun gdocs-convert--make-list-indent-request (level start end)
-  "Create an updateParagraphStyle request for list nesting LEVEL.
-START and END define the paragraph range.  Returns nil for level 0,
-since `createParagraphBullets' already sets the correct indentation.
-
-IMPORTANT: This request must appear BEFORE the corresponding
-`createParagraphBullets' request in the batchUpdate sequence.
-Google Docs reads pre-existing paragraph indentation when creating
-bullets and uses it to determine the nesting level."
-  (when (> level 0)
-    ;; indentStart = left margin for continuation (wrapped) lines.
-    ;; indentFirstLine = bullet glyph position, one half-indent less.
-    (let ((indent-start (* gdocs-convert--list-indent-pt (1+ level)))
-          (indent-first (+ (/ gdocs-convert--list-indent-pt 2)
-                           (* gdocs-convert--list-indent-pt level))))
-      `((updateParagraphStyle
-         . ((paragraphStyle
-             . ((indentStart . ((magnitude . ,indent-start)
-                                (unit . "PT")))
-                (indentFirstLine . ((magnitude . ,indent-first)
-                                    (unit . "PT")))))
-            (range . ((startIndex . ,start)
-                      (endIndex . ,(1- end))))
-            (fields . "indentStart,indentFirstLine")))))))
-
-(defconst gdocs-convert--numbered-presets
-  '("NUMBERED_DECIMAL_ALPHA_ROMAN" "NUMBERED_DECIMAL_NESTED")
-  "Numbered bullet presets that look identical at nesting level 0.
-Used to alternate presets between consecutive numbered list groups,
-preventing Google Docs from merging them in a single batchUpdate.")
-
-(defun gdocs-convert--alternate-numbered-presets (groups)
-  "Alternate presets for consecutive numbered list GROUPS.
-Mutates the :preset of each group in place.  Consecutive groups
-whose preset starts with \"NUMBERED_\" receive alternating
-presets so that Google Docs creates separate list objects."
-  (let ((prev-preset nil))
-    (dolist (group groups)
-      (let ((preset (plist-get group :preset)))
-        (when (and (string= preset prev-preset)
-                   (string-prefix-p "NUMBERED_" preset))
-          (plist-put group :preset
-                     (gdocs-convert--next-numbered-preset preset)))
-        (setq prev-preset (plist-get group :preset))))))
-
-(defun gdocs-convert--next-numbered-preset (preset)
-  "Return the next numbered preset after PRESET, cycling through options."
-  (let* ((idx (seq-position gdocs-convert--numbered-presets preset))
-         (next (% (1+ (or idx 0)) (length gdocs-convert--numbered-presets))))
-    (nth next gdocs-convert--numbered-presets)))
-
-(defun gdocs-convert--fixup-list-nesting (requests element-ranges)
-  "Fix list nesting in REQUESTS by merging per-paragraph bullet requests.
-ELEMENT-RANGES is a list of plists (:element EL :start S :end E) tracking
-where each IR element was placed.
-
-The Google Docs API only assigns correct nesting levels when
-`createParagraphBullets' covers an entire contiguous list group in
-a single request, with indentation pre-set on nested items.
-Per-paragraph bullet requests produce flat lists.
-
-This function removes per-paragraph `createParagraphBullets' and
-appends a single merged request per contiguous list group.
-Consecutive numbered groups receive alternating presets to prevent
-Google Docs from merging them into one continuous list."
-  (let ((groups (gdocs-convert--find-list-groups element-ranges)))
-    (if (null groups)
-        requests
-      (let ((filtered (cl-remove-if
-                       (lambda (req)
-                         (and (alist-get 'createParagraphBullets req)
-                              (gdocs-convert--bullet-request-in-list-groups-p
-                               req groups)))
-                       requests)))
-        (gdocs-convert--alternate-numbered-presets groups)
-        (append filtered
-                ;; Leading tabs are removed by createParagraphBullets, so run
-                ;; later list groups first to keep their pre-removal indices
-                ;; valid.
-                (mapcar #'gdocs-convert--list-group-bullet-request
-                        (reverse groups))
-                (gdocs-convert--callout-list-post-bullet-indent-resets
-                 element-ranges)
-                (gdocs-convert--guard-non-list-paragraphs
-                 element-ranges groups)
-                (gdocs-convert-task-post-bullet-indents element-ranges)
-                (gdocs-convert-list-continuation-post-bullet-indents element-ranges))))))
-
-(defun gdocs-convert--bullet-request-in-list-groups-p (request groups)
-  "Return non-nil if bullet REQUEST belongs to one of GROUPS."
-  (when-let* ((bullet (alist-get 'createParagraphBullets request))
-              (range (alist-get 'range bullet))
-              (start (alist-get 'startIndex range))
-              (end (alist-get 'endIndex range)))
-    (seq-some (lambda (group)
-                (and (>= start (plist-get group :start))
-                     (<= end (1- (plist-get group :end)))))
-              groups)))
-
-(defun gdocs-convert--find-list-groups (element-ranges)
-  "Find contiguous groups of list elements in ELEMENT-RANGES.
-Returns a list of groups, where each group is a plist with
-:start (index of first element), :end (index after last element),
-and :preset (bullet preset string)."
-  (let ((groups nil)
-        (current-start nil)
-        (current-end nil)
-        (current-preset nil))
-    (dolist (range element-ranges)
-      (let* ((elem (plist-get range :element))
-             (list-info (or (plist-get elem :list)
-                            (gdocs-convert-list-continuation-native-group elem))))
-        (if list-info
-            (let ((preset (gdocs-convert--list-type-to-preset
-                           (plist-get list-info :type))))
-              (if (and current-start
-                       (string= preset current-preset))
-                  ;; Extend current group
-                  (setq current-end (plist-get range :end))
-                ;; Flush previous group and start new one
-                (when current-start
-                  (push (list :start current-start
-                              :end current-end
-                              :preset current-preset)
-                        groups))
-                (setq current-start (plist-get range :start)
-                      current-end (plist-get range :end)
-                      current-preset preset)))
-          ;; Non-list element: flush current group
-          (when current-start
-            (push (list :start current-start
-                        :end current-end
-                        :preset current-preset)
-                  groups)
-            (setq current-start nil
-                  current-end nil
-                  current-preset nil)))))
-    ;; Flush final group
-    (when current-start
-      (push (list :start current-start
-                  :end current-end
-                  :preset current-preset)
-            groups))
-    (nreverse groups)))
-
-(defun gdocs-convert--list-prefix-length-for-element (element)
-  "Return leading tab count inserted for ELEMENT."
-  (if (plist-get element :list)
-      (length (gdocs-convert--list-leading-prefix element))
-    0))
-
-(defun gdocs-convert--list-prefixes-before (range element-ranges)
-  "Return number of list prefix tabs before RANGE in ELEMENT-RANGES."
-  (let ((start (plist-get range :start))
-        (total 0))
-    (dolist (candidate element-ranges total)
-      (when (< (plist-get candidate :start) start)
-        (setq total (+ total
-                       (gdocs-convert--list-prefix-length-for-element
-                        (plist-get candidate :element))))))))
-
-(defun gdocs-convert--list-group-bullet-request (group)
-  "Create a single createParagraphBullets request for GROUP.
-GROUP is a plist with :start, :end, and :preset."
-  (let ((start (plist-get group :start))
-        (end (plist-get group :end))
-        (preset (plist-get group :preset)))
-    `((createParagraphBullets
-       . ((range . ((startIndex . ,start)
-                    (endIndex . ,(1- end))))
-          (bulletPreset . ,preset))))))
-
-(defun gdocs-convert--guard-non-list-paragraphs (element-ranges groups)
-  "Generate `deleteParagraphBullets' for non-list paragraphs near GROUPS.
-ELEMENT-RANGES is the full list of element ranges.  GROUPS is the
-list of list groups from `gdocs-convert--find-list-groups'.
-
-The Google Docs API can extend bullet formatting to heading
-paragraphs adjacent to `createParagraphBullets' ranges.  This
-function emits defensive `deleteParagraphBullets' requests for
-every non-list paragraph that sits between consecutive list
-groups, immediately before the first group, or immediately after
-the last group."
-  (when groups
-    (let ((requests nil)
-          (gaps (gdocs-convert--list-group-gaps element-ranges groups)))
-      (dolist (range element-ranges)
-        (let* ((elem (plist-get range :element))
-               (start (plist-get range :start))
-               (end (plist-get range :end)))
-          (when (and (eq (plist-get elem :type) 'paragraph)
-                     (not (plist-get elem :list))
-                     (gdocs-convert--in-any-gap-p start end gaps))
-            ;; These guards run after createParagraphBullets.  Google Docs
-            ;; removes leading tabs used to create native nested levels, so
-            ;; guard ranges after list items must be shifted left by the count
-            ;; of removed list-prefix tabs before the guarded paragraph.
-            (let* ((removed-before (gdocs-convert--list-prefixes-before
-                                    range element-ranges))
-                   (adjusted-start (- start removed-before))
-                   (adjusted-end (- end removed-before)))
-              (when (< adjusted-start adjusted-end)
-                (push `((deleteParagraphBullets
-                         . ((range
-                             . ((startIndex . ,adjusted-start)
-                                (endIndex . ,(1- adjusted-end)))))))
-                      requests))))))
-      (nreverse requests))))
-
-(defun gdocs-convert--list-group-gaps (element-ranges groups)
-  "Compute gap ranges around and between GROUPS.
-ELEMENT-RANGES provides the document extent.  Returns a list of
-\(GAP-START . GAP-END) cons cells covering the region immediately
-before the first group, between consecutive groups, and
-immediately after the last group."
-  (let ((gaps nil)
-        (first-group (car groups))
-        (last-group (car (last groups))))
-    (cl-loop for (g1 g2) on groups
-             while g2
-             do (push (cons (plist-get g1 :end)
-                            (plist-get g2 :start))
-                      gaps))
-    (gdocs-convert--add-edge-gaps
-     gaps first-group last-group element-ranges)))
-
-(defun gdocs-convert--add-edge-gaps (gaps first-group last-group ranges)
-  "Add edge gaps before FIRST-GROUP and after LAST-GROUP to GAPS.
-RANGES provides the document extent.  Returns the augmented gap list."
-  (let ((doc-start (plist-get (car ranges) :start))
-        (doc-end (plist-get (car (last ranges)) :end)))
-    (when (> (plist-get first-group :start) doc-start)
-      (push (cons doc-start (plist-get first-group :start)) gaps))
-    (when (< (plist-get last-group :end) doc-end)
-      (push (cons (plist-get last-group :end) doc-end) gaps))
-    gaps))
-
-(defun gdocs-convert--in-any-gap-p (start end gaps)
-  "Return non-nil if the range START..END falls within any gap in GAPS."
-  (cl-some (lambda (gap)
-             (and (>= start (car gap))
-                  (<= end (cdr gap))))
-           gaps))
 
 (defun gdocs-convert--make-marker-requests (element start end)
   "Create named range requests for org-only markers in ELEMENT.

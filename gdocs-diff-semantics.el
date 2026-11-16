@@ -61,6 +61,21 @@ explicit nil operations means no body operations, not an unmatched plan.")
 (require 'gdocs-diff-callouts)
 (require 'gdocs-diff-tasks)
 (require 'gdocs-diff-list-continuations)
+(require 'gdocs-diff-lists)
+
+(defun gdocs-diff-semantic-paragraph (element &optional old)
+  "Describe ELEMENT's opaque paragraph structure and compatibility with OLD."
+  (gdocs-diff-lists-paragraph element old))
+
+(defun gdocs-diff-semantic-paragraph-requests (element start end)
+  "Emit feature-owned paragraph requests for ELEMENT at START..END."
+  (when-let* ((emit (plist-get (gdocs-diff-semantic-paragraph element) :requests)))
+    (funcall emit element start end)))
+
+(defun gdocs-diff-semantic-finish-paragraph (old new range result stage)
+  "Compose feature-owned OLD to NEW paragraph RESULT finalization at RANGE.
+STAGE identifies content planning or the complete modification envelope."
+  (gdocs-diff-lists-finish old new range result stage))
 
 (defun gdocs-diff-semantic-project-ir (ir)
   "Compose feature-owned physical projections before generic diffing of IR."

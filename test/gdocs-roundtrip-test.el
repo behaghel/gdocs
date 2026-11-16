@@ -321,10 +321,15 @@
     (should (plist-get (plist-get (car items) :list) :checked))))
 
 (ert-deftest gdocs-roundtrip/org-descriptive-list ()
-  "Descriptive list items are parsed into IR."
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir "- Term :: Definition")))
-    (should ir)
-    (should (>= (length ir) 1))))
+  "Description terms and definitions survive IR, publication and reparse."
+  (let* ((ir (gdocs-roundtrip-test--org-to-ir "- Term :: Definition"))
+         (rendered (gdocs-convert-ir-to-org ir))
+         (again (gdocs-convert-org-string-to-ir rendered)))
+    (should (equal rendered "- Term :: Definition\n"))
+    (should (equal (gdocs-convert-ir-to-org again) rendered))
+    (should (seq-some (lambda (request)
+                        (equal (alist-get 'text (alist-get 'insertText request)) "Term :: Definition\n"))
+                      (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-nested-list-levels ()
   "Nested lists produce items with increasing :level."
@@ -1238,6 +1243,18 @@ rather than requiring an obsolete quote-styled-paragraph representation."
                      (gdocs-convert-org-string-to-ir
                       "1. Parent\n   1. Child\n   2. Child two\n2. Next parent\n"))))
       (should (string-match-p "^2\\. Next parent$" rendered)))))
+
+(ert-deftest gdocs-roundtrip/specimen-list-feature-encapsulation ()
+  "Public specimens retain description terms and list feature publication."
+  (let* ((source (gdocs-convert-org-string-to-ir (gdocs-roundtrip-test--read-org-fixture)))
+         (native (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture)))
+         (rendered (gdocs-convert-ir-to-org source))
+         (requests (gdocs-convert-ir-to-docs-requests source))
+         (text (mapconcat (lambda (request) (or (alist-get 'text (alist-get 'insertText request)) "")) requests "")))
+    (dolist (term '("Emacs ::" "Org mode ::" "gdocs ::"))
+      (should (string-match-p (regexp-quote term) rendered))
+      (should (string-match-p (regexp-quote term) text)))
+    (should (gdocs-convert-ir-to-docs-requests native))))
 
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

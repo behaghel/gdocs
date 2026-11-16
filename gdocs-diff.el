@@ -147,16 +147,16 @@ Normalize whitespace when requested by their semantic descriptors."
 
 (defun gdocs-diff--paragraph-key (element)
   "Compute a content key for a paragraph ELEMENT.
-Includes type, style, list info, semantic markers, and full run details."
+Includes style, opaque paragraph structure, markers, and full run details."
   (let ((style (symbol-name (or (plist-get element :style) 'normal)))
         (style-name (symbol-name (or (plist-get element :style-name) 'none)))
         (text (gdocs-diff--runs-semantic-text (plist-get element :contents)))
         (formatting (gdocs-diff--runs-formatting-key
                      (plist-get element :contents)))
-        (list-key (gdocs-diff--list-key (plist-get element :list)))
+        (structure-key (plist-get (gdocs-diff-semantic-paragraph element) :structure-key))
         (marker-key (gdocs-diff--marker-key element)))
     (format "paragraph:%s:%s:%s:%s:%s:%s"
-            style style-name list-key marker-key formatting text)))
+            style style-name structure-key marker-key formatting text)))
 
 (defun gdocs-diff--normalized-runs-for-key (runs)
   "Return RUNS merged for formatting-key comparison."
@@ -205,15 +205,6 @@ reference identity."
           (when (plist-get run :subscript) "_sub")
           (when (plist-get run :superscript) "^sup")
           (plist-get (gdocs-diff-semantic-run run) :key)))
-
-(defun gdocs-diff--list-key (list-info)
-  "Produce a key fragment for LIST-INFO, or empty string if nil."
-  (if list-info
-      (format "%s:%d:%s"
-              (plist-get list-info :type)
-              (plist-get list-info :level)
-              (plist-get list-info :checked))
-    ""))
 
 ;; ---------------------------------------------------------------------------
 ;;; LCS (Longest Common Subsequence)
@@ -483,13 +474,6 @@ START-INDEX is the UTF-16 index where the first element begins."
                   ;; rather than another document segment
                   (segmentId . "")))))))
 
-(defun gdocs-diff--make-delete-bullets-request (start end)
-  "Create a deleteParagraphBullets request covering START to END."
-  `((deleteParagraphBullets
-     . ((range . ((startIndex . ,start)
-                  ;; Exclude trailing newline from bullet range
-                  (endIndex . ,(1- end))))))))
-
 ;; ---------------------------------------------------------------------------
 ;;; Insertion requests
 
@@ -603,24 +587,7 @@ RANGE is a (START . END) cons.  Returns a plist with
            (gdocs-diff--formatting-only-modification new-elem range))
           (t
            (gdocs-diff--content-modification old-elem new-elem range)))))
-    ;; Handle bullet removal: all modification paths preserve the
-    ;; trailing newline (paragraph identity), so residual bullets
-    ;; persist unless explicitly deleted.  Use the NEW paragraph
-    ;; extent for the range because by the time this request
-    ;; executes, the content modification has already replaced the
-    ;; text—the old range can exceed the document boundary if the
-    ;; new text is shorter.
-    (when (and (plist-get old-elem :list)
-               (not (plist-get new-elem :list)))
-      (let* ((new-text (gdocs-convert--runs-to-plain-text
-                        (plist-get new-elem :contents)))
-             (new-len (gdocs-convert--string-to-utf16-length new-text))
-             (new-end (+ (car range) new-len 1)))
-        (plist-put result :style-reqs
-                   (append (plist-get result :style-reqs)
-                           (list (gdocs-diff--make-delete-bullets-request
-                                  (car range) new-end))))))
-    result))
+    (gdocs-diff-semantic-finish-paragraph old-elem new-elem range result 'modification)))
 
 (defun gdocs-diff--same-text-paragraphs-p (old-elem new-elem)
   "Return non-nil if OLD-ELEM and NEW-ELEM are paragraphs with identical text."
@@ -628,15 +595,6 @@ RANGE is a (START . END) cons.  Returns a plist with
        (eq (plist-get new-elem :type) 'paragraph)
        (equal (gdocs-diff--runs-semantic-text (plist-get old-elem :contents))
               (gdocs-diff--runs-semantic-text (plist-get new-elem :contents)))))
-
-(defun gdocs-diff--same-list-p (old-elem new-elem)
-  "Return non-nil if both elements are list items of the same type and level."
-  (let ((old-list (plist-get old-elem :list))
-        (new-list (plist-get new-elem :list)))
-    (and old-list new-list
-         (eq (plist-get old-list :type) (plist-get new-list :type))
-         (= (or (plist-get old-list :level) 0)
-            (or (plist-get new-list :level) 0)))))
 
 (defun gdocs-diff--same-paragraph-shape-p (old-elem new-elem)
   "Return non-nil if OLD-ELEM and NEW-ELEM have same paragraph shape."
@@ -648,8 +606,8 @@ RANGE is a (START . END) cons.  Returns a plist with
                (plist-get old-elem :contents))
               (gdocs-diff--runs-formatting-key
                (plist-get new-elem :contents)))
-       (equal (gdocs-diff--list-key (plist-get old-elem :list))
-              (gdocs-diff--list-key (plist-get new-elem :list)))))
+       (equal (plist-get (gdocs-diff-semantic-paragraph old-elem) :structure-key)
+              (plist-get (gdocs-diff-semantic-paragraph new-elem) :structure-key))))
 
 (defun gdocs-diff--only-marker-changed-p (old-elem new-elem)
   "Return non-nil if only semantic paragraph markers differ."
@@ -669,6 +627,7 @@ RANGE is a (START . END) cons.  Returns a plist with
 (defun gdocs-diff--only-style-changed-p (old-elem new-elem)
   "Return non-nil if only the paragraph style differs between elements."
   (and (gdocs-diff--same-text-paragraphs-p old-elem new-elem)
+       (plist-get (gdocs-diff-semantic-paragraph new-elem old-elem) :compatible)
        (or (not (equal (plist-get old-elem :style)
                        (plist-get new-elem :style)))
            (not (equal (plist-get old-elem :style-name)
@@ -681,6 +640,7 @@ RANGE is a (START . END) cons.  Returns a plist with
 (defun gdocs-diff--only-formatting-changed-p (old-elem new-elem)
   "Return non-nil if only run formatting differs between elements."
   (and (gdocs-diff--same-text-paragraphs-p old-elem new-elem)
+       (plist-get (gdocs-diff-semantic-paragraph new-elem old-elem) :compatible)
        (equal (plist-get old-elem :style)
               (plist-get new-elem :style))
        (equal (plist-get old-elem :style-name)
@@ -736,42 +696,18 @@ paragraph) or non-paragraph old element, performs a full delete
 and re-insert to avoid partial structural deletions that the API
 rejects.
 
-When both paragraphs are list items of the same type and level,
-the `createParagraphBullets' request is suppressed.  The trailing
-newline preservation keeps the paragraph in its existing list
-object, so re-emitting a bullet with a fixed preset would
-overwrite the alternated preset from the create path and cause
-Google Docs to merge separate numbered lists.
-
-When the list structure is unchanged (same type and level, or both
-non-list), a word-level diff is used to generate targeted delete
-and insert requests for only the changed tokens, preserving
-comment anchors on unchanged text."
+Compatible paragraph structures use a word-level diff to preserve comment
+anchors on unchanged tokens.  Feature-owned finalizers retain or replace the
+native paragraph structure; the kernel does not interpret its identity."
   (let* ((start (car range))
          (end (cdr range)))
     (if (and (eq (plist-get old-elem :type) 'paragraph)
              (eq (plist-get new-elem :type) 'paragraph))
-        (let* ((same-list-structure
-                (or (and (null (plist-get old-elem :list))
-                         (null (plist-get new-elem :list)))
-                    (gdocs-diff--same-list-p old-elem new-elem)))
-               (result
-                (if same-list-structure
-                    (gdocs-diff--word-level-paragraph-modification
-                     old-elem new-elem start end)
-                  (gdocs-diff--paragraph-content-modification
-                   new-elem start end))))
-          ;; Suppress createParagraphBullets when list membership is
-          ;; unchanged — the paragraph retains its existing list object.
-          (when (or (gdocs-diff--same-list-p old-elem new-elem)
-                    (and (null (plist-get old-elem :list))
-                         (null (plist-get new-elem :list))))
-            (plist-put result :insert-reqs
-                       (cl-remove-if
-                        (lambda (req)
-                          (alist-get 'createParagraphBullets req))
-                        (plist-get result :insert-reqs))))
-          result)
+        (let ((result
+               (if (plist-get (gdocs-diff-semantic-paragraph new-elem old-elem) :compatible)
+                   (gdocs-diff--word-level-paragraph-modification old-elem new-elem start end)
+                 (gdocs-diff--paragraph-content-modification new-elem start end))))
+          (gdocs-diff-semantic-finish-paragraph old-elem new-elem range result 'content))
       (let* ((delete-req (gdocs-diff--make-delete-request start end))
              (insert-result (gdocs-convert--ir-element-to-requests
                              new-elem start)))
@@ -786,17 +722,13 @@ Handles text deletion and insertion, paragraph style, text
 formatting, and list properties.  Deletes [START, END-1) to
 preserve the trailing newline, then inserts new text at START.
 
-For nested list items, prepends tab characters so
-`createParagraphBullets' can determine the nesting level.
-A text-style reset clears inherited formatting before per-run
-styles are applied."
+Feature-owned physical prefixes precede body text.  A text-style reset
+clears inherited formatting before per-run styles are applied."
   (let* ((text (gdocs-convert--runs-to-plain-text
                 (plist-get new-elem :contents)))
-         (list-info (plist-get new-elem :list))
-         (level (if list-info (or (plist-get list-info :level) 0) 0))
-         (tabs (make-string level ?\t))
-         (tab-offset level)          ; each \t = 1 UTF-16 unit
-         (insert-text (concat tabs text))
+         (prefix (or (plist-get (gdocs-diff-semantic-paragraph new-elem) :prefix) ""))
+         (prefix-length (gdocs-convert--string-to-utf16-length prefix))
+         (insert-text (concat prefix text))
          (text-len (gdocs-convert--string-to-utf16-length text))
          (insert-len (gdocs-convert--string-to-utf16-length insert-text))
          ;; para-end accounts for tabs + text + trailing newline
@@ -811,16 +743,15 @@ styles are applied."
                       new-elem start para-end))
          ;; Reset formatting on tabs + text (excluding trailing
          ;; newline) to clear inherited styles.
-         (reset-end (+ start tab-offset text-len))
+         (reset-end (+ start prefix-length text-len))
          (reset-req (when (> reset-end start)
                       (gdocs-convert--make-text-style-reset-request
                        start reset-end)))
          ;; Per-run styles start after the tab prefix.
          (run-reqs (gdocs-convert--make-text-style-requests
                     (plist-get new-elem :contents)
-                    (+ start tab-offset)))
-         (list-reqs (gdocs-convert--make-list-requests
-                     new-elem start para-end)))
+                    (+ start prefix-length)))
+         (list-reqs (gdocs-diff-semantic-paragraph-requests new-elem start para-end)))
     ;; Pack style, run, and list requests into :insert-reqs so the
     ;; caller groups them with the text insertion at the same index,
     ;; keeping the whole modification atomic.
@@ -949,8 +880,7 @@ tokens so that comment anchors on unchanged text survive."
                                 (plist-get token :status)
                                 (+ start (plist-get token :offset))
                                 (+ start (plist-get token :offset) (plist-get token :length))))))
-           (list-reqs (gdocs-convert--make-list-requests
-                       new-elem start para-end))
+           (list-reqs (gdocs-diff-semantic-paragraph-requests new-elem start para-end))
            (semantic-reqs (gdocs-diff-semantic-run-requests runs start)))
       (list :delete-reqs (append marker-deletions (unless same-visible-text delete-reqs))
             :insert-reqs (append (unless same-visible-text insert-reqs)
