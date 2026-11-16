@@ -58,6 +58,12 @@ explicit nil operations means no body operations, not an unmatched plan.")
 (require 'gdocs-diff-images)
 (require 'gdocs-diff-code-blocks)
 (require 'gdocs-diff-quotes)
+(require 'gdocs-diff-callouts)
+(require 'gdocs-diff-tasks)
+
+(defun gdocs-diff-semantic-project-ir (ir)
+  "Compose feature-owned physical projections before generic diffing of IR."
+  (gdocs-diff-tasks-project-ir ir))
 
 (provide 'gdocs-diff-semantics)
 ;;; gdocs-diff-semantics.el ends here

@@ -45,7 +45,9 @@ account for title elements or other content that precedes the IR."
   "Compute diff operations between OLD-IR and NEW-IR.
 Returns a list of operation plists with :op and relevant indices.
 Operations: :keep, :delete, :insert, :modify."
-  (let* ((old-keys (gdocs-diff--element-keys old-ir))
+  (let* ((old-ir (gdocs-diff-semantic-project-ir old-ir))
+         (new-ir (gdocs-diff-semantic-project-ir new-ir))
+         (old-keys (gdocs-diff--element-keys old-ir))
          (new-keys (gdocs-diff--element-keys new-ir))
          (lcs-pairs (gdocs-diff--lcs old-keys new-keys)))
     (gdocs-diff--classify-operations old-ir new-ir lcs-pairs)))
@@ -55,7 +57,9 @@ Operations: :keep, :delete, :insert, :modify."
 OLD-IR and NEW-IR are the element lists.  DIFF-OPS is the output
 of `gdocs-diff-compute-operations'.  START-INDEX is the UTF-16
 index where the first element begins (default 1)."
-  (let* ((start (or start-index 1))
+  (let* ((old-ir (gdocs-diff-semantic-project-ir old-ir))
+         (new-ir (gdocs-diff-semantic-project-ir new-ir))
+         (start (or start-index 1))
          (plan (gdocs-diff-semantic-plan old-ir new-ir diff-ops start)))
     (gdocs-diff--filter-invalid-requests
      (append (plist-get plan :before)
@@ -96,7 +100,6 @@ identical keys."
     ('paragraph (gdocs-diff--paragraph-key element))
     ('horizontal-rule "horizontal-rule")
     ('page-break "page-break")
-    ('callout-block (gdocs-diff--callout-block-key element))
     (_ (or (plist-get (gdocs-diff-semantic-element element) :key)
            (format "unknown:%s" (plist-get element :type))))))
 
@@ -154,22 +157,6 @@ Includes type, style, list info, semantic markers, and full run details."
         (marker-key (gdocs-diff--marker-key element)))
     (format "paragraph:%s:%s:%s:%s:%s:%s"
             style style-name list-key marker-key formatting text)))
-
-(defun gdocs-diff--callout-block-key (element)
-  "Compute a content key for callout-block ELEMENT."
-  (format "callout-block:%s:%s:%s:%s"
-          (or (plist-get element :callout-type) "info")
-          (or (plist-get element :title) "")
-          (or (plist-get element :style-revision) "")
-          (mapconcat (lambda (body-element)
-                       (let ((runs (plist-get body-element :contents)))
-                         (format "%s:%s:%s"
-                                 (or (plist-get body-element :list) 'none)
-                                 (gdocs-diff--runs-formatting-key runs)
-                                 (gdocs-convert--runs-to-plain-text runs))))
-                     (gdocs-convert--callout-body-elements-from-paragraphs
-                      element)
-                     "\n\n")))
 
 (defun gdocs-diff--normalized-runs-for-key (runs)
   "Return RUNS merged for formatting-key comparison."
@@ -378,30 +365,14 @@ the UTF-16 index where the first element begins (default 1)."
 (defun gdocs-diff--element-utf16-length (element)
   "Compute the UTF-16 code unit length of ELEMENT in the document."
   (pcase (plist-get element :type)
-    ('paragraph (gdocs-diff--paragraph-utf16-length element))
+    ('paragraph (or (plist-get (gdocs-diff-semantic-element element) :body-length)
+                    (gdocs-diff--paragraph-utf16-length element)))
     ;; Horizontal rules and page breaks each occupy a single
     ;; structural element in the document body (1 UTF-16 unit).
     ('horizontal-rule 1)
     ('page-break 1)
-    ('callout-block (gdocs-diff--callout-block-utf16-length element))
     (_ (or (plist-get (gdocs-diff-semantic-element element) :body-length)
            (error "gdocs-diff: unknown element type: %s" (plist-get element :type))))))
-
-(defun gdocs-diff--callout-block-utf16-length (element)
-  "Compute UTF-16 length of callout-block ELEMENT."
-  (let* ((type (or (plist-get element :callout-type) "info"))
-         (title (plist-get element :title))
-         (label-len (1+ (gdocs-convert--string-to-utf16-length
-                         (gdocs-convert--callout-label type title))))
-         (body-len (apply #'+
-                          (mapcar (lambda (body-element)
-                                    (1+ (gdocs-convert--string-to-utf16-length
-                                         (gdocs-convert--runs-to-plain-text
-                                          (plist-get body-element :contents)))))
-                                  (gdocs-convert--callout-body-elements-from-paragraphs
-                                   element)))))
-    ;; Includes the generated unmarked empty separator paragraph.
-    (+ label-len body-len 1)))
 
 (defun gdocs-diff--paragraph-utf16-length (element)
   "Compute UTF-16 length of a paragraph ELEMENT including trailing newline."
@@ -969,7 +940,7 @@ tokens so that comment anchors on unchanged text survive."
             (when-let* ((request (gdocs-convert--paragraph-logical-text-request
                                   new-elem start (+ start new-text-len))))
               (list request)))
-           (run-reqs (gdocs-convert-make-text-style-requests runs start nil has-status))
+           (run-reqs (gdocs-convert-make-text-style-requests runs start nil t))
            (status-markers
             (when has-status
               (cl-loop for token in new-tokens for index from 0

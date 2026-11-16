@@ -11,6 +11,7 @@
 (require 's)
 (require 'subr-x)
 (require 'gdocs-convert-paragraph-codec)
+(require 'gdocs-convert-tasks)
 
 (declare-function gdocs-convert--range-marker "gdocs-convert" (markers type start end))
 (defun gdocs-convert--task-state-marker (markers start end)
@@ -20,6 +21,7 @@
 (defun gdocs-convert-list-paragraph-from-docs (paragraph lists-map markers runs start end)
   "Decode list PARAGRAPH with LISTS-MAP, MARKERS, RUNS and START..END, or nil."
   (when-let* ((bullet (alist-get 'bullet paragraph)))
+    (gdocs-convert-task-validate-native-list paragraph lists-map markers start end)
     (let ((info (gdocs-convert--docs-bullet-to-list
                  bullet lists-map markers start end (alist-get 'paragraphStyle paragraph))))
       (gdocs-convert-paragraph-from-docs paragraph runs markers start end 'normal (list :list info)))))
@@ -155,6 +157,13 @@
                                 (append gdocs-convert--unchecked-checkbox-glyphs
                                         gdocs-convert--checked-checkbox-glyphs
                                         gdocs-convert--partial-checkbox-glyphs)))))
+
+(defun gdocs-convert--list-type-to-preset (type)
+  "Convert an IR list TYPE to a Google Docs bullet preset string."
+  (pcase type
+    ('bullet "BULLET_DISC_CIRCLE_SQUARE")
+    ('number "NUMBERED_DECIMAL_ALPHA_ROMAN")
+    ('check (user-error "Task lists require managed glyph projection before native list planning"))))
 
 (provide 'gdocs-convert-lists)
 ;;; gdocs-convert-lists.el ends here

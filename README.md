@@ -235,6 +235,57 @@ prefers an existing Org ID for a same-document heading. Cache ordering,
 normalization and dynamic callback context remain part of link resolution, not
 semantic conversion or typography policy.
 
+## Callout conversion
+
+`gdocs-convert-callouts.el` owns callout syntax and attributes, type/title
+validation, body extraction, native label/body/list metadata, grouping, Org
+rendering, publication geometry and post-bullet shading repair.
+`gdocs-diff-callouts.el` supplies semantic identity and physical body length.
+Generic conversion and diff algorithms delegate these policies without
+classifying callout kinds. Paragraph construction, transport, accounts and
+asynchronous orchestration remain separate.
+
+Callouts retain native paragraph boundaries and begin a new block at every
+label, even when adjacent blocks have identical metadata. UTF-8 titles are
+URL-decoded as UTF-8. Published labels record their applied prefix so visible
+title edits remain meaningful after local presentation changes; ambiguous or
+unrecognized label edits fail closed rather than restoring a stale title.
+Named-range metadata is bounded by the native UTF-16 name limit.
+
+Versioned list metadata retains list type, nesting and counters without
+stripping list-looking authored text. Task completion is not stored there:
+managed visible glyphs own it. Org rendering separates lists from subsequent
+prose so a paragraph cannot become a task continuation on reparse. Unsupported
+nested callout list shading fails before publication instead of flattening it.
+
+## Managed task glyphs
+
+`gdocs-convert-tasks.el` projects Org `[ ]`, `[X]` and `[-]` task items to
+editable Docs text `☐`, `☑` and `◩`, followed by a space and the rich body.
+These are text glyphs, not click-to-toggle native controls. Pull reads the
+visible glyph as completion state; metadata identifies managed tasks and
+nesting, never an authoritative hidden completion snapshot. Unmarked glyph
+lookalikes remain ordinary text, and task-body lookalikes remain literal.
+The named range anchors the separator after the glyph, so replacing just the
+glyph preserves its identity. Missing glyphs, malformed/orphaned annotations,
+unsupported segments and table contexts fail closed with actionable errors.
+
+Version-one nesting uses 36-point structural steps and reads observable native
+indentation against that convention. Task planning clears native bullet
+membership and repairs indentation after adjacent native list operations.
+Rich-body spans and markers start after the two-unit glyph/space prefix.
+`gdocs-diff-tasks.el` projects semantic task paragraphs before generic diffing,
+owns prefix descriptors and removes stale range annotations before edits.
+Changed prefixes are annotated once; no-op/repeated pushes emit no requests.
+
+Native checkbox completion is not exposed by the documented Docs API. Known
+native checkbox forms and legacy-marked task controls are rejected rather than
+silently reset. An unspecified glyph also occurs in ordinary native bullets,
+so it cannot prove checkbox semantics: unmarked native checklists cannot be
+automatically recognized or faithfully imported. Use managed glyph tasks for
+synchronized state, or republish authoritative Org to establish that format;
+never infer completion from strike-through or an old metadata snapshot.
+
 ## Quote block conversion
 
 `gdocs-convert-quotes.el` owns source/context quote recognition, paragraph

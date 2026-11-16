@@ -2093,7 +2093,7 @@
                         (let ((range (alist-get 'createNamedRange request)))
                           (and range
                                (string-prefix-p
-                                "gdocs-org-marker:callout-list:elem-003:bullet:0"
+                                "gdocs-org-marker:callout-list:elem-003:v2:"
                                 (alist-get 'name range)))))
                       requests))
     (should (seq-some (lambda (request)
@@ -2192,7 +2192,7 @@
          (requests (gdocs-convert-ir-to-docs-requests round-trip-ir)))
     (should (= (length pulled-ir) 1))
     (should (= (plist-get (car pulled-ir) :doc-end) 24))
-    (should (string-search "#+BEGIN_CALLOUT\nIntro.\n- one\nOutro.\n#+END_CALLOUT" pulled-org))
+    (should (string-search "#+BEGIN_CALLOUT\nIntro.\n\n- one\n\nOutro.\n#+END_CALLOUT" pulled-org))
     (should (= (length (plist-get (car round-trip-ir) :body-elements)) 3))
     (should (= (cl-count-if
                 (lambda (request)
@@ -2345,8 +2345,8 @@
          (org (gdocs-convert-ir-to-org (gdocs-convert-docs-json-to-ir json))))
     (should (string-search "#+BEGIN_CALLOUT\n- one\n- two\n#+END_CALLOUT" org))))
 
-(ert-deftest gdocs-convert-test-docs-json-marked-callout-merges-soft-wrap ()
-  "Callout body paragraphs split by an Org soft newline merge by marker id."
+(ert-deftest gdocs-convert-test-docs-json-marked-callout-keeps-paragraph-breaks ()
+  "Native callout paragraph breaks remain structure even with matching marker IDs."
   (let* ((body-elements
           (vector `((startIndex . 1)
                     (endIndex . 8)
@@ -2377,7 +2377,7 @@
     (should (eq (plist-get block :type) 'callout-block))
     (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
                            (plist-get block :paragraphs))
-                   '("Wrapped continuation")))))
+                   '("Wrapped" "continuation")))))
 
 (ert-deftest gdocs-convert-test-docs-json-marked-callout-ignores-empty-chrome ()
   "Marked empty callout body paragraphs are visual chrome, not content."

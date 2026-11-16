@@ -36,6 +36,8 @@
 (require 'gdocs-convert-lists)
 (require 'gdocs-convert-code-blocks)
 (require 'gdocs-convert-quotes)
+(require 'gdocs-convert-callouts)
+(require 'gdocs-convert-tasks)
 (require 'gdocs-convert-org-blocks)
 (require 'gdocs-convert-headings)
 (require 'gdocs-convert-status)
@@ -58,21 +60,6 @@
 
 ;; ---------------------------------------------------------------------------
 ;;; Semantic feature configuration
-
-(defcustom gdocs-callout-types '("info" "note" "warning" "tip" "important")
-  "Supported semantic Org callout types."
-  :type '(repeat string)
-  :group 'gdocs)
-
-(defcustom gdocs-callout-labels
-  '(("info" . "ℹ️ Info")
-    ("note" . "📝 Note")
-    ("warning" . "⚠️ Warning")
-    ("tip" . "💡 Tip")
-    ("important" . "❗ Important"))
-  "Visible labels used for semantic callout types."
-  :type '(alist :key-type string :value-type string)
-  :group 'gdocs)
 
 ;; ---------------------------------------------------------------------------
 ;;; Public API: org -> IR
@@ -346,49 +333,6 @@ a paragraph inside a quote block is handled by the quote walker."
     (or (eq parent-type 'section)
         (eq parent-type 'org-data))))
 
-(defun gdocs-convert--reject-nested-block-list-elements (elements block-name)
-  "Signal if ELEMENTS contain nested list items inside BLOCK-NAME."
-  (when-let* ((nested (seq-find
-                       (lambda (element)
-                         (let ((list-info (plist-get element :list)))
-                           (and list-info
-                                (> (or (plist-get list-info :level) 0) 0))))
-                       elements)))
-    (user-error "Unsupported Org %s nested list item `%s'; Google Docs paragraph shading cannot preserve nested list indentation and full block background in v1"
-                block-name
-                (gdocs-convert--runs-to-plain-text
-                 (plist-get nested :contents)))))
-
-(defun gdocs-convert--block-body-elements (block allowed-types block-name)
-  "Return positioned body element IR for direct children of Org BLOCK.
-ALLOWED-TYPES is a list of permitted direct child element types.  BLOCK-NAME is
-used in diagnostics.  V1 supports paragraph/list container children on this
-shared path; unsupported or visually lossy children fail closed before remote
-mutation."
-  (let (entries)
-    (dolist (child (org-element-contents block))
-      (unless (stringp child)
-        (let ((child-type (org-element-type child)))
-          (unless (memq child-type allowed-types)
-            (user-error "Unsupported Org %s child `%s'; v1 supports paragraphs and lists only"
-                        block-name child-type))
-          (pcase child-type
-            ('paragraph
-             (when-let* ((ir (gdocs-convert--paragraph-child-to-ir child)))
-               (push (list :ir ir
-                           :begin (org-element-property :begin child))
-                     entries)))
-            ('plain-list
-             (setq entries
-                   (nconc (gdocs-convert--plain-list-positioned child 0)
-                          entries)))))))
-    (let ((elements (mapcar (lambda (entry) (plist-get entry :ir))
-                            (sort entries
-                                  (lambda (a b) (< (plist-get a :begin)
-                                                   (plist-get b :begin)))))))
-      (gdocs-convert--reject-nested-block-list-elements elements block-name)
-      elements)))
-
 (defun gdocs-convert--preservable-keyword-p (keyword)
   "Return non-nil if KEYWORD should be emitted into Google Docs content.
 Document metadata such as AUTHOR, DATE, EMAIL, and LANGUAGE is intentionally
@@ -490,7 +434,8 @@ whitespace from the last.  Returns nil if no text remains."
 
 (defun gdocs-convert--inline-run-policy (run)
   "Compose feature-owned normalization and addressing policy for RUN."
-  (append (gdocs-convert-code-run-policy run)
+  (append (gdocs-convert-task-run-policy run)
+          (gdocs-convert-code-run-policy run)
           (gdocs-convert-date-run-policy run)
           (gdocs-convert-status-run-policy run)
           (gdocs-convert-footnote-run-policy run)))
@@ -587,8 +532,7 @@ it so the IR text is clean for round-tripping."
 
 (defun gdocs-convert--special-block-to-ir (special-block)
   "Convert a SPECIAL-BLOCK element to IR elements with a marker."
-  (if (gdocs-convert--callout-block-p special-block)
-      (list (gdocs-convert--callout-block-to-ir special-block))
+  (or (gdocs-convert-callout-source-block special-block)
     (let ((block-type (org-element-property :type special-block))
           (result nil))
       (org-element-map special-block 'paragraph
@@ -605,62 +549,6 @@ it so the IR text is clean for round-tripping."
                           :id (gdocs-convert--next-id))
                     result)))))
       (nreverse result))))
-
-(defun gdocs-convert--callout-block-p (special-block)
-  "Return non-nil if SPECIAL-BLOCK is the canonical callout block."
-  (string= (upcase (or (org-element-property :type special-block) ""))
-           "CALLOUT"))
-
-(defun gdocs-convert--callout-attributes (special-block)
-  "Return callout attributes from SPECIAL-BLOCK."
-  (let* ((attr (org-export-read-attribute :attr_callout special-block))
-         (type (or (plist-get attr :type) "info"))
-         (title (plist-get attr :title)))
-    (list :type (gdocs-convert--unquote-org-attribute type)
-          :title (gdocs-convert--unquote-org-attribute title))))
-
-(defun gdocs-convert--unquote-org-attribute (value)
-  "Return VALUE without one layer of Org attribute string quoting."
-  (cond
-   ((not (stringp value)) value)
-   ((string-match-p "\\`\".*\"\\'" value)
-    (condition-case nil
-        (car (read-from-string value))
-      (error (string-trim value "\"" "\""))))
-   (t value)))
-
-(defun gdocs-convert--validate-callout-type (type)
-  "Signal an error unless TYPE is a supported callout type."
-  (unless (member type gdocs-callout-types)
-    (user-error "Unsupported Org callout type `%s'; supported types: %s"
-                type (s-join ", " gdocs-callout-types))))
-
-(defun gdocs-convert--validate-callout-body (special-block)
-  "Signal when SPECIAL-BLOCK callout contains unsupported direct children."
-  (gdocs-convert--block-body-elements special-block '(paragraph plain-list)
-                                      "callout")
-  nil)
-
-(defun gdocs-convert--callout-body-elements (special-block)
-  "Return ordered paragraph IR elements for SPECIAL-BLOCK callout body."
-  (gdocs-convert--block-body-elements special-block '(paragraph plain-list)
-                                      "callout"))
-
-(defun gdocs-convert--callout-block-to-ir (special-block)
-  "Convert canonical Org SPECIAL-BLOCK callout to callout-block IR."
-  (let* ((attributes (gdocs-convert--callout-attributes special-block))
-         (type (or (plist-get attributes :type) "info"))
-         (title (plist-get attributes :title))
-         (body-elements (gdocs-convert--callout-body-elements special-block)))
-    (gdocs-convert--validate-callout-type type)
-    (list :type 'callout-block
-          :callout-type type
-          :title title
-          :body-elements body-elements
-          :paragraphs (mapcar (lambda (element)
-                                (plist-get element :contents))
-                              body-elements)
-          :id (gdocs-convert--next-id))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Fixed-width -> IR
@@ -809,14 +697,13 @@ merge the heading text into that list item."
     (let ((previous-type (plist-get previous :type))
           (previous-style (plist-get previous :style))
           (type (plist-get element :type))
-          (list-info (plist-get element :list))
-          (block-types '(callout-block)))
-      (or (gdocs-convert-quote-element-p previous)
+          (list-info (plist-get element :list)))
+      (or (gdocs-convert-callout-element-p previous)
+          (gdocs-convert-callout-element-p element)
+          (gdocs-convert-quote-element-p previous)
           (gdocs-convert-quote-element-p element)
           (gdocs-convert-code-block-element-p previous)
           (gdocs-convert-code-block-element-p element)
-          (memq previous-type block-types)
-          (memq type block-types)
           (and list-info (not (plist-get previous :list)))
           (and (eq previous-type 'paragraph)
                (gdocs-convert--heading-style-p previous-style))
@@ -870,41 +757,6 @@ MARKER is a list of marker plists."
 ;; ---------------------------------------------------------------------------
 ;;; IR footnote -> org
 
-(defun gdocs-convert--callout-body-elements-from-paragraphs (element)
-  "Return backward-compatible callout body elements for ELEMENT."
-  (or (plist-get element :body-elements)
-      (mapcar (lambda (runs)
-                (list :type 'paragraph
-                      :style 'normal
-                      :contents runs))
-              (plist-get element :paragraphs))))
-
-(defun gdocs-convert--join-callout-body-org (elements)
-  "Join callout body ELEMENTS as Org text."
-  (gdocs-convert--assign-list-counters elements)
-  (let ((parts nil)
-        previous-list-p)
-    (dolist (element elements)
-      (let ((current-list-p (plist-get element :list))
-            (text (gdocs-convert--ir-paragraph-to-org element)))
-        (when parts
-          (push (if (or previous-list-p current-list-p) "\n" "\n\n") parts))
-        (push text parts)
-        (setq previous-list-p current-list-p)))
-    (apply #'concat (nreverse parts))))
-
-(defun gdocs-convert--ir-callout-block-to-org (element)
-  "Convert callout-block IR ELEMENT to Org callout block text."
-  (let* ((type (or (plist-get element :callout-type) "info"))
-         (title (plist-get element :title))
-         (attrs (concat "#+ATTR_CALLOUT: :type " type
-                        (if (and title (not (string-empty-p title)))
-                            (format " :title %S" title)
-                          "")))
-         (body (gdocs-convert--join-callout-body-org
-                (gdocs-convert--callout-body-elements-from-paragraphs element))))
-    (format "%s\n#+BEGIN_CALLOUT\n%s\n#+END_CALLOUT" attrs body)))
-
 ;; ---------------------------------------------------------------------------
 ;;; Public API: Google Docs JSON -> IR
 
@@ -922,6 +774,7 @@ like `body', `title', `lists', and `namedRanges'."
          (markers (gdocs-convert--parse-named-range-markers named-ranges))
          (footnote-refs nil)
          (result nil))
+    (gdocs-convert-task-validate-native-context content markers)
     (when title
       (push (list :type 'paragraph
                   :style 'title
@@ -966,137 +819,6 @@ like `body', `title', `lists', and `namedRanges'."
                             (alist-get 'footnotes json) footnote-refs)))))))))
       (gdocs-convert--assign-list-counters ir)
       ir)))
-
-(defun gdocs-convert--callout-marker-p (marker)
-  "Return non-nil if MARKER is a callout grouping marker."
-  (memq (plist-get marker :type) '(callout-label callout-body)))
-
-(defun gdocs-convert--callout-marker (element)
-  "Return the first callout marker on ELEMENT, or nil."
-  (seq-find #'gdocs-convert--callout-marker-p
-            (plist-get element :gdocs-marker)))
-
-(defun gdocs-convert--callout-marker-data (marker)
-  "Return plist data decoded from callout MARKER."
-  (let* ((raw (or (plist-get marker :data) "info:"))
-         (parts (s-split ":" raw))
-         (type (or (car parts) "info"))
-         (title (when-let* ((encoded (cadr parts)))
-                  (url-unhex-string encoded))))
-    (list :type type :title (and title (not (string-empty-p title)) title))))
-
-(defun gdocs-convert--callout-list-marker (element)
-  "Return the callout list marker on ELEMENT, or nil."
-  (seq-find (lambda (marker)
-              (eq (plist-get marker :type) 'callout-list))
-            (plist-get element :gdocs-marker)))
-
-(defun gdocs-convert--callout-list-marker-data (marker)
-  "Return list metadata decoded from callout-list MARKER."
-  (let* ((raw (or (plist-get marker :data) "bullet:0"))
-         (parts (s-split ":" raw))
-         (type (intern (or (car parts) "bullet")))
-         (level (string-to-number (or (cadr parts) "0"))))
-    (list :type type :level level)))
-
-(defun gdocs-convert--strip-callout-list-prefix (element list-info)
-  "Return ELEMENT contents with visible LIST-INFO marker prefix removed."
-  (let* ((marker (gdocs-convert--list-marker
-                  (plist-get list-info :type) list-info))
-         (copy (copy-sequence element))
-         (runs (copy-sequence (plist-get copy :contents))))
-    (when runs
-      (let ((first (copy-sequence (car runs))))
-        (when (string-prefix-p marker (or (plist-get first :text) ""))
-          (plist-put first :text (substring (plist-get first :text)
-                                            (length marker)))
-          (setq runs (cons first (cdr runs)))
-          (plist-put copy :contents runs))))
-    copy))
-
-(defun gdocs-convert--restore-callout-list-element (element)
-  "Return ELEMENT with callout-list marker restored as list metadata."
-  (if-let* ((marker (gdocs-convert--callout-list-marker element)))
-      (let* ((list-info (gdocs-convert--callout-list-marker-data marker))
-             (copy (gdocs-convert--strip-callout-list-prefix element
-                                                             list-info)))
-        (plist-put copy :list list-info)
-        copy)
-    element))
-
-(defun gdocs-convert--attach-callout-block-markers (ir)
-  "Group marked callout paragraphs in IR.
-Consume one following empty paragraph as generated callout separator chrome so
-subsequent diffs treat the separator as part of the owning callout block."
-  (let ((result nil)
-        (remaining ir))
-    (while remaining
-      (let* ((element (car remaining))
-             (marker (gdocs-convert--callout-marker element)))
-        (if marker
-            (let* ((data (gdocs-convert--callout-marker-data marker))
-                   (type (plist-get data :type))
-                   (title (plist-get data :title))
-                   (paragraphs nil)
-                   (last-body-marker-id nil)
-                   (start (plist-get element :doc-start))
-                   end)
-              (while (and remaining
-                          (let ((candidate-marker
-                                 (gdocs-convert--callout-marker (car remaining))))
-                            (and candidate-marker
-                                 (equal data
-                                        (gdocs-convert--callout-marker-data
-                                         candidate-marker)))))
-                (when (and (eq (plist-get (gdocs-convert--callout-marker
-                                           (car remaining))
-                                          :type)
-                               'callout-body)
-                           (not (gdocs-convert--empty-paragraph-p
-                                 (car remaining))))
-                  (let* ((marker (gdocs-convert--callout-marker (car remaining)))
-                         (marker-id (plist-get marker :id))
-                         (restored (gdocs-convert--restore-callout-list-element
-                                    (car remaining))))
-                    (if (and paragraphs
-                             marker-id
-                             (equal marker-id last-body-marker-id)
-                             (not (plist-get restored :list))
-                             (not (plist-get (car paragraphs) :list))
-                             (gdocs-convert--soft-wrap-continuation-p
-                              (plist-get restored :contents)))
-                        (let ((merged (copy-sequence (car paragraphs))))
-                          (plist-put
-                           merged :contents
-                           (gdocs-convert--merge-adjacent-runs
-                            (append (plist-get (car paragraphs) :contents)
-                                    (list (gdocs-convert--make-plain-run " "))
-                                    (plist-get restored :contents))))
-                          (setcar paragraphs merged))
-                      (push restored paragraphs))
-                    (setq last-body-marker-id marker-id)))
-                (setq end (plist-get (car remaining) :doc-end))
-                (setq remaining (cdr remaining)))
-              (let ((separator (gdocs-convert--consume-generated-separator
-                                remaining end)))
-                (setq remaining (plist-get separator :remaining))
-                (setq end (plist-get separator :end)))
-              (let ((body-elements (nreverse paragraphs)))
-                (push (append (list :type 'callout-block
-                                    :callout-type type
-                                    :title title
-                                    :body-elements body-elements
-                                    :paragraphs (mapcar (lambda (paragraph)
-                                                          (plist-get paragraph
-                                                                     :contents))
-                                                        body-elements)
-                                    :id (gdocs-convert--next-id))
-                            (when start (list :doc-start start))
-                            (when end (list :doc-end end)))
-                    result)))
-          (push element result)
-          (setq remaining (cdr remaining)))))
-    (nreverse result)))
 
 (defun gdocs-convert--structural-element-to-ir (element lists-map markers
                                                         &optional inline-objects)
@@ -1157,16 +879,18 @@ otherwise."
 (defun gdocs-convert--docs-paragraph-to-ir (paragraph lists-map markers &optional start end)
   "Compose native PARAGRAPH decoding with LISTS-MAP, MARKERS and START..END."
   (let ((runs (gdocs-convert-paragraph-docs-runs paragraph markers)))
-    (or (gdocs-convert-list-paragraph-from-docs paragraph lists-map markers runs start end)
+    (or (gdocs-convert-task-paragraph-from-docs paragraph runs markers start end)
+        (gdocs-convert-list-paragraph-from-docs paragraph lists-map markers runs start end)
         (gdocs-convert-heading-paragraph-from-docs paragraph runs markers start end)
         (gdocs-convert-paragraph-from-docs
          paragraph runs markers start end 'normal '(:style-name gdocs-body)))))
 
 (defun gdocs-convert--paragraph-markers-for-range (markers start end)
   "Compose paragraph annotations from MARKERS overlapping START..END."
-  (gdocs-convert-code-paragraph-markers
-   (gdocs-convert--without-inline-status-markers
-    (gdocs-convert--markers-for-range markers start end))))
+  (gdocs-convert-task-paragraph-markers
+   (gdocs-convert-code-paragraph-markers
+    (gdocs-convert--without-inline-status-markers
+     (gdocs-convert--markers-for-range markers start end)))))
 
 (defun gdocs-convert--range-marker (markers marker-type start end)
   "Return MARKER-TYPE marker from MARKERS overlapping START..END, or nil."
@@ -1201,6 +925,7 @@ the IR element.  Returns marker plists with range metadata when available."
                      (status-p (equal (nth 1 parts) "status"))
                      (range (progn
                               (gdocs-convert-code-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
+                              (gdocs-convert-task-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
                               (when (and status-p (/= (length ranges) 1))
                                 (user-error "A status marker must have one contiguous range"))
                               (if (vectorp ranges) (aref ranges 0) (car ranges)))))
@@ -1235,7 +960,8 @@ the first element begins (default 1)."
         (requests nil)
         (element-ranges nil))
     (dolist (element ir)
-      (let ((result (gdocs-convert--ir-element-to-requests element index)))
+      (let* ((element (gdocs-convert-task-project-paragraph element))
+             (result (gdocs-convert--ir-element-to-requests element index)))
         (push (list :element element :start index
                     :end (plist-get result :index))
               element-ranges)
@@ -1264,143 +990,6 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
 
 ;; ---------------------------------------------------------------------------
 ;;; Typographic block -> requests
-
-(defun gdocs-convert--callout-style-base (type)
-  "Return logical style base symbol for callout TYPE."
-  (intern (format "gdocs-callout-%s" type)))
-
-(defun gdocs-convert--callout-label-style (type)
-  "Return logical label style symbol for callout TYPE."
-  (intern (format "gdocs-callout-%s-label" type)))
-
-(defun gdocs-convert--callout-label (type title)
-  "Return visible callout label for TYPE and TITLE."
-  (let ((label (or (cdr (assoc type gdocs-callout-labels))
-                   (capitalize type))))
-    (if (and title (not (string-empty-p title)))
-        (format "%s — %s" label title)
-      label)))
-
-(defun gdocs-convert--callout-marker-data-string (element)
-  "Return encoded callout marker data for ELEMENT."
-  (format "%s:%s"
-          (or (plist-get element :callout-type) "info")
-          (url-hexify-string (or (plist-get element :title) ""))))
-
-(defun gdocs-convert--callout-list-marker-data-string (paragraph)
-  "Return encoded callout list marker data for PARAGRAPH."
-  (let* ((list-info (plist-get paragraph :list))
-         (type (or (plist-get list-info :type) 'bullet))
-         (level (or (plist-get list-info :level) 0)))
-    (format "%s:%s" type level)))
-
-(defun gdocs-convert--prefix-runs (prefix runs)
-  "Return RUNS with PREFIX prepended to the first run."
-  (if runs
-      (let ((first (copy-sequence (car runs))))
-        (plist-put first :text (concat prefix (plist-get first :text)))
-        (cons first (cdr runs)))
-    (list (gdocs-convert--make-plain-run prefix))))
-
-(defun gdocs-convert--callout-render-list-paragraph (paragraph)
-  "Return PARAGRAPH rendered as a native Docs list paragraph."
-  (copy-sequence paragraph))
-
-(defun gdocs-convert--callout-paragraph-element (element role body index count)
-  "Return paragraph IR for callout ELEMENT ROLE BODY at INDEX of COUNT."
-  (let* ((type (or (plist-get element :callout-type) "info"))
-         (style-name (if (eq role 'label)
-                         (gdocs-convert--callout-label-style type)
-                       (gdocs-convert--block-line-style-name
-                        (gdocs-convert--callout-style-base type)
-                        index count)))
-         (source-paragraph (if (and (listp body) (plist-get body :type))
-                               (copy-sequence body)
-                             (gdocs-convert-make-paragraph
-                              body :style 'normal)))
-         (list-info (plist-get source-paragraph :list))
-         (paragraph (if (and (eq role 'body) list-info)
-                        (gdocs-convert--callout-render-list-paragraph
-                         source-paragraph)
-                      source-paragraph))
-         (markers (list (list :type (if (eq role 'label)
-                                        'callout-label
-                                      'callout-body)
-                              :data (gdocs-convert--callout-marker-data-string
-                                     element)))))
-    (when (and (eq role 'body) list-info)
-      (push (list :type 'callout-list
-                  :data (gdocs-convert--callout-list-marker-data-string
-                         source-paragraph))
-            markers))
-    (plist-put paragraph :style 'normal)
-    (plist-put paragraph :style-name style-name)
-    (plist-put paragraph :gdocs-marker (nreverse markers))
-    (plist-put paragraph :id (plist-get element :id))
-    paragraph))
-
-(defun gdocs-convert--callout-list-indent-reset-request (start end)
-  "Return a post-bullet indent reset request from START to END.
-Google Docs applies default bullet indentation when `createParagraphBullets'
-runs.  Callout list items need native list semantics while keeping the shaded
-paragraph box aligned with the rest of the callout, so reset the paragraph
-indent after bullet creation."
-  `((updateParagraphStyle
-     . ((paragraphStyle . ((indentStart . ((magnitude . 0) (unit . "PT")))
-                           (indentFirstLine . ((magnitude . 0) (unit . "PT")))))
-        (range . ((startIndex . ,start)
-                  (endIndex . ,(1- end))))
-        (fields . "indentStart,indentFirstLine")))))
-
-(defun gdocs-convert--callout-block-to-requests (element index)
-  "Create paragraph requests for callout-block ELEMENT at INDEX."
-  (let* ((type (or (plist-get element :callout-type) "info"))
-         (title (plist-get element :title))
-         (body-elements (gdocs-convert--callout-body-elements-from-paragraphs
-                         element))
-         (body-count (length body-elements))
-         (body-index 0)
-         (requests nil)
-         (body-ranges nil)
-         (current index)
-         (label-paragraph
-          (gdocs-convert--callout-paragraph-element
-           element 'label
-           (list (gdocs-convert--make-plain-run
-                  (gdocs-convert--callout-label type title)))
-           0 1))
-         (label-result (gdocs-convert--paragraph-to-requests
-                        label-paragraph current)))
-    (setq requests (nconc requests (plist-get label-result :requests)))
-    (setq current (plist-get label-result :index))
-    (dolist (body-element body-elements)
-      (let* ((paragraph (gdocs-convert--callout-paragraph-element
-                         element 'body body-element body-index body-count))
-             (start current)
-             (result (gdocs-convert--paragraph-to-requests paragraph current)))
-        (push (list :element paragraph
-                    :start start
-                    :end (plist-get result :index))
-              body-ranges)
-        (setq requests (nconc requests (plist-get result :requests)))
-        (setq current (plist-get result :index))
-        (cl-incf body-index)))
-    ;; Add unmarked spacing chrome so shaded callouts do not visually merge with
-    ;; adjacent shaded typographic blocks.  Empty paragraphs are skipped by Org
-    ;; output on pull.  This must be inserted before list fixup because
-    ;; `createParagraphBullets' removes leading tabs used for native nesting.
-    (let ((result (gdocs-convert--append-generated-separator-requests
-                   requests current element)))
-      (setq requests (plist-get result :requests))
-      (setq current (plist-get result :index)))
-    (setq body-ranges (nreverse body-ranges))
-    (setq requests (gdocs-convert--fixup-list-nesting requests body-ranges))
-    (let ((removed-tabs (apply #'+
-                               (mapcar (lambda (range)
-                                         (gdocs-convert--list-prefix-length-for-element
-                                          (plist-get range :element)))
-                                       body-ranges))))
-      (list :requests requests :index (- current removed-tabs)))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Source block -> requests
@@ -1437,7 +1026,8 @@ Returns a plist (:requests LIST :index NEW-INDEX).
 
 A text-style reset request is emitted after the insertText to
 clear any inherited formatting before per-run styles are applied."
-  (let* ((contents (plist-get element :contents))
+  (let* ((element (gdocs-convert-task-project-paragraph element))
+         (contents (plist-get element :contents))
          (prefix (gdocs-convert--list-leading-prefix element))
          (prefix-len (gdocs-convert--string-to-utf16-length prefix))
          (text-start (+ index prefix-len))
@@ -1547,6 +1137,9 @@ separately by diff."
         (when-let* ((marker (and (not omit-status-markers)
                                  (gdocs-convert-code-run-marker-request run index end segment-id))))
           (push marker requests))
+        (unless omit-status-markers
+          (dolist (request (gdocs-convert-task-run-requests run index segment-id))
+            (push request requests)))
         (setq index end)))
     (nreverse requests)))
 
@@ -1646,13 +1239,6 @@ bullets and uses it to determine the nesting level."
                       (endIndex . ,(1- end))))
             (fields . "indentStart,indentFirstLine")))))))
 
-(defun gdocs-convert--list-type-to-preset (type)
-  "Convert an IR list TYPE to a Google Docs bullet preset string."
-  (pcase type
-    ('bullet "BULLET_DISC_CIRCLE_SQUARE")
-    ('number "NUMBERED_DECIMAL_ALPHA_ROMAN")
-    ('check "BULLET_CHECKBOX")))
-
 (defconst gdocs-convert--numbered-presets
   '("NUMBERED_DECIMAL_ALPHA_ROMAN" "NUMBERED_DECIMAL_NESTED")
   "Numbered bullet presets that look identical at nesting level 0.
@@ -1712,7 +1298,8 @@ Google Docs from merging them into one continuous list."
                 (gdocs-convert--callout-list-post-bullet-indent-resets
                  element-ranges)
                 (gdocs-convert--guard-non-list-paragraphs
-                 element-ranges groups))))))
+                 element-ranges groups)
+                (gdocs-convert-task-post-bullet-indents element-ranges))))))
 
 (defun gdocs-convert--bullet-request-in-list-groups-p (request groups)
   "Return non-nil if bullet REQUEST belongs to one of GROUPS."
@@ -1770,12 +1357,6 @@ and :preset (bullet preset string)."
             groups))
     (nreverse groups)))
 
-(defun gdocs-convert--callout-list-marker-p (element)
-  "Return non-nil when ELEMENT is a callout list paragraph."
-  (seq-some (lambda (marker)
-              (eq (plist-get marker :type) 'callout-list))
-            (plist-get element :gdocs-marker)))
-
 (defun gdocs-convert--list-prefix-length-for-element (element)
   "Return leading tab count inserted for ELEMENT."
   (if (plist-get element :list)
@@ -1791,25 +1372,6 @@ and :preset (bullet preset string)."
         (setq total (+ total
                        (gdocs-convert--list-prefix-length-for-element
                         (plist-get candidate :element))))))))
-
-(defun gdocs-convert--callout-list-post-bullet-indent-resets (element-ranges)
-  "Return final indent resets for callout list paragraphs.
-These run after `createParagraphBullets'.  They keep paragraph shading
-full-width inside callout panels while native nesting level has already
-been assigned from leading tabs."
-  (let (requests)
-    (dolist (range element-ranges (nreverse requests))
-      (let* ((element (plist-get range :element))
-             (level-tabs (gdocs-convert--list-prefix-length-for-element element)))
-        (when (and (plist-get element :list)
-                   (zerop level-tabs)
-                   (gdocs-convert--callout-list-marker-p element))
-          (let* ((removed-before (gdocs-convert--list-prefixes-before
-                                  range element-ranges))
-                 (start (- (plist-get range :start) removed-before))
-                 (end (- (plist-get range :end) removed-before level-tabs)))
-            (push (gdocs-convert--callout-list-indent-reset-request start end)
-                  requests)))))))
 
 (defun gdocs-convert--list-group-bullet-request (group)
   "Create a single createParagraphBullets request for GROUP.

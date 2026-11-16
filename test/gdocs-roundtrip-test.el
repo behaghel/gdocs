@@ -729,19 +729,20 @@
     (should (> (length items) 0))))
 
 (ert-deftest gdocs-roundtrip/json-has-checkbox-lists ()
-  "The public specimen plus explicit native checkbox data preserves checked state.
-The unmodified public capture has no checkbox glyph metadata; this addition is
+  "The public specimen plus a managed glyph task preserves visible checked state.
+The unmodified public capture has no managed task metadata; this addition is
 synthetic fixture coverage, not a claim about that capture or live acceptance."
   (let* ((json (gdocs-roundtrip-test--read-json-fixture))
          (body (alist-get 'body json)))
     (setf (alist-get 'content body)
           (vconcat (alist-get 'content body)
-                   [((startIndex . 100000) (endIndex . 100018)
-                     (paragraph . ((bullet . ((listId . "fidelity-check") (nestingLevel . 0)))
-                                   (elements . [((textRun . ((content . "Checked synthetic\n"))))]))))]))
-    (setf (alist-get 'lists json)
-          (cons '(fidelity-check . ((listProperties . ((nestingLevels . [((glyphSymbol . "☑") (glyphFormat . "%0"))])))))
-                (alist-get 'lists json)))
+                   [((startIndex . 100000) (endIndex . 100020)
+                     (paragraph . ((elements . [((textRun . ((content . "☑ Checked synthetic\n"))))]))))]))
+    (setf (alist-get 'namedRanges json)
+          (cons '(gdocs-org-marker:managed-task:synthetic:v1:0
+                  . ((namedRanges . [((namedRangeId . "synthetic-task")
+                                      (ranges . [((startIndex . 100001) (endIndex . 100002))]))])))
+                (alist-get 'namedRanges json)))
     (let* ((ir (gdocs-convert-docs-json-to-ir json))
            (items (gdocs-roundtrip-test--find-ir-list-elements ir 'check)))
       (should (> (length items) 0))
@@ -1186,6 +1187,37 @@ rather than requiring an obsolete quote-styled-paragraph representation."
         (should (string-match-p (regexp-quote "#+BEGIN_QUOTE") (gdocs-convert-ir-to-org ir)))
         (should-not (gdocs-diff-generate ir ir))
         (should-not (gdocs-diff-generate ir ir))))))
+
+(ert-deftest gdocs-roundtrip/specimen-callout-feature-composition ()
+  "Public source/native specimens compose with explicitly synthetic callout data."
+  (require 'gdocs-fidelity-corrections-test)
+  (let* ((extension "#+ATTR_CALLOUT: :type note :title \"Résumé 😀\"\n#+BEGIN_CALLOUT\nFirst paragraph.\n\nSecond *paragraph*.\n#+END_CALLOUT\n")
+         (feature (gdocs-convert-org-string-to-ir extension))
+         (source (gdocs-convert-org-string-to-ir (concat (gdocs-roundtrip-test--read-org-fixture) "\n" extension)))
+         (native-feature (gdocs-convert-docs-json-to-ir
+                          (gdocs-fidelity-test--returned-json (gdocs-convert-ir-to-docs-requests feature))))
+         (native (append (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture)) native-feature)))
+    (should (seq-some (lambda (element) (eq (plist-get element :type) 'callout-block)) source))
+    (should (equal (gdocs-diff--element-key (car feature)) (gdocs-diff--element-key (car native-feature))))
+    (should (equal (gdocs-convert-ir-to-org native-feature) extension))
+    (should (gdocs-convert-ir-to-docs-requests source))
+    (should (gdocs-convert-ir-to-docs-requests native))))
+
+(ert-deftest gdocs-roundtrip/specimen-managed-task-feature-composition ()
+  "Public specimens compose with synthetic visible task state in both directions."
+  (require 'gdocs-fidelity-corrections-test)
+  (let* ((extension "- [ ] open 😀\n- [X] *done*\n- [-] partial\n")
+         (feature (gdocs-convert-org-string-to-ir extension))
+         (source (gdocs-convert-org-string-to-ir (concat (gdocs-roundtrip-test--read-org-fixture) "\n" extension)))
+         (native-feature (gdocs-convert-docs-json-to-ir
+                          (gdocs-fidelity-test--returned-json (gdocs-convert-ir-to-docs-requests feature))))
+         (native (append (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture)) native-feature)))
+    (should (equal (gdocs-convert-ir-to-org native-feature) extension))
+    (should-not (gdocs-diff-generate native-feature feature))
+    (dolist (ir (list source native))
+      (let ((text (mapconcat (lambda (request) (or (alist-get 'text (alist-get 'insertText request)) ""))
+                             (gdocs-convert-ir-to-docs-requests ir) "")))
+        (dolist (glyph '("☐" "☑" "◩")) (should (string-match-p glyph text)))))))
 
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here
