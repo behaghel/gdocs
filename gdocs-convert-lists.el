@@ -98,13 +98,24 @@
   (let* ((list-id (alist-get 'listId bullet))
          (nesting-level (or (alist-get 'nestingLevel bullet) 0))
          (list-props (when list-id (alist-get (intern list-id) lists-map)))
+         (native-levels (alist-get 'nestingLevels (alist-get 'listProperties list-props)))
+         (native-known (and native-levels (> (length native-levels) nesting-level)))
+         (native-entry (and native-known (elt native-levels nesting-level)))
+         (native-depth-known (or (> nesting-level 0) (alist-get 'indentFirstLine native-entry)
+                                 (alist-get 'indentStart native-entry)))
          (list-type (gdocs-convert--docs-list-type list-props nesting-level))
          (level (gdocs-convert--docs-visual-nesting-level list-props nesting-level paragraph-style))
          (task-state (plist-get (gdocs-convert--task-state-marker markers start end) :data))
          (list-state (gdocs-convert--list-state-data
                       (plist-get (gdocs-convert--list-state-marker markers start end) :data)))
-         (effective-type (or (plist-get list-state :type) (if task-state 'check list-type)))
-         (effective-level (or (plist-get list-state :level) level)))
+         (effective-type (cond (task-state 'check) (native-known list-type)
+                               (t (or (plist-get list-state :type) list-type))))
+         ;; A native group's level zero can itself be nested in a mixed-type
+         ;; list.  Its definition supplies that base offset; paragraph-only
+         ;; presentation overrides and stale snapshots do not redefine depth.
+         (effective-level (if native-depth-known
+                              (gdocs-convert--docs-visual-nesting-level list-props nesting-level)
+                            (or (plist-get list-state :level) level))))
     (append (list :type effective-type :level effective-level)
             (when (eq effective-type 'check)
               (cond ((equal task-state "partial") '(:checked nil :partial t))

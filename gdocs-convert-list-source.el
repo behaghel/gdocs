@@ -30,6 +30,7 @@ A checkbox on one item does not turn sibling plain bullets into tasks."
     (cond ((org-element-property :checkbox item) 'check)
           ((string-match-p "\\`[0-9]+[.)][[:space:]]+" bullet) 'number)
           ((string-match-p "\\`[A-Za-z]+[.)][[:space:]]+" bullet) 'number)
+          ((string-match-p "\\`[-+*][[:space:]]+" bullet) 'bullet)
           ((eq fallback-type 'check) 'bullet)
           (t fallback-type))))
 

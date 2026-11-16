@@ -64,7 +64,8 @@ index where the first element begins (default 1)."
     (gdocs-diff--filter-invalid-requests
      (append (plist-get plan :before)
              (gdocs-diff--generate-requests
-              old-ir new-ir (plist-get plan :operations) start)))))
+              old-ir new-ir (plist-get plan :operations) start)
+             (plist-get plan :after)))))
 
 (defun gdocs-diff--non-empty-delete-request-p (request)
   "Return non-nil if REQUEST is a non-empty deleteContentRange request."

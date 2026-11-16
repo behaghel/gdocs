@@ -1,0 +1,34 @@
+* Disposable list conformance
+This document contains synthetic test content only.
+
+1. Parent one
+   1. Child one
+   2. Child two
+
+   Parent continuation with *bold*, [[https://example.org][a link]] and 😀.
+2. Parent two
+
+- [ ] Open task
+
+  Task continuation with src_python{  x + 1  }.
+- [X] Checked task
+  - [-] Nested partial task
+- [-] Partial task
+
+- *Term 😀* :: Definition with [[https://example.org][a link]].
+
+#+ATTR_CALLOUT: :type note :title "Audit 😀"
+#+BEGIN_CALLOUT
+First *paragraph*.
+
+second paragraph with [[https://example.org][a link]].
+
+- [ ] Callout task
+
+  Callout task continuation.
+#+END_CALLOUT
+
+#+ATTR_CALLOUT: :type note :title "Audit 😀"
+#+BEGIN_CALLOUT
+A separate adjacent callout.
+#+END_CALLOUT

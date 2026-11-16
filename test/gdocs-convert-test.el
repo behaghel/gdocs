@@ -437,14 +437,15 @@
 ;;; List nesting requests
 
 (ert-deftest gdocs-convert-test-nested-list-indent-requests ()
-  "Nested list items generate updateParagraphStyle indent requests."
+  "Nested list tabs create nesting from a zero baseline, not doubled indentation."
   (let* ((ir (gdocs-convert-org-string-to-ir
               "- Parent\n  - Child\n    - Grandchild"))
          (requests (gdocs-convert-ir-to-docs-requests ir)))
     ;; Level 0: only createParagraphBullets, no indent request
     (should (cl-some (lambda (r) (alist-get 'createParagraphBullets r))
                      requests))
-    ;; Level 1: indent request with indentStart=72, indentFirstLine=54
+    ;; Real API capture: applying indentation as well as tabs double-encodes
+    ;; the level.  Both prefixed nested paragraphs must start from zero.
     (let ((indent-reqs
            (cl-remove-if-not
             (lambda (r)
@@ -454,24 +455,24 @@
                     (alist-get 'indentStart style)))))
             requests)))
       (should (>= (length indent-reqs) 2))  ;; level 1 and level 2
-      ;; Check level 1 indentation (72pt start, 54pt first)
+      ;; Level 1's leading tab supplies the nesting after its zero reset.
       (let* ((req1 (car indent-reqs))
              (style (alist-get 'paragraphStyle
                                (alist-get 'updateParagraphStyle req1)))
              (start-mag (alist-get 'magnitude (alist-get 'indentStart style)))
              (first-mag (alist-get 'magnitude
                                    (alist-get 'indentFirstLine style))))
-        (should (= start-mag 72))
-        (should (= first-mag 54)))
-      ;; Check level 2 indentation (108pt start, 90pt first)
+        (should (= start-mag 0))
+        (should (= first-mag 0)))
+      ;; Level 2's two tabs supply nesting after the same zero reset.
       (let* ((req2 (cadr indent-reqs))
              (style (alist-get 'paragraphStyle
                                (alist-get 'updateParagraphStyle req2)))
              (start-mag (alist-get 'magnitude (alist-get 'indentStart style)))
              (first-mag (alist-get 'magnitude
                                    (alist-get 'indentFirstLine style))))
-        (should (= start-mag 108))
-        (should (= first-mag 90))))))
+        (should (= start-mag 0))
+        (should (= first-mag 0))))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Google Docs JSON -> IR

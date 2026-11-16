@@ -20,8 +20,9 @@ A :requests function accepts the run and its UTF-16 body index.")
 
 (defvar gdocs-diff-semantic-plan-functions nil
   "Functions accepting old IR, new IR, operations and a start index.
-Each may return :operations and :before requests.  Plans compose in hook order;
-explicit nil operations means no body operations, not an unmatched plan.")
+Each may return :operations, :before and :after requests.
+Plans compose in hook order; explicit nil operations means no body operations,
+not an unmatched plan.")
 
 (declare-function gdocs-convert--run-model-length "gdocs-convert" (run))
 
@@ -44,13 +45,14 @@ explicit nil operations means no body operations, not an unmatched plan.")
 
 (defun gdocs-diff-semantic-plan (old-ir new-ir operations start)
   "Compose semantic plans for OLD-IR, NEW-IR, OPERATIONS and START."
-  (let (before)
+  (let (before after)
     (dolist (function gdocs-diff-semantic-plan-functions)
       (when-let* ((plan (funcall function old-ir new-ir operations start)))
         (when (plist-member plan :operations)
           (setq operations (plist-get plan :operations)))
-        (setq before (append before (plist-get plan :before)))))
-    (list :operations operations :before before)))
+        (setq before (append before (plist-get plan :before))
+              after (append after (plist-get plan :after)))))
+    (list :operations operations :before before :after after)))
 
 ;; Explicit composition belongs here, not in the generic LCS/indexing engine.
 (require 'gdocs-diff-footnotes)

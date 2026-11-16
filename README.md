@@ -259,6 +259,17 @@ structure and measures physical prefixes in UTF-16; it does not inspect list
 fields or native bullet types. Structure compatibility gates style-only and
 formatting-only shortcuts as well as word-level editing. An unrelated synthetic
 paragraph policy exercises this contract without list syntax or a registry.
+Semantic request plans compose opaque `:before` and `:after` requests around body
+operations; the kernel does not classify their feature or native request types.
+
+Native membership and nesting edits rebuild the affected complete list group
+after body edits. Group repairs retain authored text and inline formatting,
+consume structural tabs from a zero-indent baseline, and restore continuation
+and callout presentation afterward. They do not rebuild unaffected groups.
+Regrouping requires a complete body plan; a push containing declined or
+comment-protected body operations fails before mutation with an instruction to
+push the nesting edit separately, rather than applying final coordinates to a
+partially updated document.
 
 Description terms retain their rich inline content as visible `term :: body`
 text in ordinary Docs bullet paragraphs. Rendering and reparsing the standard
@@ -270,6 +281,11 @@ hidden term snapshots. Description syntax is not a native Docs control.
 List counters retain independent state at each nesting level. Returning from a
 child list resumes the parent's counter; continuation paragraphs do not count
 as new items. Org rendering uses the same counter assignment as native import.
+Complete native bullet/list properties determine actual type and nesting ahead
+of older list-state snapshots. Native depth includes the list definition's base
+indentation across mixed types; paragraph-only presentation does not redefine
+it. Incomplete native definitions retain their annotated fallback. Explicit Org item markers determine type within mixed list
+containers. Text edits refresh list-state ranges at post-tab coordinates.
 
 `gdocs-convert-lists.el` retains every direct paragraph of a list item, in
 source order around child lists. The first paragraph carries the item's list

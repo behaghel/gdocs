@@ -10,6 +10,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'gdocs-convert-tasks)
+(require 'gdocs-convert-text)
 (defconst gdocs-convert--list-indent-pt 36
   "Points of indentation per native list nesting level.")
 
@@ -34,14 +35,21 @@
     (let* ((preset (gdocs-convert--list-type-to-preset (plist-get info :type)))
            (bullet `((createParagraphBullets . ((range . ((startIndex . ,start) (endIndex . ,(1- end))))
                                                 (bulletPreset . ,preset)))))
-           (indent (gdocs-convert--make-list-indent-request (plist-get info :level) start end)))
+           (prefix-length (length (gdocs-convert--list-leading-prefix element)))
+           (body-length (gdocs-convert--string-to-utf16-length
+                         (gdocs-convert--runs-to-plain-text (plist-get element :contents))))
+           (prefixed (and (> prefix-length 0) (= (- end start 1) (+ body-length prefix-length))))
+           ;; Tabs already encode the nesting level.  A pre-existing indent
+           ;; adds another level in the real API; start from zero instead.
+           (indent (when prefixed (gdocs-convert--make-list-indent-request 0 start end t))))
       (append (when indent (list indent)) (list bullet)))))
 
-(defun gdocs-convert--make-list-indent-request (level start end)
-  "Set native nesting LEVEL from START to END before bullet creation."
-  (when (> level 0)
-    (let ((indent-start (* gdocs-convert--list-indent-pt (1+ level)))
-          (indent-first (+ (/ gdocs-convert--list-indent-pt 2) (* gdocs-convert--list-indent-pt level))))
+(defun gdocs-convert--make-list-indent-request (level start end &optional reset)
+  "Set native indentation LEVEL from START to END.
+With RESET, set zero indentation before tabs supply nesting during creation."
+  (when (or reset (> level 0))
+    (let ((indent-start (if reset 0 (* gdocs-convert--list-indent-pt (1+ level))))
+          (indent-first (if reset 0 (+ (/ gdocs-convert--list-indent-pt 2) (* gdocs-convert--list-indent-pt level)))))
       `((updateParagraphStyle
          . ((paragraphStyle . ((indentStart . ((magnitude . ,indent-start) (unit . "PT")))
                                (indentFirstLine . ((magnitude . ,indent-first) (unit . "PT")))))
