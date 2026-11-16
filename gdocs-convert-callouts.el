@@ -17,6 +17,7 @@
 (require 'gdocs-convert-paragraphs)
 (require 'gdocs-convert-inline-codec)
 (require 'gdocs-convert-tasks)
+(require 'gdocs-convert-lists)
 
 (declare-function gdocs-convert--next-id "gdocs-convert" ())
 (declare-function gdocs-convert--paragraph-child-to-ir "gdocs-convert" (paragraph))
@@ -320,6 +321,8 @@
     (when (and (eq role 'body) info)
       (push (list :type 'callout-list :data (gdocs-convert--callout-list-marker-data-string source)) markers))
     (plist-put paragraph :style 'normal) (plist-put paragraph :style-name style)
+    (when (gdocs-convert-list-continuation-p paragraph)
+      (plist-put paragraph :list-continuation-indent-pt 0))
     (dolist (marker markers)
       (let ((name (format "gdocs-org-marker:%s:%s:%s" (plist-get marker :type)
                           (plist-get element :id) (plist-get marker :data))))

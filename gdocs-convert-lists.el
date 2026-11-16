@@ -14,22 +14,34 @@
 (require 'gdocs-convert-tasks)
 
 (declare-function gdocs-convert--range-marker "gdocs-convert" (markers type start end))
+(declare-function gdocs-convert--next-id "gdocs-convert" ())
+(declare-function gdocs-convert--item-list-type "gdocs-convert" (item fallback-type))
+(declare-function gdocs-convert--objects-to-runs "gdocs-convert" (objects &optional parent-style))
+(declare-function gdocs-convert--strip-continuation-indent "gdocs-convert" (runs))
+(declare-function gdocs-convert--trim-runs "gdocs-convert" (runs))
+(declare-function gdocs-convert--plain-list-positioned "gdocs-convert" (plain-list depth))
+(declare-function gdocs-convert--run-model-length "gdocs-convert" (run))
+(declare-function gdocs-convert--list-prefixes-before "gdocs-convert" (range element-ranges))
 (defun gdocs-convert--task-state-marker (markers start end)
   "Return task-state marker overlapping START..END, or nil."
   (gdocs-convert--range-marker markers 'task-state start end))
 
 (defun gdocs-convert-list-paragraph-from-docs (paragraph lists-map markers runs start end)
   "Decode list PARAGRAPH with LISTS-MAP, MARKERS, RUNS and START..END, or nil."
-  (when-let* ((bullet (alist-get 'bullet paragraph)))
-    (gdocs-convert-task-validate-native-list paragraph lists-map markers start end)
-    (let ((info (gdocs-convert--docs-bullet-to-list
-                 bullet lists-map markers start end (alist-get 'paragraphStyle paragraph))))
-      (gdocs-convert-paragraph-from-docs paragraph runs markers start end 'normal (list :list info)))))
+  (or (gdocs-convert-list-continuation-from-docs paragraph runs markers start end)
+      (when-let* ((bullet (alist-get 'bullet paragraph)))
+        (gdocs-convert-task-validate-native-list paragraph lists-map markers start end)
+        (let ((info (gdocs-convert--docs-bullet-to-list
+                     bullet lists-map markers start end (alist-get 'paragraphStyle paragraph))))
+          (gdocs-convert-paragraph-from-docs paragraph runs markers start end 'normal (list :list info))))))
 
 (defun gdocs-convert-list-paragraph-to-org (element text)
   "Render list paragraph ELEMENT and TEXT, or nil when unhandled."
-  (when-let* ((list-info (plist-get element :list)))
-    (gdocs-convert--format-list-item list-info text)))
+  (if-let* ((info (plist-get element :list-continuation)))
+      (let ((indent (make-string (* 2 (1+ (plist-get info :level))) ?\s)))
+        (concat indent (replace-regexp-in-string "\n" (concat "\n" indent) text)))
+    (when-let* ((list-info (plist-get element :list)))
+      (gdocs-convert--format-list-item list-info text))))
 
 (defun gdocs-convert--format-list-item (list-info text)
   "Format a list item with LIST-INFO plist and TEXT content."
@@ -99,18 +111,23 @@
                     (t (gdocs-convert--docs-check-state list-props nesting-level)))))))
 
 (defun gdocs-convert--assign-list-counters (ir)
-  "Assign sequential :counter values to numbered list items in IR."
-  (let ((counter 0) (prev-level nil))
+  "Assign sequential counters per nesting level in IR, retaining parent state."
+  (let (counters owners)
     (dolist (element ir)
-      (let* ((list-info (plist-get element :list))
-             (list-type (when list-info (plist-get list-info :type)))
-             (level (when list-info (plist-get list-info :level))))
-        (if (eq list-type 'number)
-            (progn
-              (if (eql level prev-level) (cl-incf counter) (setq counter 1))
-              (plist-put list-info :counter counter)
-              (setq prev-level level))
-          (setq counter 0 prev-level nil))))))
+      (let* ((continuation (plist-get element :list-continuation))
+             (info (or (plist-get element :list) continuation))
+             (type (plist-get info :type)) (level (plist-get info :level)))
+        (if (null info) (setq counters nil owners nil)
+          (setq counters (seq-filter (lambda (entry) (<= (car entry) level)) counters)
+                owners (seq-filter (lambda (entry) (<= (car entry) level)) owners))
+          (when (and continuation (not (eq (cdr (assq level owners)) type)))
+            (user-error "List continuation has no preceding item of the same type and level"))
+          (unless continuation (setf (alist-get level owners) type))
+          (if (eq type 'number)
+              (let ((counter (+ (or (alist-get level counters) 0) (if continuation 0 1))))
+                (setf (alist-get level counters) counter)
+                (plist-put info :counter counter))
+            (setq counters (assq-delete-all level counters))))))))
 
 (defconst gdocs-convert--list-indent-pt 36
   "Points of indentation per list nesting level in Google Docs.")
@@ -164,6 +181,157 @@
     ('bullet "BULLET_DISC_CIRCLE_SQUARE")
     ('number "NUMBERED_DECIMAL_ALPHA_ROMAN")
     ('check (user-error "Task lists require managed glyph projection before native list planning"))))
+
+(defun gdocs-convert-list-item-positioned (item fallback depth)
+  "Convert ITEM at DEPTH, retaining each direct paragraph and child list.
+FALLBACK is the containing list's type.  Continuations have no new bullet."
+  (let* ((type (gdocs-convert--item-list-type item fallback))
+         (state (org-element-property :checkbox item))
+         (first t) result)
+    (cl-labels ((emit (paragraph)
+                  (let* ((info (list :type type :level depth))
+                         (runs (when paragraph
+                                 (gdocs-convert--trim-runs
+                                  (gdocs-convert--strip-continuation-indent
+                                   (gdocs-convert--objects-to-runs (org-element-contents paragraph))))))
+                         (element (list :type 'paragraph :style 'normal
+                                        :contents (or runs (list (gdocs-convert--make-plain-run "")))
+                                        :id (gdocs-convert--next-id))))
+                    (if first
+                        (progn
+                          (when (eq type 'check)
+                            (setq info (append info (list :checked (eq state 'on) :partial (eq state 'trans)))))
+                          (plist-put element :list info)
+                          (plist-put element :gdocs-marker
+                                     (append (list (list :type 'list-state :data (format "%s:%d" type depth)))
+                                             (when state (list (list :type 'task-state
+                                                                     :data (pcase state ('on "on") ('trans "partial") (_ "off"))))))))
+                      (plist-put element :list-continuation info)
+                      (plist-put element :gdocs-marker
+                                 (list (list :type 'list-continuation :data (format "v1:%s:%d" type depth)))))
+                    (push (list :ir element :begin (if first (org-element-property :begin item)
+                                                     (org-element-property :begin paragraph))) result)
+                    (setq first nil))))
+               (dolist (child (org-element-contents item))
+                 (pcase (org-element-type child)
+                   ('paragraph (emit child))
+                   ('plain-list
+                    (when first (emit nil))
+                    (dolist (entry (gdocs-convert--plain-list-positioned child (1+ depth))) (push entry result)))
+                   (_ (user-error "Unsupported %s inside a list item; move it outside the list before publishing"
+                                  (org-element-type child)))))
+               (when first (emit nil)))
+    (nreverse result)))
+
+(defun gdocs-convert-list-continuation-p (element)
+  "Return continuation information on ELEMENT, or nil."
+  (plist-get element :list-continuation))
+
+(defun gdocs-convert-list-continuation-key (element)
+  "Return continuation semantic identity for ELEMENT, or nil."
+  (when-let* ((info (gdocs-convert-list-continuation-p element)))
+    (format "continuation:%s:%d" (plist-get info :type) (plist-get info :level))))
+
+(defun gdocs-convert-list-project-paragraph (element)
+  "Project ELEMENT's continuation annotation without changing body text."
+  (if-let* ((info (gdocs-convert-list-continuation-p element)))
+      (let* ((copy (copy-sequence element))
+             (prefix (gdocs-convert--make-plain-run ""))
+             (length (1+ (apply #'+ (mapcar #'gdocs-convert--run-model-length (plist-get element :contents))))))
+        (plist-put copy :gdocs-marker
+                   (seq-remove (lambda (marker) (eq (plist-get marker :type) 'list-continuation))
+                               (plist-get element :gdocs-marker)))
+        (unless (plist-get (car (plist-get element :contents)) :list-continuation-prefix)
+          (plist-put prefix :list-continuation-prefix
+                     (list :type (plist-get info :type) :level (plist-get info :level) :length length
+                           :indent (or (plist-get element :list-continuation-indent-pt)
+                                       (* 36 (1+ (plist-get info :level))))))
+          (plist-put copy :contents (cons prefix (plist-get element :contents))))
+        copy)
+    element))
+
+(defun gdocs-convert-list-continuation-run-policy (run)
+  "Return zero-width annotation policy for continuation prefix RUN."
+  (when (plist-get run :list-continuation-prefix)
+    '(:atomic t :model-length 0 :preserve-whitespace t :preserve-terminal t :formatted t)))
+
+(defun gdocs-convert-list-continuation-run-requests (run index &optional segment-id)
+  "Plan continuation RUN's annotation and indentation at INDEX."
+  (when-let* ((info (plist-get run :list-continuation-prefix)))
+    (when segment-id (user-error "List continuations require body paragraphs, not document segments"))
+    (list `((createNamedRange
+             . ((name . ,(format "gdocs-org-marker:list-continuation:continuation-%d:v1:%s:%d"
+                                 index (plist-get info :type) (plist-get info :level)))
+                (range . ((startIndex . ,index) (endIndex . ,(+ index (plist-get info :length))))))))
+          `((deleteParagraphBullets . ((range . ((startIndex . ,index) (endIndex . ,(1+ index)))))))
+          `((updateParagraphStyle
+             . ((paragraphStyle . ((indentStart . ((magnitude . ,(plist-get info :indent)) (unit . "PT")))
+                                   (indentFirstLine . ((magnitude . ,(plist-get info :indent)) (unit . "PT")))))
+                (range . ((startIndex . ,index) (endIndex . ,(1+ index))))
+                (fields . "indentStart,indentFirstLine")))))))
+
+(defun gdocs-convert-list-continuation-native-group (element)
+  "Return ELEMENT's native continuation group, excluding managed glyph tasks."
+  (when-let* ((info (gdocs-convert-list-continuation-p element)))
+    (unless (eq (plist-get info :type) 'check) info)))
+
+(defun gdocs-convert-list-continuation-post-bullet-indents (ranges)
+  "Remove temporary continuation bullets and restore indentation in RANGES."
+  (cl-loop for range in ranges
+           for run = (car (plist-get (plist-get range :element) :contents))
+           when (plist-get run :list-continuation-prefix)
+           append (cdr (gdocs-convert-list-continuation-run-requests
+                        run (- (plist-get range :start)
+                               (gdocs-convert--list-prefixes-before range ranges))))))
+
+(defun gdocs-convert-list-continuation-from-docs (paragraph runs markers start end)
+  "Restore continuation PARAGRAPH from RUNS, MARKERS and its START..END range."
+  (when-let* ((matches (seq-filter (lambda (value)
+                                     (and (eq (plist-get value :type) 'list-continuation)
+                                          start end (< (plist-get value :start) end) (> (plist-get value :end) start))) markers))
+              (marker (car matches)))
+    (unless (= (length matches) 1) (user-error "Overlapping list continuation annotations require review"))
+    (when (alist-get 'bullet paragraph)
+      (user-error "A list continuation cannot also have a native bullet"))
+    (let ((data (or (plist-get marker :data) "")))
+      (unless (string-match "\\`v1:\\(bullet\\|number\\|check\\):\\([0-9]+\\)\\'" data)
+        (user-error "Malformed or unsupported list continuation metadata"))
+      (let* ((info (list :type (intern (match-string 1 data)) :level (string-to-number (match-string 2 data))))
+             (element (gdocs-convert-paragraph-from-docs paragraph runs markers start end 'normal
+                                                         (list :list-continuation info))))
+        (plist-put element :list-continuation-range-ids (list (plist-get marker :range-id)))
+        element))))
+
+(defun gdocs-convert-list-validate-native-marker (type ranges entry)
+  "Validate continuation TYPE RANGES in named-range ENTRY."
+  (when (eq type 'list-continuation)
+    (unless (and (sequencep ranges) (= (length ranges) 1))
+      (user-error "A list continuation needs one contiguous native range"))
+    (let ((range (elt ranges 0)) (id (alist-get 'namedRangeId entry)))
+      (unless (and (stringp id) (not (string-empty-p id))
+                   (integerp (alist-get 'startIndex range)) (> (alist-get 'startIndex range) 0)
+                   (integerp (alist-get 'endIndex range)) (> (alist-get 'endIndex range) (alist-get 'startIndex range))
+                   (not (alist-get 'segmentId range)))
+        (user-error "Malformed list continuation range or unsupported document segment")))))
+
+(defun gdocs-convert-list-validate-native-context (content markers)
+  "Require continuation MARKERS to belong to one body paragraph in CONTENT."
+  (dolist (marker markers)
+    (when (eq (plist-get marker :type) 'list-continuation)
+      (let ((paragraphs (seq-filter (lambda (element)
+                                      (and (alist-get 'paragraph element)
+                                           (< (alist-get 'startIndex element) (plist-get marker :end))
+                                           (> (alist-get 'endIndex element) (plist-get marker :start)))) content)))
+        (unless (and (= (length paragraphs) 1)
+                     (>= (plist-get marker :start) (alist-get 'startIndex (car paragraphs)))
+                     (<= (plist-get marker :end) (alist-get 'endIndex (car paragraphs))))
+          (user-error "List continuation annotation crosses paragraphs or a table; restore its paragraph boundaries before pulling"))))))
+
+(defun gdocs-convert-list-validate-body (ir)
+  "Validate continuation owners in decoded body IR and return IR."
+  (when (seq-some #'gdocs-convert-list-continuation-p ir)
+    (gdocs-convert--assign-list-counters ir))
+  ir)
 
 (provide 'gdocs-convert-lists)
 ;;; gdocs-convert-lists.el ends here

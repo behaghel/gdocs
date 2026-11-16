@@ -1219,5 +1219,25 @@ rather than requiring an obsolete quote-styled-paragraph representation."
                              (gdocs-convert-ir-to-docs-requests ir) "")))
         (dolist (glyph '("☐" "☑" "◩")) (should (string-match-p glyph text)))))))
 
+(ert-deftest gdocs-roundtrip/specimen-list-paragraph-fidelity ()
+  "Public specimens compose with explicit continuation and nested-counter fixtures."
+  (require 'gdocs-fidelity-corrections-test)
+  (let* ((extension "- [X] Head 😀\n\n  Continued *body* src_python{  x  }.\n")
+         (feature (gdocs-convert-org-string-to-ir extension))
+         (expected (gdocs-convert-ir-to-org feature))
+         (native-feature (gdocs-convert-docs-json-to-ir
+                          (gdocs-fidelity-test--returned-json (gdocs-convert-ir-to-docs-requests feature))))
+         (source (gdocs-convert-org-string-to-ir (concat (gdocs-roundtrip-test--read-org-fixture) "\n" extension)))
+         (native (append (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture)) native-feature)))
+    (should (equal (gdocs-convert-ir-to-org native-feature) expected))
+    (should-not (gdocs-diff-generate native-feature feature))
+    (dolist (ir (list source native))
+      (should (seq-some #'gdocs-convert-list-continuation-p ir))
+      (should (gdocs-convert-ir-to-docs-requests ir)))
+    (let ((rendered (gdocs-convert-ir-to-org
+                     (gdocs-convert-org-string-to-ir
+                      "1. Parent\n   1. Child\n   2. Child two\n2. Next parent\n"))))
+      (should (string-match-p "^2\\. Next parent$" rendered)))))
+
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

@@ -279,45 +279,7 @@ when the containing plain-list uses checklist rendering for mixed items."
 LIST-TYPE is `bullet', `number', or `check'.  DEPTH is the
 0-based nesting level.
 Returns a list of (:ir ELEMENT :begin POS) plists."
-  (let* ((checkbox (org-element-property :checkbox item))
-         (effective-type (gdocs-convert--item-list-type item list-type))
-         (checked (eq checkbox 'on))
-         (partial (eq checkbox 'trans))
-         (paragraph (org-element-map item 'paragraph #'identity nil t))
-         (runs (when paragraph
-                 (gdocs-convert--strip-continuation-indent
-                  (gdocs-convert--objects-to-runs
-                   (org-element-contents paragraph)))))
-         (trimmed (gdocs-convert--trim-runs runs))
-         (list-plist (append (list :type effective-type :level depth)
-                             (when (eq effective-type 'check)
-                               (list :checked checked :partial partial))))
-         (markers (append
-                   (list (list :type 'list-state
-                               :data (format "%s:%d" effective-type depth)))
-                   (when checkbox
-                     (list (list :type 'task-state
-                                 :data (pcase checkbox
-                                         ('on "on")
-                                         ('trans "partial")
-                                         (_ "off")))))))
-         (ir-element (append
-                      (list :type 'paragraph
-                            :style 'normal
-                            :list list-plist
-                            :contents (or trimmed
-                                          (list (gdocs-convert--make-plain-run "")))
-                            :id (gdocs-convert--next-id)
-                            :gdocs-marker markers)))
-         (result (list (list :ir ir-element
-                             :begin (org-element-property :begin item)))))
-    (dolist (child (org-element-contents item))
-      (when (eq (org-element-type child) 'plain-list)
-        (setq result
-              (nconc result
-                     (gdocs-convert--plain-list-positioned
-                      child (1+ depth))))))
-    result))
+  (gdocs-convert-list-item-positioned item list-type depth))
 
 (defun gdocs-convert--top-level-paragraph-p (paragraph)
   "Return non-nil if PARAGRAPH is a direct section child.
@@ -369,36 +331,35 @@ whitespace from the last.  Returns nil if no text remains."
 
 (defun gdocs-convert--drop-edge-whitespace-runs (runs)
   "Drop whitespace-only runs from the start and end of RUNS."
-  (let ((result (cl-loop for r in runs
-                         with started = nil
-                         when (or started
-                                  (not (string-blank-p
-                                        (plist-get r :text))))
-                         collect r
-                         and do (setq started t))))
-    (nreverse (cl-loop for r in (nreverse result)
-                       with started = nil
-                       when (or started
-                                (not (string-blank-p
-                                      (plist-get r :text))))
-                       collect r
-                       and do (setq started t)))))
+  (cl-labels ((blank (run)
+                (and (string-blank-p (plist-get run :text))
+                     (not (plist-get (gdocs-convert--inline-run-policy run) :preserve-whitespace)))))
+             (let ((result (copy-sequence runs)))
+               (while (and result (blank (car result))) (setq result (cdr result)))
+               (setq result (nreverse result))
+               (while (and result (blank (car result))) (setq result (cdr result)))
+               (nreverse result))))
 
 (defun gdocs-convert--trim-first-and-last-runs (runs)
   "Trim leading whitespace from first run and trailing from last in RUNS."
   (when runs
     (let* ((first (car runs))
-           (first-text (s-trim-left (plist-get first :text)))
+           (first-text (if (plist-get (gdocs-convert--inline-run-policy first) :preserve-whitespace)
+                           (plist-get first :text) (s-trim-left (plist-get first :text))))
            (last-elt (car (last runs)))
-           (last-text (s-trim-right (plist-get last-elt :text))))
-      (when (string-empty-p first-text)
+           (last-text (let ((text (if (eq first last-elt) first-text (plist-get last-elt :text))))
+                        (if (plist-get (gdocs-convert--inline-run-policy last-elt) :preserve-whitespace)
+                            text (s-trim-right text)))))
+      (when (and (string-empty-p first-text)
+                 (not (plist-get (gdocs-convert--inline-run-policy first) :preserve-whitespace)))
         (setq runs (cdr runs))
         (when runs
           (setq first (car runs))
           (setq first-text (s-trim-left (plist-get first :text)))))
       (when runs
         (setcar runs (plist-put (copy-sequence first) :text first-text))
-        (when (string-empty-p last-text)
+        (when (and (string-empty-p last-text)
+                   (not (plist-get (gdocs-convert--inline-run-policy last-elt) :preserve-whitespace)))
           (setq runs (butlast runs))
           (when runs
             (setq last-elt (car (last runs)))
@@ -434,7 +395,8 @@ whitespace from the last.  Returns nil if no text remains."
 
 (defun gdocs-convert--inline-run-policy (run)
   "Compose feature-owned normalization and addressing policy for RUN."
-  (append (gdocs-convert-task-run-policy run)
+  (append (gdocs-convert-list-continuation-run-policy run)
+          (gdocs-convert-task-run-policy run)
           (gdocs-convert-code-run-policy run)
           (gdocs-convert-date-run-policy run)
           (gdocs-convert-status-run-policy run)
@@ -632,9 +594,8 @@ collected at the end under a conventional `* Footnotes' section."
          (prev-type nil)
          (elements (seq-into (plist-get split :body) 'vector))
          (i 0)
-         (len (length (plist-get split :body)))
-         (list-counter 0)
-         (prev-list-level nil))
+         (len (length (plist-get split :body))))
+    (gdocs-convert--assign-list-counters (plist-get split :body))
     (while (< i len)
       (let ((element (aref elements i)) group)
         (cond
@@ -650,25 +611,10 @@ collected at the end under a conventional `* Footnotes' section."
           (push (plist-get group :org-text) parts)
           (setq i (plist-get group :next-index)
                 prev-element (plist-get group :element)
-                prev-type (plist-get prev-element :type)
-                list-counter 0 prev-list-level nil))
+                prev-type (plist-get prev-element :type)))
          ;; Normal element
          (t
-          (let* ((type (plist-get element :type))
-                 (list-info (plist-get element :list))
-                 (list-level (when list-info (plist-get list-info :level)))
-                 (list-type (when list-info (plist-get list-info :type))))
-            ;; Track sequential numbering for ordered list items
-            (if (eq list-type 'number)
-                (if (eql list-level prev-list-level)
-                    (cl-incf list-counter)
-                  (setq list-counter 1))
-              (setq list-counter 0))
-            (setq prev-list-level (when (eq list-type 'number) list-level))
-            ;; Mutates the :list plist in place — also done by
-            ;; `gdocs-convert--assign-list-counters' for the docs->IR path.
-            (when (and list-info (> list-counter 0))
-              (plist-put list-info :counter list-counter))
+          (let ((type (plist-get element :type)))
             (let ((needs-blank (gdocs-convert--needs-blank-line-p
                                 prev-element element))
                   (org-text (gdocs-convert--ir-element-to-org element)))
@@ -698,7 +644,8 @@ merge the heading text into that list item."
           (previous-style (plist-get previous :style))
           (type (plist-get element :type))
           (list-info (plist-get element :list)))
-      (or (gdocs-convert-callout-element-p previous)
+      (or (gdocs-convert-list-continuation-p element)
+          (gdocs-convert-callout-element-p previous)
           (gdocs-convert-callout-element-p element)
           (gdocs-convert-quote-element-p previous)
           (gdocs-convert-quote-element-p element)
@@ -775,6 +722,7 @@ like `body', `title', `lists', and `namedRanges'."
          (footnote-refs nil)
          (result nil))
     (gdocs-convert-task-validate-native-context content markers)
+    (gdocs-convert-list-validate-native-context content markers)
     (when title
       (push (list :type 'paragraph
                   :style 'title
@@ -814,7 +762,7 @@ like `body', `title', `lists', and `namedRanges'."
                 (gdocs-convert--attach-source-block-markers
                  (gdocs-convert--attach-example-block-markers
                   (gdocs-convert--attach-image-caption-markers
-                   (append (nreverse result)
+                   (append (gdocs-convert-list-validate-body (nreverse result))
                            (gdocs-convert--docs-footnotes-to-ir
                             (alist-get 'footnotes json) footnote-refs)))))))))
       (gdocs-convert--assign-list-counters ir)
@@ -926,6 +874,7 @@ the IR element.  Returns marker plists with range metadata when available."
                      (range (progn
                               (gdocs-convert-code-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
                               (gdocs-convert-task-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
+                              (gdocs-convert-list-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
                               (when (and status-p (/= (length ranges) 1))
                                 (user-error "A status marker must have one contiguous range"))
                               (if (vectorp ranges) (aref ranges 0) (car ranges)))))
@@ -960,7 +909,7 @@ the first element begins (default 1)."
         (requests nil)
         (element-ranges nil))
     (dolist (element ir)
-      (let* ((element (gdocs-convert-task-project-paragraph element))
+      (let* ((element (gdocs-convert-list-project-paragraph (gdocs-convert-task-project-paragraph element)))
              (result (gdocs-convert--ir-element-to-requests element index)))
         (push (list :element element :start index
                     :end (plist-get result :index))
@@ -1026,7 +975,7 @@ Returns a plist (:requests LIST :index NEW-INDEX).
 
 A text-style reset request is emitted after the insertText to
 clear any inherited formatting before per-run styles are applied."
-  (let* ((element (gdocs-convert-task-project-paragraph element))
+  (let* ((element (gdocs-convert-list-project-paragraph (gdocs-convert-task-project-paragraph element)))
          (contents (plist-get element :contents))
          (prefix (gdocs-convert--list-leading-prefix element))
          (prefix-len (gdocs-convert--string-to-utf16-length prefix))
@@ -1138,7 +1087,8 @@ separately by diff."
                                  (gdocs-convert-code-run-marker-request run index end segment-id))))
           (push marker requests))
         (unless omit-status-markers
-          (dolist (request (gdocs-convert-task-run-requests run index segment-id))
+          (dolist (request (append (gdocs-convert-task-run-requests run index segment-id)
+                                   (gdocs-convert-list-continuation-run-requests run index segment-id)))
             (push request requests)))
         (setq index end)))
     (nreverse requests)))
@@ -1299,7 +1249,8 @@ Google Docs from merging them into one continuous list."
                  element-ranges)
                 (gdocs-convert--guard-non-list-paragraphs
                  element-ranges groups)
-                (gdocs-convert-task-post-bullet-indents element-ranges))))))
+                (gdocs-convert-task-post-bullet-indents element-ranges)
+                (gdocs-convert-list-continuation-post-bullet-indents element-ranges))))))
 
 (defun gdocs-convert--bullet-request-in-list-groups-p (request groups)
   "Return non-nil if bullet REQUEST belongs to one of GROUPS."
@@ -1323,7 +1274,8 @@ and :preset (bullet preset string)."
         (current-preset nil))
     (dolist (range element-ranges)
       (let* ((elem (plist-get range :element))
-             (list-info (plist-get elem :list)))
+             (list-info (or (plist-get elem :list)
+                            (gdocs-convert-list-continuation-native-group elem))))
         (if list-info
             (let ((preset (gdocs-convert--list-type-to-preset
                            (plist-get list-info :type))))

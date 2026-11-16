@@ -235,6 +235,35 @@ prefers an existing Org ID for a same-document heading. Cache ordering,
 normalization and dynamic callback context remain part of link resolution, not
 semantic conversion or typography policy.
 
+## List paragraph fidelity
+
+List counters retain independent state at each nesting level. Returning from a
+child list resumes the parent's counter; continuation paragraphs do not count
+as new items. Org rendering uses the same counter assignment as native import.
+
+`gdocs-convert-lists.el` retains every direct paragraph of a list item, in
+source order around child lists. The first paragraph carries the item's list
+role. Later paragraphs carry `:list-continuation` with the owning type and level,
+not another bullet or a duplicated task state. Org rendering indents these
+paragraphs within the original item without making them children of the most
+recent nested item. Unsupported body blocks fail before publication rather than
+being dropped or lifted out of the item.
+
+Managed continuation paragraphs have versioned named-range annotations. A
+zero-width run projects annotation and indentation requests without adding text
+or disturbing rich-body UTF-16 coordinates. Native numbered publication keeps
+continuations in the enclosing group, then removes their temporary bullets;
+they do not split the list into restarting groups. Callout continuations use
+full-width presentation; task continuations do not introduce another glyph.
+`gdocs-diff-list-continuations.el` owns semantic annotation identity, emitters
+and stale-range cleanup. Repeated unchanged pushes do not recreate annotations.
+
+Import requires an identifiable preceding owner at the declared type and level.
+Malformed, overlapping, orphaned, segmented, table-contained or
+paragraph-spanning continuation annotations fail closed. Unmarked prose is not
+inferred to be a continuation from indentation alone. Structural source trimming
+respects literal run whitespace and does not accumulate continuation indentation.
+
 ## Callout conversion
 
 `gdocs-convert-callouts.el` owns callout syntax and attributes, type/title

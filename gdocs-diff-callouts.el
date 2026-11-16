@@ -19,7 +19,8 @@
           (or (plist-get element :style-revision) "")
           (mapconcat (lambda (body)
                        (let ((runs (plist-get body :contents)))
-                         (format "%s:%s:%s" (gdocs-diff--list-key (plist-get body :list))
+                         (format "%s:%s:%s" (or (gdocs-convert-list-continuation-key body)
+                                                (gdocs-diff--list-key (plist-get body :list)))
                                  (gdocs-diff--runs-formatting-key runs) (gdocs-diff--runs-semantic-text runs))))
                      (gdocs-convert--callout-body-elements-from-paragraphs element) "\n\n")))
 

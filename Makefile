@@ -31,6 +31,7 @@ TEST_FILES = \
   test/gdocs-fidelity-corrections-test.el \
   test/gdocs-callouts-test.el \
   test/gdocs-tasks-test.el \
+  test/gdocs-list-conversion-test.el \
   test/gdocs-diff-test.el \
   test/gdocs-diff-encapsulation-test.el \
   test/gdocs-diff-status-test.el \
