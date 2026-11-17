@@ -514,8 +514,10 @@ conversion facade loads this module alongside headings and status conversion.
 
 Native footnote IR carries its authored `:label`, rich `:contents`, and remote
 `:segment-id` / `:segment-start` addressing metadata. Addressing metadata does not
-change semantic equality. Footnote-only text or emphasis/link changes target
-that existing segment; unchanged notes produce no requests. Existing segment
+change semantic equality. Native label annotations resolve into the reference
+label; they do not become opaque metadata on its containing paragraph.
+Footnote-only text or emphasis/link changes target that existing segment;
+unchanged notes produce no requests. Existing segment
 updates precede body edits that may remove native references. The segment's
 terminal newline is not deleted.
 

@@ -217,6 +217,10 @@ Reject structures that the single-paragraph native mapping cannot preserve."
   (when-let* ((label (plist-get run :footnote-label)))
     (list :identity label :preserve-whitespace t :preserve-terminal t :formatted t)))
 
+(defun gdocs-convert-footnote-paragraph-markers (markers)
+  "Exclude footnote label MARKERS consumed by native reference decoding."
+  (seq-remove (lambda (marker) (eq (plist-get marker :type) 'footnote-label)) markers))
+
 (defun gdocs-convert--footnote-label-marker (markers start end)
   "Return footnote label from MARKERS overlapping START..END, or nil."
   (seq-find (lambda (marker)

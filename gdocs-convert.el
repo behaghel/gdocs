@@ -764,10 +764,11 @@ otherwise."
 
 (defun gdocs-convert--paragraph-markers-for-range (markers start end)
   "Compose paragraph annotations from MARKERS overlapping START..END."
-  (gdocs-convert-task-paragraph-markers
-   (gdocs-convert-code-paragraph-markers
-    (gdocs-convert--without-inline-status-markers
-     (gdocs-convert--markers-for-range markers start end)))))
+  (gdocs-convert-footnote-paragraph-markers
+   (gdocs-convert-task-paragraph-markers
+    (gdocs-convert-code-paragraph-markers
+     (gdocs-convert--without-inline-status-markers
+      (gdocs-convert--markers-for-range markers start end))))))
 
 (defun gdocs-convert--range-marker (markers marker-type start end)
   "Return MARKER-TYPE marker from MARKERS overlapping START..END, or nil."
