@@ -13,6 +13,7 @@
 (declare-function gdocs-diff--marker-key "gdocs-diff" (element))
 (declare-function gdocs-diff--element-utf16-length "gdocs-diff" (element))
 (declare-function gdocs-diff-compute-operations "gdocs-diff" (old-ir new-ir))
+(declare-function gdocs-convert--logical-style-paragraph-request "gdocs-style-resolve" (style-name start end))
 
 (defun gdocs-diff--list-key (list-info)
   "Return a stable identity fragment for LIST-INFO, excluding transient counters."
@@ -84,7 +85,13 @@
               (end (+ (car range) (gdocs-convert--string-to-utf16-length text) 1)))
          (plist-put result :style-reqs
                     (append (plist-get result :style-reqs)
-                            (list (gdocs-diff--make-delete-bullets-request (car range) end))))))))
+                            (list (gdocs-diff--make-delete-bullets-request (car range) end))))))
+     (when-let* ((spacing (plist-get new :gdocs-list-spacing-style))
+                 (request (gdocs-convert--logical-style-paragraph-request
+                           spacing (car range) (+ (car range) (gdocs-diff--element-utf16-length new)))))
+       ;; Named-style updates can erase a boundary gap in the real API.
+       ;; Restore only spacing, at this operation's addressed paragraph.
+       (plist-put result :style-reqs (append (plist-get result :style-reqs) (list request))))))
   result)
 
 (defun gdocs-diff-lists--membership (element)
@@ -142,8 +149,9 @@
      (list `((createParagraphBullets
               . ((range . ((startIndex . ,start) (endIndex . ,(+ end prefixes))))
                  (bulletPreset . ,(plist-get group :preset))))))
-     (gdocs-convert--callout-list-post-bullet-indent-resets prefixed)
-     (gdocs-convert-list-continuation-post-bullet-indents prefixed))))
+     (gdocs-convert--list-spacing-requests prefixed)
+     (gdocs-convert-list-continuation-post-bullet-indents prefixed)
+     (gdocs-convert--callout-list-post-bullet-indent-resets prefixed))))
 
 (defun gdocs-diff-lists--regroup (old new operations start)
   "Regroup native lists after OLD to NEW OPERATIONS at START."

@@ -17,12 +17,59 @@
          (requests (gdocs-convert-ir-to-docs-requests ir))
          (text (mapconcat (lambda (request) (or (alist-get 'text (alist-get 'insertText request)) "")) requests ""))
          (remote (gdocs-convert-docs-json-to-ir (gdocs-fidelity-test--returned-json requests))))
-    (should (equal text "☑ done 😀\n◩ partial\n☐ open\n"))
+    (should (equal text "☑\tdone 😀\n◩\tpartial\n☐\topen\n"))
     (should-not (seq-some (lambda (request) (alist-get 'createParagraphBullets request)) requests))
     (should (equal (gdocs-convert-ir-to-org remote) source))
     (should (equal ir before))
     (should-not (gdocs-diff-generate remote ir))
     (should-not (gdocs-diff-generate remote ir))))
+
+(ert-deftest gdocs-tasks-hanging-layout-matches-native-list-columns ()
+  "Task glyphs, text and wrapped lines share native bullet columns."
+  (dolist (level '(0 1 2))
+    (let* ((requests (gdocs-convert-task-run-requests
+                      (list :managed-task-prefix (list :level level)) 1))
+           (style (alist-get 'paragraphStyle
+                             (alist-get 'updateParagraphStyle (car (last requests)))))
+           (body (* 36 (1+ level))))
+      (should (= (alist-get 'magnitude (alist-get 'indentFirstLine style)) (- body 18)))
+      (should (= (alist-get 'magnitude (alist-get 'indentStart style)) body))
+      ;; Real API rejects this read-only field with "Unallowed field: tabStops".
+      ;; Standard document stops already fall on each 36-point body column.
+      (should-not (alist-get 'tabStops style)))))
+
+(ert-deftest gdocs-tasks-tab-separator-keeps-anchor-and-roundtrip ()
+  "A tab aligns body text without changing the two-unit prefix or separator anchor."
+  (let* ((source "- [ ] task 😀\n")
+         (ir (gdocs-convert-org-string-to-ir source))
+         (requests (gdocs-convert-ir-to-docs-requests ir))
+         (text (mapconcat (lambda (request) (or (alist-get 'text (alist-get 'insertText request)) "")) requests "")))
+    (should (equal text "☐\ttask 😀\n"))
+    (let ((native (gdocs-convert-docs-json-to-ir (gdocs-fidelity-test--returned-json requests))))
+      (should (equal (gdocs-convert-ir-to-org native) source))
+      (should-not (gdocs-diff-generate native ir)))))
+
+(ert-deftest gdocs-tasks-legacy-separator-migrates-once-without-body-loss ()
+  "Legacy space-prefixed tasks migrate to tabs without disguising physical text."
+  (let* ((source "- [ ] task 😀\n")
+         (ir (gdocs-convert-org-string-to-ir source))
+         (initial (copy-tree (gdocs-convert-ir-to-docs-requests ir))))
+    (dolist (request initial)
+      (when-let* ((insert (alist-get 'insertText request)))
+        (setf (alist-get 'text insert) (string-replace "☐\t" "☐ " (alist-get 'text insert))))
+      (when-let* ((update (alist-get 'updateParagraphStyle request))
+                  (style (alist-get 'paragraphStyle update))
+                  (_indent (alist-get 'indentFirstLine style)))
+        (setf (alist-get 'indentFirstLine style) '((magnitude . 0) (unit . "PT")))))
+    (let* ((old (gdocs-convert-docs-json-to-ir (gdocs-fidelity-test--returned-json initial)))
+           (diff (gdocs-diff-generate old ir)))
+      (should (equal (gdocs-convert--runs-to-plain-text
+                      (plist-get (car (gdocs-diff-tasks-project-ir old)) :contents)) "☐ task 😀"))
+      (should diff)
+      (let ((returned (gdocs-convert-docs-json-to-ir
+                       (gdocs-fidelity-test--returned-json (append initial diff)))))
+        (should (equal (gdocs-convert-ir-to-org returned) source))
+        (should-not (gdocs-diff-generate returned ir))))))
 
 (ert-deftest gdocs-tasks-native-glyph-edit-is-authoritative ()
   "A native glyph edit changes Org completion despite unchanged metadata."
@@ -134,7 +181,8 @@
          (requests (gdocs-convert-ir-to-docs-requests ir))
          (last (alist-get 'updateParagraphStyle (car (last requests)))))
     (should last)
-    (should (= (alist-get 'magnitude (alist-get 'indentFirstLine (alist-get 'paragraphStyle last))) 36))
+    (should (= (alist-get 'magnitude (alist-get 'indentFirstLine (alist-get 'paragraphStyle last))) 54))
+    (should (= (alist-get 'magnitude (alist-get 'indentStart (alist-get 'paragraphStyle last))) 72))
     (should (= (alist-get 'startIndex (alist-get 'range last)) 22))))
 
 (ert-deftest gdocs-tasks-converting-native-bullet-clears-control-before-glyph-style ()
@@ -147,10 +195,42 @@
          (new (gdocs-convert-org-string-to-ir "- [X] task\n"))
          (requests (gdocs-diff-generate old new))
          (delete (seq-position requests t (lambda (request _) (alist-get 'deleteParagraphBullets request))))
-         (indent (seq-position requests t (lambda (request _) (equal (alist-get 'fields (alist-get 'updateParagraphStyle request)) "indentStart,indentFirstLine")))))
+         (indent (seq-position requests t (lambda (request _) (string-match-p "indentStart,indentFirstLine" (or (alist-get 'fields (alist-get 'updateParagraphStyle request)) ""))))))
     (should delete)
     (should indent)
     (should (< delete indent))))
+
+(ert-deftest gdocs-tasks-list-boundary-spacing-keeps-items-compact ()
+  "Separate list kinds get a visible gap, but items and continuations stay compact."
+  (let* ((gdocs-style-definitions
+          (append '((gdocs-list-first :paragraph (:space-above 6))
+                    (gdocs-list-item :paragraph (:space-above 0))) gdocs-style-definitions))
+         (source "1. Number\n\n- [ ] Task\n\n  Continue\n- [X] Next\n\n- Term :: Definition\n")
+         (requests (gdocs-convert-ir-to-docs-requests (gdocs-convert-org-string-to-ir source)))
+         (json (gdocs-fidelity-test--returned-json requests))
+         (paragraphs (alist-get 'content (alist-get 'body json))))
+    (should (equal (mapcar (lambda (element)
+                             (alist-get 'magnitude (alist-get 'spaceAbove
+                                                              (alist-get 'paragraphStyle (alist-get 'paragraph element)))))
+                           paragraphs)
+                   '(6 6 0 0 6)))))
+
+(ert-deftest gdocs-tasks-state-edit-restores-list-boundary-gap ()
+  "Restyling an edited task cannot erase its list's visible boundary gap."
+  (let* ((gdocs-style-definitions
+          (append '((gdocs-list-first :paragraph (:space-above 6))
+                    (gdocs-list-item :paragraph (:space-above 0))) gdocs-style-definitions))
+         (source "Before.\n\n- [ ] Task\n- [X] Next\n")
+         (old (gdocs-convert-docs-json-to-ir
+               (gdocs-fidelity-test--returned-json
+                (gdocs-convert-ir-to-docs-requests (gdocs-convert-org-string-to-ir source)))))
+         (start (plist-get (cadr old) :doc-start))
+         (new (gdocs-convert-org-string-to-ir (string-replace "[ ] Task" "[X] Task" source)))
+         (requests (gdocs-diff-generate old new)))
+    (should (seq-some (lambda (request)
+                        (let ((style (alist-get 'updateParagraphStyle request)))
+                          (and (= (or (alist-get 'magnitude (alist-get 'spaceAbove (alist-get 'paragraphStyle style))) -1) 6)
+                               (= (alist-get 'startIndex (alist-get 'range style)) start)))) requests))))
 
 (ert-deftest gdocs-tasks-feature-ownership ()
   "Glyph policy and physical projection live outside generic conversion and diff."

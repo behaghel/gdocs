@@ -81,7 +81,7 @@ STAGE identifies content planning or the complete modification envelope."
 
 (defun gdocs-diff-semantic-project-ir (ir)
   "Compose feature-owned physical projections before generic diffing of IR."
-  (mapcar #'gdocs-convert-list-project-paragraph (gdocs-diff-tasks-project-ir ir)))
+  (gdocs-convert-list-project-ir (gdocs-diff-tasks-project-ir ir)))
 
 (provide 'gdocs-diff-semantics)
 ;;; gdocs-diff-semantics.el ends here

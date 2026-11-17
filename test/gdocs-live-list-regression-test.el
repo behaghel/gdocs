@@ -119,7 +119,12 @@
       (should (seq-some (lambda (request)
                           (let ((range (alist-get 'range (alist-get 'deleteParagraphBullets request))))
                             (and range (= (alist-get 'startIndex range) 1) (= (alist-get 'endIndex range) 5)))) requests))
-      (should (equal (alist-get 'text (alist-get 'insertText (nth (- (length requests) 2) requests))) "\t\t")))))
+      (let ((prefix-position (cl-position-if
+                              (lambda (request) (equal (alist-get 'text (alist-get 'insertText request)) "\t\t")) requests))
+            (bullet-position (cl-position-if
+                              (lambda (request) (eq request last-bullet)) requests)))
+        (should prefix-position)
+        (should (< prefix-position bullet-position))))))
 
 (ert-deftest gdocs-live-list-group-repair-keeps-unaffected-groups ()
   "Changing one group's depth does not rebuild another native list."
@@ -175,8 +180,19 @@
       (should (equal (mapcar (lambda (element) (plist-get (plist-get element :list) :level)) native)
                      (cadr case))))))
 
-(ert-deftest gdocs-live-list-recorded-create-push-pull-and-repeated-noop ()
-  "Real create and edited snapshots preserve semantics, native identity and pull."
+(defun gdocs-live-list-test--legacy-layout (ir)
+  "Return cloned IR with legacy physical task spacing, not hidden completion."
+  (let ((copy (copy-tree ir)))
+    (dolist (element copy copy)
+      (when (gdocs-convert-task-paragraph-p element)
+        (plist-put element :managed-task-legacy-separator t))
+      (when (eq (plist-get element :type) 'callout-block)
+        (plist-put element :body-elements
+                   (gdocs-live-list-test--legacy-layout
+                    (gdocs-convert--callout-body-elements-from-paragraphs element)))))))
+
+(ert-deftest gdocs-live-list-recorded-legacy-pull-and-layout-upgrade ()
+  "Legacy captures retain semantics and request an explicit physical task upgrade."
   (dolist (case '(("live-list-corrected-create.json" "live-list-updated.org")
                   ("live-list-second-update.json" "live-list-second-update.org")))
     (let* ((json (gdocs-live-list-test--json (car case)))
@@ -186,9 +202,10 @@
            (pulled (gdocs-convert-ir-to-org native)) parents)
       (should-not (alist-get 'revisionId json))
       (should (equal pulled (gdocs-convert-ir-to-org expected)))
-      (should-not (gdocs-diff-generate native expected))
-      (should-not (gdocs-diff-generate native expected))
-      (should-not (gdocs-diff-generate native (gdocs-convert-org-string-to-ir pulled)))
+      (should-not (gdocs-diff-generate native (gdocs-live-list-test--legacy-layout expected)))
+      (should-not (gdocs-diff-generate native (gdocs-live-list-test--legacy-layout expected)))
+      (should (gdocs-diff-generate native expected))
+      (should (gdocs-diff-generate native (gdocs-convert-org-string-to-ir pulled)))
       (seq-doseq (element (alist-get 'content (alist-get 'body json)))
         (let* ((paragraph (alist-get 'paragraph element))
                (text (mapconcat (lambda (run) (or (alist-get 'content (alist-get 'textRun run)) ""))
@@ -202,6 +219,41 @@
       (should (= (length parents) 2))
       (should (stringp (car parents)))
       (should (equal (car parents) (cadr parents))))))
+
+(ert-deftest gdocs-live-list-styled-create-edit-pull-and-repeat ()
+  "Themed real-API fixtures retain visible layout, authored semantics and no-op pushes."
+  (dolist (case '(("live-list-styled-create.json" "live-list-styled-create.org")
+                  ("live-list-styled-edited.json" "live-list-styled-edited.org")))
+    (let* ((json (gdocs-live-list-test--json (car case)))
+           (source (gdocs-disposable-plan--read-source
+                    (expand-file-name (cadr case) gdocs-live-list-test--fixtures)))
+           (expected (gdocs-convert-org-string-to-ir source))
+           (native (gdocs-disposable-plan--body (gdocs-convert-docs-json-to-ir json)))
+           (pulled (gdocs-convert-ir-to-org native)) (surfaces 0))
+      (should (equal pulled (gdocs-convert-ir-to-org expected)))
+      (should-not (gdocs-diff-generate native expected))
+      (should-not (gdocs-diff-generate native expected))
+      (should-not (gdocs-diff-generate native (gdocs-convert-org-string-to-ir pulled)))
+      (seq-doseq (element (alist-get 'content (alist-get 'body json)))
+        (let* ((paragraph (alist-get 'paragraph element))
+               (style (alist-get 'paragraphStyle paragraph))
+               (text (mapconcat (lambda (item) (or (alist-get 'content (alist-get 'textRun item)) ""))
+                                (alist-get 'elements paragraph) "")))
+          (when (alist-get 'shading style)
+            (cl-incf surfaces)
+            (let ((first (or (alist-get 'magnitude (alist-get 'indentFirstLine style)) 0))
+                  (start (or (alist-get 'magnitude (alist-get 'indentStart style)) 0))
+                  (end (or (alist-get 'magnitude (alist-get 'indentEnd style)) 0))
+                  (left (or (alist-get 'magnitude (alist-get 'padding (alist-get 'borderLeft style))) 0))
+                  (right (or (alist-get 'magnitude (alist-get 'padding (alist-get 'borderRight style))) 0)))
+              (should (= (- (min first start) left) 0))
+              (should (= (- end right) 0))))
+          (when (string-match-p "Boundary gap retained" text)
+            (should (= (alist-get 'magnitude (alist-get 'spaceAbove style)) 6)))
+          (when (string-match-p "\\`[☐☑◩]\t" text)
+            (should (= (- (alist-get 'magnitude (alist-get 'indentStart style))
+                          (alist-get 'magnitude (alist-get 'indentFirstLine style))) 18)))))
+      (should (> surfaces 5)))))
 
 (provide 'gdocs-live-list-regression-test)
 ;;; gdocs-live-list-regression-test.el ends here

@@ -332,11 +332,16 @@ stripping list-looking authored text. Task completion is not stored there:
 managed visible glyphs own it. Org rendering separates lists from subsequent
 prose so a paragraph cannot become a task continuation on reparse. Unsupported
 nested callout list shading fails before publication instead of flattening it.
+Callout list chrome preserves ordinary hanging columns and compensates the
+left border padding so the shaded surface keeps the same edge as prose.
+Chrome runs after bullet cleanup and continuation/task indentation repairs.
+Configured prose gaps use internal padding within the shaded surface; list
+contents remain compact. Outer margins remain separate paragraph spacing.
 
 ## Managed task glyphs
 
 `gdocs-convert-tasks.el` projects Org `[ ]`, `[X]` and `[-]` task items to
-editable Docs text `☐`, `☑` and `◩`, followed by a space and the rich body.
+editable Docs text `☐`, `☑` and `◩`, followed by a tab and the rich body.
 These are text glyphs, not click-to-toggle native controls. Pull reads the
 visible glyph as completion state; metadata identifies managed tasks and
 nesting, never an authoritative hidden completion snapshot. Unmarked glyph
@@ -345,13 +350,20 @@ The named range anchors the separator after the glyph, so replacing just the
 glyph preserves its identity. Missing glyphs, malformed/orphaned annotations,
 unsupported segments and table contexts fail closed with actionable errors.
 
-Version-one nesting uses 36-point structural steps and reads observable native
-indentation against that convention. Task planning clears native bullet
+Version-one nesting uses 36-point structural steps. Hanging glyph columns are
+18 points before their body columns, with wrapped text and continuations aligned
+to the body. Tabs use standard document stops; the read-only `tabStops` field is
+not sent in update requests. Legacy space-separated tasks remain readable and
+retain their observed physical prefix during diffing, allowing a one-time
+upgrade without body or completion loss. Task planning clears native bullet
 membership and repairs indentation after adjacent native list operations.
-Rich-body spans and markers start after the two-unit glyph/space prefix.
+Rich-body spans and markers start after the two-unit glyph/separator prefix.
 `gdocs-diff-tasks.el` projects semantic task paragraphs before generic diffing,
 owns prefix descriptors and removes stale range annotations before edits.
 Changed prefixes are annotated once; no-op/repeated pushes emit no requests.
+List-owned contextual spacing distinguishes list boundaries from compact item
+contents. Modification finishers restore that spacing after native named-style
+updates, without applying named styles again or changing authored text.
 
 Native checkbox completion is not exposed by the documented Docs API. Known
 native checkbox forms and legacy-marked task controls are rejected rather than

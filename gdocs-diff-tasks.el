@@ -25,7 +25,7 @@
 (defun gdocs-diff-tasks--run (run)
   "Describe managed task prefix RUN and its annotation requests."
   (when-let* ((info (plist-get run :managed-task-prefix)))
-    (list :key (format "task-prefix:%d" (plist-get info :level))
+    (list :key (format "task-prefix:%d:%s" (plist-get info :level) (plist-get info :layout))
           :normalize-whitespace nil :requests #'gdocs-convert-task-run-requests)))
 
 (defun gdocs-diff-tasks--plan (old new operations _start)

@@ -20,6 +20,9 @@
     ('bullet "BULLET_DISC_CIRCLE_SQUARE")
     ('number "NUMBERED_DECIMAL_ALPHA_ROMAN")
     ('check (user-error "Task lists require managed glyph projection before native list planning"))))
+(declare-function gdocs-convert-list-paragraph-info "gdocs-convert-lists" (element))
+(declare-function gdocs-convert-list-compact-neighbor-p "gdocs-convert-lists" (previous element))
+(declare-function gdocs-convert--logical-style-paragraph-request "gdocs-style-resolve" (style-name start end))
 (declare-function gdocs-convert-list-continuation-native-group "gdocs-convert-lists" (element))
 (declare-function gdocs-convert-list-continuation-post-bullet-indents "gdocs-convert-lists" (ranges))
 (declare-function gdocs-convert--callout-list-post-bullet-indent-resets "gdocs-convert-callouts" (ranges))
@@ -77,17 +80,39 @@ With RESET, set zero indentation before tabs supply nesting during creation."
   "Finalize native list REQUESTS using ELEMENT-RANGES.
 Create contiguous groups last-to-first before peer-owned post-bullet repairs."
   (let ((groups (gdocs-convert--find-list-groups element-ranges)))
-    (if (null groups) requests
+    (if (null groups)
+        (append requests (gdocs-convert--list-spacing-requests element-ranges)
+                (gdocs-convert-task-post-bullet-indents element-ranges)
+                (gdocs-convert-list-continuation-post-bullet-indents element-ranges)
+                (gdocs-convert--callout-list-post-bullet-indent-resets element-ranges))
       (let ((filtered (cl-remove-if
                        (lambda (request)
                          (and (alist-get 'createParagraphBullets request)
                               (gdocs-convert--bullet-request-in-list-groups-p request groups))) requests)))
         (gdocs-convert--alternate-numbered-presets groups)
         (append filtered (mapcar #'gdocs-convert--list-group-bullet-request (reverse groups))
-                (gdocs-convert--callout-list-post-bullet-indent-resets element-ranges)
                 (gdocs-convert--guard-non-list-paragraphs element-ranges groups)
+                (gdocs-convert--list-spacing-requests element-ranges)
                 (gdocs-convert-task-post-bullet-indents element-ranges)
-                (gdocs-convert-list-continuation-post-bullet-indents element-ranges))))))
+                (gdocs-convert-list-continuation-post-bullet-indents element-ranges)
+                (gdocs-convert--callout-list-post-bullet-indent-resets element-ranges))))))
+
+(defun gdocs-convert--list-spacing-requests (ranges)
+  "Apply configured list boundaries and compact contents at physical RANGES."
+  (let (previous requests)
+    (dolist (range ranges (nreverse requests))
+      (let ((element (plist-get range :element)))
+        (when (and (gdocs-convert-list-paragraph-info element)
+                   (not (plist-get element :list-spacing-context)))
+          (let* ((removed (gdocs-convert--list-prefixes-before range ranges))
+                 (start (- (plist-get range :start) removed))
+                 (end (- (plist-get range :end) removed
+                         (gdocs-convert--list-prefix-length-for-element element)))
+                 (style (if (gdocs-convert-list-compact-neighbor-p previous element)
+                            'gdocs-list-item 'gdocs-list-first)))
+            (when-let* ((request (gdocs-convert--logical-style-paragraph-request style start end)))
+              (push request requests))))
+        (setq previous element)))))
 
 (defun gdocs-convert--bullet-request-in-list-groups-p (request groups)
   "Return non-nil if bullet REQUEST belongs to one of GROUPS."

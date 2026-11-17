@@ -45,6 +45,18 @@
     (when-let* ((list-info (plist-get element :list)))
       (gdocs-convert--format-list-item list-info text))))
 
+(defun gdocs-convert-list-paragraph-info (element)
+  "Return ELEMENT's native, managed-task or continuation list membership."
+  (or (plist-get element :list) (gdocs-convert-list-continuation-p element)
+      (gdocs-convert-task-list-info element)))
+
+(defun gdocs-convert-list-compact-neighbor-p (previous element)
+  "Return non-nil when list ELEMENT remains compact after PREVIOUS."
+  (let ((info (gdocs-convert-list-paragraph-info element))
+        (before (gdocs-convert-list-paragraph-info previous)))
+    (and info (or (gdocs-convert-list-continuation-p element)
+                  (and before (eq (plist-get before :type) (plist-get info :type)))))))
+
 (defun gdocs-convert--format-list-item (list-info text)
   "Format a list item with LIST-INFO plist and TEXT content."
   (let* ((type (plist-get list-info :type))
@@ -240,6 +252,20 @@ FALLBACK is the containing list's type.  Continuations have no new bullet."
   "Return continuation semantic identity for ELEMENT, or nil."
   (when-let* ((info (gdocs-convert-list-continuation-p element)))
     (format "continuation:%s:%d" (plist-get info :type) (plist-get info :level))))
+
+(defun gdocs-convert-list-project-ir (ir)
+  "Project IR's continuation prefixes and contextual list-spacing roles."
+  (let (previous projected)
+    (dolist (element ir (nreverse projected))
+      (let ((paragraph (gdocs-convert-list-project-paragraph element)))
+        (when (and (gdocs-convert-list-paragraph-info paragraph)
+                   (not (plist-get paragraph :list-spacing-context)))
+          (setq paragraph (copy-sequence paragraph))
+          (plist-put paragraph :gdocs-list-spacing-style
+                     (if (gdocs-convert-list-compact-neighbor-p previous paragraph)
+                         'gdocs-list-item 'gdocs-list-first)))
+        (push paragraph projected)
+        (setq previous paragraph)))))
 
 (defun gdocs-convert-list-project-paragraph (element)
   "Project ELEMENT's continuation annotation without changing body text."

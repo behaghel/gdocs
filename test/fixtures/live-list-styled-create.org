@@ -1,0 +1,38 @@
+* Disposable list conformance
+Only synthetic content 😀 is present.
+
+1. Parent one
+   1. Child one
+   2. Child two *updated again*
+
+   Parent continuation with *bold*, [[https://example.org][a link]] and 😀.
+2. Parent two
+
+- [-] Remote edited open task
+
+  Task continuation with src_python{  x + 3  }.
+- [X] Checked task
+  - [-] Nested partial task
+- [X] Partial task
+
+- *Updated term 😀* :: Definition with [[https://example.org][a link]].
+
+#+ATTR_CALLOUT: :type warning :title "Visual conformance 😀"
+#+BEGIN_CALLOUT
+First *paragraph*.
+
+second paragraph with [[https://example.org][a link]].
+
+- Native callout bullet
+
+1. Native callout number
+
+- [-] Callout task with enough synthetic text to wrap across the available document width and verify that the next line aligns with the task body rather than with its glyph or the page margin.
+
+  Callout task continuation.
+#+END_CALLOUT
+
+#+ATTR_CALLOUT: :type note :title "Audit 😀"
+#+BEGIN_CALLOUT
+A separate adjacent callout.
+#+END_CALLOUT

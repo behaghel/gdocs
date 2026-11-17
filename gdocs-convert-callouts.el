@@ -15,6 +15,7 @@
 (require 'json)
 (require 'url-util)
 (require 'gdocs-convert-paragraphs)
+(require 'gdocs-style-resolve)
 (require 'gdocs-convert-inline-codec)
 (require 'gdocs-convert-tasks)
 (require 'gdocs-convert-lists)
@@ -307,8 +308,12 @@
 (defun gdocs-convert--callout-paragraph-element (element role body index count)
   "Build callout ELEMENT ROLE paragraph from BODY at INDEX of COUNT."
   (let* ((type (or (plist-get element :callout-type) "info"))
-         (style (if (eq role 'label) (gdocs-convert--callout-label-style type)
-                  (gdocs-convert--block-line-style-name (gdocs-convert--callout-style-base type) index count)))
+         (base-style (if (eq role 'label) (gdocs-convert--callout-label-style type)
+                       (gdocs-convert--block-line-style-name (gdocs-convert--callout-style-base type) index count)))
+         (compact (and (eq role 'body)
+                       (gdocs-convert-list-compact-neighbor-p
+                        (when (> index 0) (nth (1- index) (gdocs-convert--callout-body-elements-from-paragraphs element))) body)))
+         (style (if compact (intern (format "%s-compact" base-style)) base-style))
          (source (if (and (listp body) (plist-get body :type)) (copy-sequence body)
                    (gdocs-convert-make-paragraph body :style 'normal)))
          (info (plist-get source :list))
@@ -321,8 +326,10 @@
     (when (and (eq role 'body) info)
       (push (list :type 'callout-list :data (gdocs-convert--callout-list-marker-data-string source)) markers))
     (plist-put paragraph :style 'normal) (plist-put paragraph :style-name style)
-    (when (gdocs-convert-list-continuation-p paragraph)
-      (plist-put paragraph :list-continuation-indent-pt 0))
+    (plist-put paragraph :list-spacing-context 'block)
+    (when-let* ((owner (gdocs-convert-list-continuation-p paragraph)))
+      (plist-put paragraph :list-continuation-indent-pt
+                 (* gdocs-convert--list-indent-pt (1+ (plist-get owner :level)))))
     (dolist (marker markers)
       (let ((name (format "gdocs-org-marker:%s:%s:%s" (plist-get marker :type)
                           (plist-get element :id) (plist-get marker :data))))
@@ -331,12 +338,29 @@
     (plist-put paragraph :gdocs-marker (nreverse markers)) (plist-put paragraph :id (plist-get element :id))
     (gdocs-convert-task-project-paragraph paragraph)))
 
-(defun gdocs-convert--callout-list-indent-reset-request (start end)
-  "Return post-bullet full-width shading repair from START to END."
-  `((updateParagraphStyle . ((paragraphStyle . ((indentStart . ((magnitude . 0) (unit . "PT")))
-                                                (indentFirstLine . ((magnitude . 0) (unit . "PT")))))
-                             (range . ((startIndex . ,start) (endIndex . ,(1- end))))
-                             (fields . "indentStart,indentFirstLine")))))
+(defun gdocs-convert--callout-list-indent-reset-request (start end &optional paragraph)
+  "Repair PARAGRAPH columns and full-width shading from START to END."
+  (let* ((info (gdocs-convert-list-paragraph-info paragraph))
+         (body (if info (* gdocs-convert--list-indent-pt (1+ (plist-get info :level))) 0))
+         (first (if (and info (not (gdocs-convert-list-continuation-p paragraph)))
+                    (- body (/ gdocs-convert--list-indent-pt 2)) body))
+         (definition (gdocs-convert--style-definition (plist-get paragraph :style-name)))
+         (border (copy-tree (alist-get 'borderLeft
+                                       (gdocs-convert--logical-paragraph-style-to-docs
+                                        (plist-get definition :paragraph)))))
+         (style `((indentStart . ((magnitude . ,body) (unit . "PT")))
+                  (indentFirstLine . ((magnitude . ,first) (unit . "PT"))))))
+    (when border
+      ;; PDF evidence: shading starts at the lesser indent minus border
+      ;; padding.  Expand only padding, not authored text or list geometry.
+      (setf (alist-get 'padding border)
+            `((magnitude . ,(+ (min first body) (or (alist-get 'magnitude (alist-get 'padding border)) 0)))
+              (unit . "PT")))
+      (setq style (append style (list (cons 'borderLeft border)))))
+    `((updateParagraphStyle
+       . ((paragraphStyle . ,style)
+          (range . ((startIndex . ,start) (endIndex . ,(1- end))))
+          (fields . ,(if border "indentStart,indentFirstLine,borderLeft" "indentStart,indentFirstLine")))))))
 
 (defun gdocs-convert--callout-block-to-requests (element index)
   "Plan callout ELEMENT at INDEX, including label, body, chrome and native bullets."
@@ -364,10 +388,11 @@
   (let (requests)
     (dolist (range element-ranges (nreverse requests))
       (let* ((element (plist-get range :element)) (tabs (gdocs-convert--list-prefix-length-for-element element)))
-        (when (and (plist-get element :list) (zerop tabs) (gdocs-convert--callout-list-marker-p element))
+        (when (and (gdocs-convert-list-paragraph-info element) (zerop tabs)
+                   (gdocs-convert--callout-marker element))
           (let* ((removed (gdocs-convert--list-prefixes-before range element-ranges))
                  (start (- (plist-get range :start) removed)) (end (- (plist-get range :end) removed tabs)))
-            (push (gdocs-convert--callout-list-indent-reset-request start end) requests)))))))
+            (push (gdocs-convert--callout-list-indent-reset-request start end element) requests)))))))
 
 (provide 'gdocs-convert-callouts)
 ;;; gdocs-convert-callouts.el ends here

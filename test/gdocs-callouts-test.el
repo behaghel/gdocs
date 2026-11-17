@@ -9,6 +9,35 @@
 (require 'cl-lib)
 (require 'gdocs-fidelity-corrections-test)
 
+(ert-deftest gdocs-callouts-list-chrome-retains-columns-and-background-edge ()
+  "Hanging list columns must not create notches in the full-width callout surface."
+  (let* ((surface '(:space-above 0 :space-below 0 :indent-start 0 :indent-first-line 0
+                                 :background-color "#FBEDE8" :border-color "#FBEDE8" :border-padding 6))
+         (gdocs-style-definitions
+          (append (mapcar (lambda (role) (list (intern (format "gdocs-callout-note-%s" role)) :paragraph surface))
+                          '(label first line last single first-compact line-compact last-compact single-compact))
+                  gdocs-style-definitions))
+         (source "#+ATTR_CALLOUT: :type note\n#+BEGIN_CALLOUT\n- Native\n\n- [ ] Task\n\n  Continue\n#+END_CALLOUT\n")
+         (json (gdocs-fidelity-test--returned-json
+                (gdocs-convert-ir-to-docs-requests (gdocs-convert-org-string-to-ir source))))
+         (seen 0))
+    (dolist (element (alist-get 'content (alist-get 'body json)))
+      (let* ((paragraph (alist-get 'paragraph element))
+             (text (mapconcat (lambda (item) (or (alist-get 'content (alist-get 'textRun item)) ""))
+                              (alist-get 'elements paragraph) ""))
+             (style (alist-get 'paragraphStyle paragraph)))
+        (when (member text '("Native\n" "☐\tTask\n" "Continue\n"))
+          (cl-incf seen)
+          (let ((first (alist-get 'magnitude (alist-get 'indentFirstLine style)))
+                (body (alist-get 'magnitude (alist-get 'indentStart style)))
+                (padding (alist-get 'magnitude (alist-get 'padding (alist-get 'borderLeft style)))))
+            (should (= body 36))
+            (should (= first (if (equal text "Continue\n") 36 18)))
+            ;; The border/shading rectangle includes its padding: keep its
+            ;; left edge at the same -6 pt as ordinary callout paragraphs.
+            (should (= (- (min first body) padding) -6))))))
+    (should (= seen 3))))
+
 (ert-deftest gdocs-callouts-physical-owners ()
   "Callout recognition, conversion, geometry and list repair have a feature owner."
   (dolist (function '(gdocs-convert--callout-block-p gdocs-convert--callout-block-to-ir
@@ -90,6 +119,40 @@
                       (concat "v2:" (url-hexify-string "[1]"))
                       (concat "v2:" (url-hexify-string "{\"type\":\"bullet\",\"level\":0,\"checked\":\"yes\"}"))))
     (should-error (gdocs-convert--callout-list-marker-data (list :data data)) :type 'user-error)))
+
+(ert-deftest gdocs-callouts-style-repair-is-revision-guarded-and-content-free ()
+  "A disposable style repair cannot replace text or apply to different semantics."
+  (require 'gdocs-disposable-plan)
+  (let* ((directory (make-temp-file "gdocs-style-repair-" t))
+         (source-file (expand-file-name "source.org" directory))
+         (remote-file (expand-file-name "remote.json" directory))
+         (source "#+BEGIN_CALLOUT\nParagraph.\n\n- [ ] Task\n#+END_CALLOUT\n")
+         (gdocs-style-definitions
+          (append (mapcar (lambda (role)
+                            (list (intern (format "gdocs-callout-info-%s" role))
+                                  :paragraph '(:background-color "#FBEDE8" :border-color "#FBEDE8" :border-padding 6)))
+                          '(label first line last single first-compact line-compact last-compact single-compact))
+                  gdocs-style-definitions))
+         (json (gdocs-fidelity-test--returned-json
+                (gdocs-convert-ir-to-docs-requests (gdocs-convert-org-string-to-ir source)))))
+    (unwind-protect
+        (progn
+          (with-temp-file source-file (insert source))
+          (setf (alist-get 'revisionId json) "fixture-revision")
+          (gdocs-disposable-plan--write-json remote-file json)
+          (gdocs-disposable-plan-style-repair source-file remote-file directory)
+          (let* ((json-object-type 'alist) (json-key-type 'symbol) (json-array-type 'vector)
+                 (body (json-read-file (expand-file-name "style-repair.requests.json" directory))))
+            (should (> (length (alist-get 'requests body)) 0))
+            (should (seq-every-p
+                     (lambda (request)
+                       (equal (alist-get 'fields (alist-get 'updateParagraphStyle request))
+                              "indentStart,indentFirstLine,borderLeft"))
+                     (alist-get 'requests body)))
+            (should (equal (alist-get 'requiredRevisionId (alist-get 'writeControl body)) "fixture-revision")))
+          (with-temp-file source-file (insert (string-replace "Paragraph" "Changed" source)))
+          (should-error (gdocs-disposable-plan-style-repair source-file remote-file directory) :type 'user-error))
+      (delete-directory directory t))))
 
 (provide 'gdocs-callouts-test)
 ;;; gdocs-callouts-test.el ends here

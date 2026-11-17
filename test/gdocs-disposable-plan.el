@@ -138,5 +138,32 @@
     (with-temp-file (expand-file-name "second-update.org" directory) (insert text))
     (list :controlled-second-update-edits 5)))
 
+(defun gdocs-disposable-plan-style-repair (source remote directory)
+  "Plan final callout chrome for identical SOURCE and REMOTE in DIRECTORY."
+  (let* ((json-object-type 'alist) (json-array-type 'vector) (json-key-type 'symbol)
+         (json (json-read-file remote))
+         (local (gdocs-convert-org-string-to-ir (gdocs-disposable-plan--read-source source)))
+         (native (gdocs-disposable-plan--body (gdocs-convert-docs-json-to-ir json)))
+         (revision (alist-get 'revisionId json)) requests)
+    (unless (and (stringp revision) (not (gdocs-diff-generate native local)))
+      (user-error "Style-only repair requires identical semantic source and a revision"))
+    (dolist (range (gdocs-diff-lists--final-ranges (gdocs-diff-semantic-project-ir local) 1))
+      (when (eq (plist-get (plist-get range :element) :type) 'callout-block)
+        (setq requests
+              (append requests
+                      (seq-filter (lambda (request)
+                                    ;; Reapplying named styles can clear authored
+                                    ;; emphasis in Docs.  Only final list chrome
+                                    ;; is safe for this diagnostic repair.
+                                    (equal (alist-get 'fields (alist-get 'updateParagraphStyle request))
+                                           "indentStart,indentFirstLine,borderLeft"))
+                                  (plist-get (gdocs-convert--callout-block-to-requests
+                                              (plist-get range :element) (plist-get range :start)) :requests))))))
+    (gdocs-disposable-plan--write-json
+     (expand-file-name "style-repair.requests.json" directory)
+     (list (cons 'requests (vconcat requests))
+           (cons 'writeControl (list (cons 'requiredRevisionId revision)))))
+    (list :paragraph-style-requests (length requests) :content-mutations 0)))
+
 (provide 'gdocs-disposable-plan)
 ;;; gdocs-disposable-plan.el ends here
