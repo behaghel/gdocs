@@ -341,21 +341,27 @@
 (defun gdocs-convert--callout-list-indent-reset-request (start end &optional paragraph)
   "Repair PARAGRAPH columns and full-width shading from START to END."
   (let* ((info (gdocs-convert-list-paragraph-info paragraph))
-         (body (if info (* gdocs-convert--list-indent-pt (1+ (plist-get info :level))) 0))
-         (first (if (and info (not (gdocs-convert-list-continuation-p paragraph)))
-                    (- body (/ gdocs-convert--list-indent-pt 2)) body))
          (definition (gdocs-convert--style-definition (plist-get paragraph :style-name)))
-         (border (copy-tree (alist-get 'borderLeft
-                                       (gdocs-convert--logical-paragraph-style-to-docs
-                                        (plist-get definition :paragraph)))))
+         (configured (gdocs-convert--logical-paragraph-style-to-docs (plist-get definition :paragraph)))
+         (body (if info (* gdocs-convert--list-indent-pt (1+ (plist-get info :level)))
+                 (or (alist-get 'magnitude (alist-get 'indentStart configured)) 0)))
+         (first (if info
+                    (if (gdocs-convert-list-continuation-p paragraph) body
+                      (- body (/ gdocs-convert--list-indent-pt 2)))
+                  (or (alist-get 'magnitude (alist-get 'indentFirstLine configured)) 0)))
+         (surface-indent (min (or (alist-get 'magnitude (alist-get 'indentStart configured)) 0)
+                              (or (alist-get 'magnitude (alist-get 'indentFirstLine configured)) 0)))
+         (border (copy-tree (alist-get 'borderLeft configured)))
          (style `((indentStart . ((magnitude . ,body) (unit . "PT")))
                   (indentFirstLine . ((magnitude . ,first) (unit . "PT"))))))
     (when border
       ;; PDF evidence: shading starts at the lesser indent minus border
       ;; padding.  Expand only padding, not authored text or list geometry.
-      (setf (alist-get 'padding border)
-            `((magnitude . ,(+ (min first body) (or (alist-get 'magnitude (alist-get 'padding border)) 0)))
-              (unit . "PT")))
+      (let ((padding (+ (- (min first body) surface-indent)
+                        (or (alist-get 'magnitude (alist-get 'padding border)) 0))))
+        (when (< padding 0)
+          (user-error "Callout inset exceeds its list columns; reduce the configured inset"))
+        (setf (alist-get 'padding border) `((magnitude . ,padding) (unit . "PT"))))
       (setq style (append style (list (cons 'borderLeft border)))))
     `((updateParagraphStyle
        . ((paragraphStyle . ,style)
@@ -384,12 +390,11 @@
                                                                     (gdocs-convert--list-prefix-length-for-element (plist-get range :element))) ranges))))))
 
 (defun gdocs-convert--callout-list-post-bullet-indent-resets (element-ranges)
-  "Return feature-owned final shading indent resets for ELEMENT-RANGES."
+  "Return final feature-owned shading and prose inset repairs for ELEMENT-RANGES."
   (let (requests)
     (dolist (range element-ranges (nreverse requests))
       (let* ((element (plist-get range :element)) (tabs (gdocs-convert--list-prefix-length-for-element element)))
-        (when (and (gdocs-convert-list-paragraph-info element) (zerop tabs)
-                   (gdocs-convert--callout-marker element))
+        (when (and (zerop tabs) (gdocs-convert--callout-marker element))
           (let* ((removed (gdocs-convert--list-prefixes-before range element-ranges))
                  (start (- (plist-get range :start) removed)) (end (- (plist-get range :end) removed tabs)))
             (push (gdocs-convert--callout-list-indent-reset-request start end element) requests)))))))

@@ -341,7 +341,10 @@ contents remain compact. Outer margins remain separate paragraph spacing.
 ## Managed task glyphs
 
 `gdocs-convert-tasks.el` projects Org `[ ]`, `[X]` and `[-]` task items to
-editable Docs text `☐`, `☑` and `◩`, followed by a tab and the rich body.
+editable Docs text `☐`, `☑` and `◩`, followed by an em space and the rich body.
+The `gdocs-task-prefix` logical style defaults to 10-point Noto Sans Symbols 2
+and applies only to this two-unit prefix; authored body text retains its own
+theme, emphasis and links.
 These are text glyphs, not click-to-toggle native controls. Pull reads the
 visible glyph as completion state; metadata identifies managed tasks and
 nesting, never an authoritative hidden completion snapshot. Unmarked glyph
@@ -352,8 +355,8 @@ unsupported segments and table contexts fail closed with actionable errors.
 
 Version-one nesting uses 36-point structural steps. Hanging glyph columns are
 18 points before their body columns, with wrapped text and continuations aligned
-to the body. Tabs use standard document stops; the read-only `tabStops` field is
-not sent in update requests. Legacy space-separated tasks remain readable and
+to the body. The prefix avoids browser-dependent tab stops; the read-only
+`tabStops` field is not sent in update requests. Legacy space- and tab-separated tasks remain readable and
 retain their observed physical prefix during diffing, allowing a one-time
 upgrade without body or completion loss. Task planning clears native bullet
 membership and repairs indentation after adjacent native list operations.

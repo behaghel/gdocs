@@ -180,16 +180,16 @@
       (should (equal (mapcar (lambda (element) (plist-get (plist-get element :list) :level)) native)
                      (cadr case))))))
 
-(defun gdocs-live-list-test--legacy-layout (ir)
-  "Return cloned IR with legacy physical task spacing, not hidden completion."
+(defun gdocs-live-list-test--legacy-layout (ir &optional separator)
+  "Return cloned IR with legacy physical task SEPARATOR, not hidden completion."
   (let ((copy (copy-tree ir)))
     (dolist (element copy copy)
       (when (gdocs-convert-task-paragraph-p element)
-        (plist-put element :managed-task-legacy-separator t))
+        (plist-put element (if (eq separator 'tab) :managed-task-tab-separator :managed-task-legacy-separator) t))
       (when (eq (plist-get element :type) 'callout-block)
         (plist-put element :body-elements
                    (gdocs-live-list-test--legacy-layout
-                    (gdocs-convert--callout-body-elements-from-paragraphs element)))))))
+                    (gdocs-convert--callout-body-elements-from-paragraphs element) separator))))))
 
 (ert-deftest gdocs-live-list-recorded-legacy-pull-and-layout-upgrade ()
   "Legacy captures retain semantics and request an explicit physical task upgrade."
@@ -220,8 +220,37 @@
       (should (stringp (car parents)))
       (should (equal (car parents) (cadr parents))))))
 
+(ert-deftest gdocs-live-list-approved-spacing-create-edit-pull-and-repeat ()
+  "Real API create and edit captures preserve tab-free prefixes and inset surfaces."
+  (dolist (case '("create" "edited"))
+    (let* ((stem (format "live-list-approved-spacing-%s" case))
+           (json (gdocs-live-list-test--json (concat stem ".json")))
+           (source (gdocs-disposable-plan--read-source (expand-file-name (concat stem ".org") gdocs-live-list-test--fixtures)))
+           (expected (gdocs-convert-org-string-to-ir source))
+           (native (gdocs-disposable-plan--body (gdocs-convert-docs-json-to-ir json)))
+           (pulled (gdocs-convert-ir-to-org native)) (surfaces 0) (prefixes 0))
+      (should-not (alist-get 'revisionId json))
+      (should (equal pulled (gdocs-convert-ir-to-org expected)))
+      (should-not (gdocs-diff-generate native expected))
+      (should-not (gdocs-diff-generate native (gdocs-convert-org-string-to-ir pulled)))
+      (seq-doseq (element (alist-get 'content (alist-get 'body json)))
+        (let* ((paragraph (alist-get 'paragraph element))
+               (style (alist-get 'paragraphStyle paragraph)))
+          (when (alist-get 'shading style)
+            (cl-incf surfaces)
+            (should (= (- (min (or (alist-get 'magnitude (alist-get 'indentFirstLine style)) 0)
+                               (or (alist-get 'magnitude (alist-get 'indentStart style)) 0))
+                          (alist-get 'magnitude (alist-get 'padding (alist-get 'borderLeft style)))) 0)))
+          (seq-doseq (run (alist-get 'elements paragraph))
+            (when (equal (alist-get 'fontFamily (alist-get 'weightedFontFamily (alist-get 'textStyle (alist-get 'textRun run)))) "Noto Sans Symbols 2")
+              (cl-incf prefixes)
+              (should (string-match-p "\\`[☐☑◩] \\'" (alist-get 'content (alist-get 'textRun run))))
+              (should (= (alist-get 'magnitude (alist-get 'fontSize (alist-get 'textStyle (alist-get 'textRun run)))) 10))))))
+      (should (= surfaces 9))
+      (should (= prefixes 5)))))
+
 (ert-deftest gdocs-live-list-styled-create-edit-pull-and-repeat ()
-  "Themed real-API fixtures retain visible layout, authored semantics and no-op pushes."
+  "Themed captures keep semantics and no-op under their observed tab layout."
   (dolist (case '(("live-list-styled-create.json" "live-list-styled-create.org")
                   ("live-list-styled-edited.json" "live-list-styled-edited.org")))
     (let* ((json (gdocs-live-list-test--json (car case)))
@@ -231,9 +260,10 @@
            (native (gdocs-disposable-plan--body (gdocs-convert-docs-json-to-ir json)))
            (pulled (gdocs-convert-ir-to-org native)) (surfaces 0))
       (should (equal pulled (gdocs-convert-ir-to-org expected)))
-      (should-not (gdocs-diff-generate native expected))
-      (should-not (gdocs-diff-generate native expected))
-      (should-not (gdocs-diff-generate native (gdocs-convert-org-string-to-ir pulled)))
+      (should-not (gdocs-diff-generate native (gdocs-live-list-test--legacy-layout expected 'tab)))
+      (should-not (gdocs-diff-generate native (gdocs-live-list-test--legacy-layout expected 'tab)))
+      (should (gdocs-diff-generate native expected))
+      (should (gdocs-diff-generate native (gdocs-convert-org-string-to-ir pulled)))
       (seq-doseq (element (alist-get 'content (alist-get 'body json)))
         (let* ((paragraph (alist-get 'paragraph element))
                (style (alist-get 'paragraphStyle paragraph))

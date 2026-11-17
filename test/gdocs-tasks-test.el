@@ -9,6 +9,36 @@
 (require 'cl-lib)
 (require 'gdocs-fidelity-corrections-test)
 
+(ert-deftest gdocs-tasks-browser-approved-prefix-is-tab-free-and-symbol-font ()
+  "The editable two-unit prefix matches the accepted browser calibration."
+  (let* ((ir (gdocs-convert-org-string-to-ir "- [ ] open\n- [X] checked\n- [-] partial\n"))
+         (requests (gdocs-convert-ir-to-docs-requests ir))
+         (text (mapconcat (lambda (request) (or (alist-get 'text (alist-get 'insertText request)) "")) requests ""))
+         (prefix-styles (seq-filter
+                         (lambda (request)
+                           (equal (alist-get 'fontFamily
+                                             (alist-get 'weightedFontFamily
+                                                        (alist-get 'textStyle (alist-get 'updateTextStyle request))))
+                                  "Noto Sans Symbols 2")) requests)))
+    (should (equal text "☐ open\n☑ checked\n◩ partial\n"))
+    (should (= (length prefix-styles) 3))
+    (dolist (request prefix-styles)
+      (let* ((update (alist-get 'updateTextStyle request))
+             (range (alist-get 'range update)))
+        (should (= (- (alist-get 'endIndex range) (alist-get 'startIndex range)) 2))
+        (should (= (alist-get 'magnitude (alist-get 'fontSize (alist-get 'textStyle update))) 10))))))
+
+(ert-deftest gdocs-tasks-prefix-typography-is-logical-style-owned ()
+  "The feature consumes configured prefix typography without styling body text."
+  (let* ((gdocs-style-definitions
+          (cons '(gdocs-task-prefix :text (:font-family "Roboto Mono" :font-size 12)) gdocs-style-definitions))
+         (requests (gdocs-convert-task-run-requests '(:managed-task-prefix (:level 0 :layout em-space)) 5))
+         (update (seq-some (lambda (request) (alist-get 'updateTextStyle request)) requests))
+         (style (alist-get 'textStyle update)))
+    (should (equal (alist-get 'fontFamily (alist-get 'weightedFontFamily style)) "Roboto Mono"))
+    (should (= (alist-get 'magnitude (alist-get 'fontSize style)) 12))
+    (should (equal (alist-get 'range update) '((startIndex . 5) (endIndex . 7))))))
+
 (ert-deftest gdocs-tasks-publish-and-pull-visible-states ()
   "All Org task states publish as editable text, never native checkbox bullets."
   (let* ((source "- [X] done 😀\n- [-] partial\n- [ ] open\n")
@@ -17,7 +47,7 @@
          (requests (gdocs-convert-ir-to-docs-requests ir))
          (text (mapconcat (lambda (request) (or (alist-get 'text (alist-get 'insertText request)) "")) requests ""))
          (remote (gdocs-convert-docs-json-to-ir (gdocs-fidelity-test--returned-json requests))))
-    (should (equal text "☑\tdone 😀\n◩\tpartial\n☐\topen\n"))
+    (should (equal text "☑ done 😀\n◩ partial\n☐ open\n"))
     (should-not (seq-some (lambda (request) (alist-get 'createParagraphBullets request)) requests))
     (should (equal (gdocs-convert-ir-to-org remote) source))
     (should (equal ir before))
@@ -35,28 +65,28 @@
       (should (= (alist-get 'magnitude (alist-get 'indentFirstLine style)) (- body 18)))
       (should (= (alist-get 'magnitude (alist-get 'indentStart style)) body))
       ;; Real API rejects this read-only field with "Unallowed field: tabStops".
-      ;; Standard document stops already fall on each 36-point body column.
+      ;; Browser and PDF tab behavior differ, so canonical prefixes have no tab.
       (should-not (alist-get 'tabStops style)))))
 
-(ert-deftest gdocs-tasks-tab-separator-keeps-anchor-and-roundtrip ()
-  "A tab aligns body text without changing the two-unit prefix or separator anchor."
+(ert-deftest gdocs-tasks-em-space-keeps-anchor-and-roundtrip ()
+  "An em space retains the two-unit prefix and separator anchor."
   (let* ((source "- [ ] task 😀\n")
          (ir (gdocs-convert-org-string-to-ir source))
          (requests (gdocs-convert-ir-to-docs-requests ir))
          (text (mapconcat (lambda (request) (or (alist-get 'text (alist-get 'insertText request)) "")) requests "")))
-    (should (equal text "☐\ttask 😀\n"))
+    (should (equal text "☐ task 😀\n"))
     (let ((native (gdocs-convert-docs-json-to-ir (gdocs-fidelity-test--returned-json requests))))
       (should (equal (gdocs-convert-ir-to-org native) source))
       (should-not (gdocs-diff-generate native ir)))))
 
 (ert-deftest gdocs-tasks-legacy-separator-migrates-once-without-body-loss ()
-  "Legacy space-prefixed tasks migrate to tabs without disguising physical text."
+  "Legacy space-prefixed tasks migrate without disguising physical text."
   (let* ((source "- [ ] task 😀\n")
          (ir (gdocs-convert-org-string-to-ir source))
          (initial (copy-tree (gdocs-convert-ir-to-docs-requests ir))))
     (dolist (request initial)
       (when-let* ((insert (alist-get 'insertText request)))
-        (setf (alist-get 'text insert) (string-replace "☐\t" "☐ " (alist-get 'text insert))))
+        (setf (alist-get 'text insert) (string-replace "☐ " "☐ " (alist-get 'text insert))))
       (when-let* ((update (alist-get 'updateParagraphStyle request))
                   (style (alist-get 'paragraphStyle update))
                   (_indent (alist-get 'indentFirstLine style)))
@@ -70,6 +100,23 @@
                        (gdocs-fidelity-test--returned-json (append initial diff)))))
         (should (equal (gdocs-convert-ir-to-org returned) source))
         (should-not (gdocs-diff-generate returned ir))))))
+
+(ert-deftest gdocs-tasks-tab-layout-migrates-once-without-body-loss ()
+  "Read historical tabs physically; upgrade them once to the accepted layout."
+  (let* ((ir (gdocs-convert-org-string-to-ir "- [ ] *task* 😀\n"))
+         (legacy (copy-tree ir)))
+    (plist-put (car legacy) :managed-task-tab-separator t)
+    (let* ((initial (gdocs-convert-ir-to-docs-requests legacy))
+           (native (gdocs-convert-docs-json-to-ir (gdocs-fidelity-test--returned-json initial)))
+           (diff (gdocs-diff-generate native ir)))
+      (should (string-prefix-p "☐\t" (gdocs-convert--runs-to-plain-text
+                                      (plist-get (car (gdocs-diff-tasks-project-ir native)) :contents))))
+      (should-not (gdocs-diff-generate native legacy))
+      (should diff)
+      (let ((updated (gdocs-convert-docs-json-to-ir
+                      (gdocs-fidelity-test--returned-json (append initial diff)))))
+        (should (equal (gdocs-convert-ir-to-org updated) "- [ ] *task* 😀\n"))
+        (should-not (gdocs-diff-generate updated ir))))))
 
 (ert-deftest gdocs-tasks-native-glyph-edit-is-authoritative ()
   "A native glyph edit changes Org completion despite unchanged metadata."
@@ -94,7 +141,13 @@
          (requests (gdocs-diff-generate remote new)))
     (should (alist-get 'deleteNamedRange (car requests)))
     (should (= (seq-count (lambda (request) (alist-get 'createNamedRange request)) requests) 1))
-    (should (seq-some (lambda (request) (equal (alist-get 'text (alist-get 'insertText request)) "☑")) requests))))
+    (should (seq-some (lambda (request)
+                        (string-prefix-p "☑" (or (alist-get 'text (alist-get 'insertText request)) ""))) requests))
+    (let ((updated (gdocs-convert-docs-json-to-ir
+                    (gdocs-fidelity-test--returned-json
+                     (append (gdocs-convert-ir-to-docs-requests old) requests)))))
+      (should (equal (gdocs-convert-ir-to-org updated) "- [X] task\n"))
+      (should-not (gdocs-diff-generate updated new)))))
 
 (ert-deftest gdocs-tasks-literal-glyphs-are-not-inferred ()
   "Unmarked glyph text stays prose, while task body prefixes stay literal."

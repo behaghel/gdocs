@@ -26,7 +26,7 @@
              (text (mapconcat (lambda (item) (or (alist-get 'content (alist-get 'textRun item)) ""))
                               (alist-get 'elements paragraph) ""))
              (style (alist-get 'paragraphStyle paragraph)))
-        (when (member text '("Native\n" "☐\tTask\n" "Continue\n"))
+        (when (member text '("Native\n" "☐ Task\n" "Continue\n"))
           (cl-incf seen)
           (let ((first (alist-get 'magnitude (alist-get 'indentFirstLine style)))
                 (body (alist-get 'magnitude (alist-get 'indentStart style)))
@@ -76,11 +76,11 @@
   (cl-labels ((paragraph (kind id text)
                 (list :type 'paragraph :style 'normal :contents (list (list :text text))
                       :gdocs-marker (list (list :type kind :id id :data "info:")))))
-             (let ((ir (list (paragraph 'callout-label "one" "ℹ️ Info")
-                             (paragraph 'callout-body "one" "First")
-                             (paragraph 'callout-label "two" "ℹ️ Info")
-                             (paragraph 'callout-body "two" "second"))))
-               (should (= (length (gdocs-convert--attach-callout-block-markers ir)) 2)))))
+    (let ((ir (list (paragraph 'callout-label "one" "ℹ️ Info")
+                    (paragraph 'callout-body "one" "First")
+                    (paragraph 'callout-label "two" "ℹ️ Info")
+                    (paragraph 'callout-body "two" "second"))))
+      (should (= (length (gdocs-convert--attach-callout-block-markers ir)) 2)))))
 
 (defun gdocs-callouts-test--branch-p (tree)
   "Return non-nil if TREE recognizes callout kinds."
@@ -153,6 +153,61 @@
           (with-temp-file source-file (insert (string-replace "Paragraph" "Changed" source)))
           (should-error (gdocs-disposable-plan-style-repair source-file remote-file directory) :type 'user-error))
       (delete-directory directory t))))
+
+(ert-deftest gdocs-callouts-inset-survives-full-list-guard-flow ()
+  "Native list guards must not clear the preceding prose inset or notch shading."
+  (let* ((surface '(:indent-start 4 :indent-first-line 4 :background-color "#FBEDE8"
+                                  :border-color "#FBEDE8" :border-padding 4))
+         (gdocs-style-definitions
+          (append (mapcar (lambda (role) (list (intern (format "gdocs-callout-note-%s" role)) :paragraph surface))
+                          '(label first line last single first-compact line-compact last-compact single-compact))
+                  gdocs-style-definitions))
+         (source "#+ATTR_CALLOUT: :type note\n#+BEGIN_CALLOUT\nFirst prose.\n\nSecond prose.\n\n- Native\n\n- [ ] Task\n#+END_CALLOUT\n")
+         (requests (gdocs-convert-ir-to-docs-requests (gdocs-convert-org-string-to-ir source)))
+         (json (gdocs-fidelity-test--returned-json requests))
+         (last-bullet (cl-loop for request in requests for index from 0
+                               when (alist-get 'createParagraphBullets request) maximize index))
+         (seen 0) (prose-repairs 0))
+    (dolist (element (alist-get 'content (alist-get 'body json)))
+      (let* ((paragraph (alist-get 'paragraph element))
+             (style (alist-get 'paragraphStyle paragraph))
+             (border (alist-get 'borderLeft style)))
+        (when border
+          (cl-incf seen)
+          (let ((first (or (alist-get 'magnitude (alist-get 'indentFirstLine style)) 0))
+                (body (or (alist-get 'magnitude (alist-get 'indentStart style)) 0))
+                (padding (alist-get 'magnitude (alist-get 'padding border))))
+            (should (= (- (min first body) padding) 0))
+            (should (>= (min first body) 4)))
+          (when (string-prefix-p "First prose." (or (alist-get 'content (alist-get 'textRun (car (alist-get 'elements paragraph)))) ""))
+            (cl-incf prose-repairs)
+            (let* ((start (alist-get 'startIndex element))
+                   (repair (cl-loop for request in requests for index from 0
+                                    for update = (alist-get 'updateParagraphStyle request)
+                                    when (and (= (or (alist-get 'startIndex (alist-get 'range update)) -1) start)
+                                              (= (or (alist-get 'magnitude (alist-get 'indentStart (alist-get 'paragraphStyle update))) -1) 4))
+                                    maximize index)))
+              (should (> repair last-bullet)))))))
+    (should (= prose-repairs 1))
+    (should (= seen 5))))
+
+(ert-deftest gdocs-callouts-inset-keeps-list-columns-and-surface-edge ()
+  "An inset for prose cannot push list shading outside the callout surface."
+  (let ((gdocs-style-definitions
+         '((inset-callout :paragraph (:indent-start 4 :indent-first-line 4
+                                                    :background-color "#FBEDE8" :border-color "#FBEDE8"
+                                                    :border-padding 4)))))
+    (dolist (membership '((:list (:type bullet :level 0))
+                          (:list-continuation (:type check :level 0))))
+      (let* ((paragraph (append '(:type paragraph :style normal :style-name inset-callout) membership))
+             (request (gdocs-convert--callout-list-indent-reset-request 1 8 paragraph))
+             (style (alist-get 'paragraphStyle (alist-get 'updateParagraphStyle request)))
+             (first (alist-get 'magnitude (alist-get 'indentFirstLine style)))
+             (body (alist-get 'magnitude (alist-get 'indentStart style)))
+             (padding (alist-get 'magnitude (alist-get 'padding (alist-get 'borderLeft style)))))
+        (should (= body 36))
+        (should (= first (if (plist-get paragraph :list) 18 36)))
+        (should (= (- (min first body) padding) 0))))))
 
 (provide 'gdocs-callouts-test)
 ;;; gdocs-callouts-test.el ends here

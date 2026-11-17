@@ -19,6 +19,7 @@
   '((gdocs-code :text (:monospace t))
     (gdocs-list-first :paragraph (:space-above 0))
     (gdocs-list-item :paragraph (:space-above 0))
+    (gdocs-task-prefix :text (:font-family "Noto Sans Symbols 2" :font-size 10))
     (gdocs-callout-info-first-compact :parent normal)
     (gdocs-callout-info-line-compact :parent normal)
     (gdocs-callout-info-last-compact :parent normal)

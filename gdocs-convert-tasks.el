@@ -12,6 +12,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'gdocs-convert-paragraph-codec)
+(require 'gdocs-style-resolve)
 
 (declare-function gdocs-convert--list-prefixes-before "gdocs-convert" (range element-ranges))
 
@@ -33,13 +34,16 @@
     (let* ((info (plist-get element :list)) (level (or (plist-get info :level) 0))
            (copy (copy-sequence element))
            (glyph (gdocs-convert--make-plain-run (gdocs-convert-task--glyph info)))
+           (separator (cond ((plist-get element :managed-task-legacy-separator) " ")
+                            ((plist-get element :managed-task-tab-separator) "\t")
+                            (t " ")))
            (markers (seq-remove (lambda (marker) (memq (plist-get marker :type) '(list-state task-state managed-task)))
                                 (plist-get element :gdocs-marker))))
       (unless (and (integerp level) (>= level 0)) (user-error "Invalid managed task nesting level"))
       (plist-put glyph :managed-task-prefix
-                 (list :level level :layout (if (plist-get element :managed-task-legacy-separator) 'space 'tab)))
-      (plist-put copy :contents (append (list glyph (gdocs-convert--make-plain-run
-                                                     (if (plist-get element :managed-task-legacy-separator) " " "\t")))
+                 (list :level level :layout (cond ((equal separator " ") 'space)
+                                                  ((equal separator "\t") 'tab) (t 'em-space))))
+      (plist-put copy :contents (append (list glyph (gdocs-convert--make-plain-run separator))
                                         (mapcar #'copy-sequence (plist-get element :contents))))
       (plist-put copy :list nil) (plist-put copy :gdocs-marker markers)
       copy)))
@@ -61,15 +65,18 @@
     (let* ((level (plist-get info :level)) (legacy (eq (plist-get info :layout) 'space))
            (indent (* (if legacy level (1+ level)) gdocs-convert-task-indent-pt))
            (glyph-indent (if legacy indent (- indent (/ gdocs-convert-task-indent-pt 2)))))
-      (list `((createNamedRange
-               . ((name . ,(format "gdocs-org-marker:managed-task:task-%d:v1:%d" index level))
-                  (range . ((startIndex . ,(1+ index)) (endIndex . ,(+ index 2)))))))
-            `((deleteParagraphBullets . ((range . ((startIndex . ,index) (endIndex . ,(1+ index)))))))
-            `((updateParagraphStyle
-               . ((paragraphStyle . ((indentStart . ((magnitude . ,indent) (unit . "PT")))
-                                     (indentFirstLine . ((magnitude . ,glyph-indent) (unit . "PT")))))
-                  (range . ((startIndex . ,index) (endIndex . ,(1+ index))))
-                  (fields . "indentStart,indentFirstLine"))))))))
+      (append (list `((createNamedRange
+                       . ((name . ,(format "gdocs-org-marker:managed-task:task-%d:v1:%d" index level))
+                          (range . ((startIndex . ,(1+ index)) (endIndex . ,(+ index 2)))))))
+                    `((deleteParagraphBullets . ((range . ((startIndex . ,index) (endIndex . ,(1+ index))))))))
+              (unless (memq (plist-get info :layout) '(space tab))
+                (when-let* ((request (gdocs-convert--logical-style-text-request 'gdocs-task-prefix index (+ index 2))))
+                  (list request)))
+              (list `((updateParagraphStyle
+                       . ((paragraphStyle . ((indentStart . ((magnitude . ,indent) (unit . "PT")))
+                                             (indentFirstLine . ((magnitude . ,glyph-indent) (unit . "PT")))))
+                          (range . ((startIndex . ,index) (endIndex . ,(1+ index))))
+                          (fields . "indentStart,indentFirstLine")))))))))
 
 (defun gdocs-convert-task-post-bullet-indents (ranges)
   "Restore task indentation after native bullet changes and guards in RANGES."
@@ -136,7 +143,7 @@ of checkbox semantics.  Legacy task provenance identifies opaque task lists."
       (user-error "Unsupported managed task metadata"))
     (let* ((saved (string-to-number (match-string 1 data)))
            (indent (alist-get 'magnitude (alist-get 'indentFirstLine (alist-get 'paragraphStyle paragraph))))
-           (base (if (eq separator ?\t) (/ gdocs-convert-task-indent-pt 2) 0)))
+           (base (if (memq separator '(?\t ?\u2003)) (/ gdocs-convert-task-indent-pt 2) 0)))
       (if (null indent) saved
         (unless (and (numberp indent) (>= indent base)
                      (= (mod (- indent base) gdocs-convert-task-indent-pt) 0))
@@ -168,8 +175,8 @@ of checkbox semantics.  Legacy task provenance identifies opaque task lists."
              (separator (and (> (length text) 1) (aref text 1)))
              (level (gdocs-convert-task--level marker paragraph separator))
              (checked (equal glyph "☑")) (partial (equal glyph "◩")))
-        (unless (and (member glyph '("☐" "☑" "◩")) (>= (length text) 2) (memq separator '(?\s ?\t)))
-          (user-error "Managed task needs one visible ☐, ☑ or ◩ followed by its space or tab; restore the glyph before pulling"))
+        (unless (and (member glyph '("☐" "☑" "◩")) (>= (length text) 2) (memq separator '(?\s ?\t ?\u2003)))
+          (user-error "Managed task needs one visible ☐, ☑ or ◩ followed by its space, tab or em space; restore the glyph before pulling"))
         (let* ((info (list :type 'check :level level :checked checked :partial partial))
                (element (gdocs-convert-paragraph-from-docs
                          paragraph (gdocs-convert-task--without-prefix runs) markers start end 'normal (list :list info)))
@@ -181,6 +188,8 @@ of checkbox semantics.  Legacy task provenance identifies opaque task lists."
           (plist-put element :managed-task-range-ids (list (plist-get marker :range-id)))
           (when (eq separator ?\s)
             (plist-put element :managed-task-legacy-separator t))
+          (when (eq separator ?\t)
+            (plist-put element :managed-task-tab-separator t))
           element)))))
 
 (provide 'gdocs-convert-tasks)
