@@ -30,6 +30,7 @@ TEST_FILES = \
   test/gdocs-quotes-test.el \
   test/gdocs-fidelity-corrections-test.el \
   test/gdocs-verse-test.el \
+  test/gdocs-centers-test.el \
   test/gdocs-callouts-test.el \
   test/gdocs-tasks-test.el \
   test/gdocs-list-conversion-test.el \

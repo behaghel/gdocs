@@ -159,12 +159,17 @@
              (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-center-block ()
-  "A center block is parsed into IR."
-
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir
-              "#+BEGIN_CENTER\nCentered.\n#+END_CENTER")))
-    (should ir)
-    (should (>= (length ir) 1))))
+  "One centered block retains multiple rich paragraphs and native provenance."
+  (let* ((source "#+BEGIN_CENTER\nCentered *bold* 😀.\n\nSecond /paragraph/.\n#+END_CENTER\n")
+         (ir (gdocs-roundtrip-test--org-to-ir source))
+         (element (gdocs-roundtrip-test--find-ir-element ir 'center-block)))
+    (should element)
+    (should (= (length (plist-get element :paragraphs)) 2))
+    (should (equal (gdocs-convert-ir-to-org ir) source))
+    (should (seq-some (lambda (request)
+                        (when-let* ((marker (alist-get 'createNamedRange request)))
+                          (string-prefix-p "gdocs-org-marker:center-block:" (alist-get 'name marker))))
+                      (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-verse-block ()
   "Verse retains hard lines, a semantic block and a whole-line native marker."

@@ -1,0 +1,18 @@
+* Disposable center conformance
+
+Before centered prose 😀.
+
+#+BEGIN_CENTER
+First *bold* centered paragraph 😀.
+
+Second /italic/ paragraph with [[https://example.org][a link]].
+#+END_CENTER
+
+#+BEGIN_CENTER
+Separate centered block.
+#+END_CENTER
+
+#+BEGIN_CENTER
+#+END_CENTER
+
+After centered prose 😀.

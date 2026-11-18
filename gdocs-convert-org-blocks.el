@@ -13,6 +13,7 @@
 (require 'gdocs-convert-paragraph-codec)
 (require 'gdocs-convert-code-blocks)
 (require 'gdocs-convert-quotes)
+(require 'gdocs-convert-centers)
 
 (declare-function gdocs-convert--extract-marker-field "gdocs-convert" (marker type-sym))
 (declare-function gdocs-convert--plain-text "gdocs-convert" (element))
@@ -58,8 +59,7 @@
      ((when-let* ((data (gdocs-convert--extract-marker-field marker 'latex-environment))) data))
      ((when-let* ((data (gdocs-convert--extract-marker-field marker 'drawer)))
         (s-trim (plist-get data :raw))))
-     ((eq (plist-get element :alignment) 'center)
-      (format "#+BEGIN_CENTER\n%s\n#+END_CENTER" text)))))
+     ((gdocs-convert-center-paragraph-to-org element text)))))
 
 (defvar gdocs-convert-monospace-font-families)
 

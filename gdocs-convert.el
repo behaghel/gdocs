@@ -37,6 +37,7 @@
 (require 'gdocs-convert-code-blocks)
 (require 'gdocs-convert-quotes)
 (require 'gdocs-convert-verse)
+(require 'gdocs-convert-centers)
 (require 'gdocs-convert-callouts)
 (require 'gdocs-convert-tasks)
 (require 'gdocs-convert-org-blocks)
@@ -386,26 +387,6 @@ whitespace from the last.  Returns nil if no text remains."
           :id (gdocs-convert--next-id))))
 
 ;; ---------------------------------------------------------------------------
-;;; Center blocks -> IR
-
-(defun gdocs-convert--center-block-to-ir (center-block)
-  "Convert a CENTER-BLOCK element to IR elements with center alignment."
-  (let ((result nil))
-    (org-element-map center-block 'paragraph
-      (lambda (para)
-        (let* ((runs (gdocs-convert--objects-to-runs
-                      (org-element-contents para)))
-               (trimmed (gdocs-convert--trim-runs runs)))
-          (when trimmed
-            (push (list :type 'paragraph
-                        :style 'normal
-                        :alignment 'center
-                        :contents trimmed
-                        :id (gdocs-convert--next-id))
-                  result)))))
-    (nreverse result)))
-
-;; ---------------------------------------------------------------------------
 ;;; Special blocks -> IR
 
 (defun gdocs-convert--special-block-to-ir (special-block)
@@ -567,6 +548,8 @@ merge the heading text into that list item."
           (gdocs-convert-quote-element-p element)
           (gdocs-convert-verse-element-p previous)
           (gdocs-convert-verse-element-p element)
+          (gdocs-convert-center-element-p previous)
+          (gdocs-convert-center-element-p element)
           (gdocs-convert-code-block-element-p previous)
           (gdocs-convert-code-block-element-p element)
           (gdocs-convert-list-boundary-p previous element)
@@ -593,6 +576,7 @@ merge the heading text into that list item."
     ('example-block (gdocs-convert--ir-example-block-to-org element))
     ('quote-block (gdocs-convert--ir-quote-block-to-org element))
     ('verse-block (gdocs-convert--ir-verse-block-to-org element))
+    ('center-block (gdocs-convert--ir-center-block-to-org element))
     ('callout-block (gdocs-convert--ir-callout-block-to-org element))))
 
 (defun gdocs-convert--ir-paragraph-to-org (element)
@@ -643,6 +627,7 @@ like `body', `title', `lists', and `namedRanges'."
     (gdocs-convert-task-validate-native-context content markers)
     (gdocs-convert-list-validate-native-context content markers)
     (gdocs-convert-verse-validate-native-context content markers)
+    (gdocs-convert-center-validate-native-context content markers)
     (when title
       (push (list :type 'paragraph
                   :style 'title
@@ -686,7 +671,7 @@ like `body', `title', `lists', and `namedRanges'."
                            (gdocs-convert--docs-footnotes-to-ir
                             (alist-get 'footnotes json) footnote-refs)))))))))
       (gdocs-convert--assign-list-counters ir)
-      (gdocs-convert--attach-verse-block-markers ir))))
+      (gdocs-convert--attach-center-block-markers (gdocs-convert--attach-verse-block-markers ir)))))
 
 (defun gdocs-convert--structural-element-to-ir (element lists-map markers
                                                         &optional inline-objects)
@@ -747,6 +732,7 @@ otherwise."
 (defun gdocs-convert--docs-paragraph-to-ir (paragraph lists-map markers &optional start end)
   "Compose native PARAGRAPH decoding with LISTS-MAP, MARKERS and START..END."
   (or (gdocs-convert-verse-paragraph-from-docs paragraph markers start end)
+      (gdocs-convert-center-paragraph-from-docs paragraph markers start end)
       (let ((runs (gdocs-convert-paragraph-docs-runs paragraph markers)))
         (or (gdocs-convert-task-paragraph-from-docs paragraph runs markers start end)
             (gdocs-convert-list-paragraph-from-docs paragraph lists-map markers runs start end)
@@ -798,6 +784,7 @@ the IR element.  Returns marker plists with range metadata when available."
                               (gdocs-convert-task-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
                               (gdocs-convert-list-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
                               (gdocs-convert-verse-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
+                              (gdocs-convert-center-validate-native-marker (intern (nth 1 parts)) ranges)
                               (when (and status-p (/= (length ranges) 1))
                                 (user-error "A status marker must have one contiguous range"))
                               (if (vectorp ranges) (aref ranges 0) (car ranges)))))
@@ -858,6 +845,7 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
     ('example-block (gdocs-convert--example-block-to-requests element index))
     ('quote-block (gdocs-convert--quote-block-to-requests element index))
     ('verse-block (gdocs-convert--verse-block-to-requests element index))
+    ('center-block (gdocs-convert--center-block-to-requests element index))
     ('callout-block (gdocs-convert--callout-block-to-requests element index))
     ('footnote (gdocs-convert--footnote-to-requests element index))))
 

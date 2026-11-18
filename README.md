@@ -376,6 +376,28 @@ automatically recognized or faithfully imported. Use managed glyph tasks for
 synchronized state, or republish authoritative Org to establish that format;
 never infer completion from strike-through or an old metadata snapshot.
 
+## Centered prose conversion
+
+`gdocs-convert-centers.el` owns centered source recognition, paragraph/block
+identity, native range validation, grouping, Org rendering and publication.
+Rich prose retains emphasis, links, Unicode and paragraph boundaries. Distinct
+blocks remain distinct, including empty blocks. Soft source wraps remain prose;
+centered prose does not acquire verse's literal-line semantics.
+
+Versioned whole-paragraph annotations preserve block identity without storing
+stale text. Native text and paragraph insertions are authoritative. Import
+requires marked paragraphs to remain centered, text-only and unlisted; partial
+or overlapping ranges, unsupported provenance or unsupported content stop with
+an actionable diagnostic rather than silently changing meaning. Unsupported
+nested source blocks and semantic objects stop before publication. Unmarked
+native centered paragraphs retain the existing single-block Org rendering;
+adjacency alone does not establish a shared authored block.
+
+`gdocs-diff-centers.el` supplies neutral identity and UTF-16 geometry descriptors,
+including the generated outside separator. Repeated pushes are no-ops and edits
+preserve following content. Configurable logical center roles own presentation;
+the generic diff algorithm and shared codecs do not recognize centered blocks.
+
 ## Verse block conversion
 
 `gdocs-convert-verse.el` owns verse source recognition, hard-line conversion,
