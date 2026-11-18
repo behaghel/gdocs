@@ -34,11 +34,11 @@ shared with the document walk.  Attribute order preserves the existing IR."
   "Convert Org PARAGRAPH child to paragraph IR, or nil if empty."
   (gdocs-convert-paragraph-from-runs (gdocs-convert-paragraph-org-runs paragraph)))
 
-(defun gdocs-convert-paragraph-docs-runs (paragraph markers)
-  "Return decoded inline runs from Docs PARAGRAPH using MARKERS.
+(defun gdocs-convert-paragraph-docs-runs (paragraph markers &optional literal-whitespace)
+  "Decode Docs PARAGRAPH using MARKERS and optional LITERAL-WHITESPACE.
 Strip the paragraph terminator, not authored internal line breaks."
   (gdocs-convert--trim-trailing-newline-runs
-   (gdocs-convert--docs-elements-to-runs (alist-get 'elements paragraph) markers)))
+   (gdocs-convert--docs-elements-to-runs (alist-get 'elements paragraph) markers literal-whitespace)))
 
 (defun gdocs-convert-paragraph-from-docs (paragraph runs markers start end style extra)
   "Build native PARAGRAPH IR from RUNS with caller-owned STYLE and EXTRA.

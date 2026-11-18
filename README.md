@@ -376,6 +376,31 @@ automatically recognized or faithfully imported. Use managed glyph tasks for
 synchronized state, or republish authoritative Org to establish that format;
 never infer completion from strike-through or an old metadata snapshot.
 
+## Verse block conversion
+
+`gdocs-convert-verse.el` owns verse source recognition, hard-line conversion,
+native block identity/grouping, Org rendering and publication. Verse lines
+preserve authored indentation, internal/trailing spaces, blank stanza lines,
+ordinary emphasis, links and Unicode; they are not soft-wrapped prose.
+Configurable logical verse styles remain presentation rather than authored data.
+
+Native verse annotations identify whole physical line groups, including blank
+lines and their terminal newlines. An identified placeholder distinguishes an
+empty block from an authored blank line. Native text and inserted lines remain
+authoritative; the annotation stores no stale text or line-count snapshot.
+Import uses authoritative native ranges and block identity, not capitalization
+or paragraph indentation. Unsupported native
+objects and legacy markers without a supported structural version fail closed
+rather than guessing the missing line structure. Unsupported source semantic
+objects and verses nested inside other blocks likewise block before remote
+mutation.
+
+`gdocs-diff-verse.el` owns verse identity and UTF-16 geometry through neutral
+descriptors. Repeated pushes are no-ops; edits preserve following document
+content and rich run boundaries. The conversion facade only composes feature
+adapters, and the shared codecs accept literal-whitespace policy without
+recognizing verse.
+
 ## Quote block conversion
 
 `gdocs-convert-quotes.el` owns source/context quote recognition, paragraph

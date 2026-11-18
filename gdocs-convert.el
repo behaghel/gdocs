@@ -36,6 +36,7 @@
 (require 'gdocs-convert-lists)
 (require 'gdocs-convert-code-blocks)
 (require 'gdocs-convert-quotes)
+(require 'gdocs-convert-verse)
 (require 'gdocs-convert-callouts)
 (require 'gdocs-convert-tasks)
 (require 'gdocs-convert-org-blocks)
@@ -405,20 +406,6 @@ whitespace from the last.  Returns nil if no text remains."
     (nreverse result)))
 
 ;; ---------------------------------------------------------------------------
-;;; Verse blocks -> IR
-
-(defun gdocs-convert--verse-block-to-ir (verse-block)
-  "Convert a VERSE-BLOCK element to an IR element with a marker."
-  (let* ((runs (gdocs-convert--objects-to-runs
-                (org-element-contents verse-block)))
-         (trimmed (gdocs-convert--trim-runs runs)))
-    (list :type 'paragraph
-          :style 'normal
-          :contents (or trimmed (list (gdocs-convert--make-plain-run "")))
-          :gdocs-marker (list (list :type 'verse-block))
-          :id (gdocs-convert--next-id))))
-
-;; ---------------------------------------------------------------------------
 ;;; Special blocks -> IR
 
 (defun gdocs-convert--special-block-to-ir (special-block)
@@ -578,6 +565,8 @@ merge the heading text into that list item."
           (gdocs-convert-callout-element-p element)
           (gdocs-convert-quote-element-p previous)
           (gdocs-convert-quote-element-p element)
+          (gdocs-convert-verse-element-p previous)
+          (gdocs-convert-verse-element-p element)
           (gdocs-convert-code-block-element-p previous)
           (gdocs-convert-code-block-element-p element)
           (gdocs-convert-list-boundary-p previous element)
@@ -603,6 +592,7 @@ merge the heading text into that list item."
     ('source-block (gdocs-convert--ir-source-block-to-org element))
     ('example-block (gdocs-convert--ir-example-block-to-org element))
     ('quote-block (gdocs-convert--ir-quote-block-to-org element))
+    ('verse-block (gdocs-convert--ir-verse-block-to-org element))
     ('callout-block (gdocs-convert--ir-callout-block-to-org element))))
 
 (defun gdocs-convert--ir-paragraph-to-org (element)
@@ -652,6 +642,7 @@ like `body', `title', `lists', and `namedRanges'."
          (result nil))
     (gdocs-convert-task-validate-native-context content markers)
     (gdocs-convert-list-validate-native-context content markers)
+    (gdocs-convert-verse-validate-native-context content markers)
     (when title
       (push (list :type 'paragraph
                   :style 'title
@@ -695,7 +686,7 @@ like `body', `title', `lists', and `namedRanges'."
                            (gdocs-convert--docs-footnotes-to-ir
                             (alist-get 'footnotes json) footnote-refs)))))))))
       (gdocs-convert--assign-list-counters ir)
-      ir)))
+      (gdocs-convert--attach-verse-block-markers ir))))
 
 (defun gdocs-convert--structural-element-to-ir (element lists-map markers
                                                         &optional inline-objects)
@@ -755,12 +746,13 @@ otherwise."
 
 (defun gdocs-convert--docs-paragraph-to-ir (paragraph lists-map markers &optional start end)
   "Compose native PARAGRAPH decoding with LISTS-MAP, MARKERS and START..END."
-  (let ((runs (gdocs-convert-paragraph-docs-runs paragraph markers)))
-    (or (gdocs-convert-task-paragraph-from-docs paragraph runs markers start end)
-        (gdocs-convert-list-paragraph-from-docs paragraph lists-map markers runs start end)
-        (gdocs-convert-heading-paragraph-from-docs paragraph runs markers start end)
-        (gdocs-convert-paragraph-from-docs
-         paragraph runs markers start end 'normal '(:style-name gdocs-body)))))
+  (or (gdocs-convert-verse-paragraph-from-docs paragraph markers start end)
+      (let ((runs (gdocs-convert-paragraph-docs-runs paragraph markers)))
+        (or (gdocs-convert-task-paragraph-from-docs paragraph runs markers start end)
+            (gdocs-convert-list-paragraph-from-docs paragraph lists-map markers runs start end)
+            (gdocs-convert-heading-paragraph-from-docs paragraph runs markers start end)
+            (gdocs-convert-paragraph-from-docs
+             paragraph runs markers start end 'normal '(:style-name gdocs-body))))))
 
 (defun gdocs-convert--paragraph-markers-for-range (markers start end)
   "Compose paragraph annotations from MARKERS overlapping START..END."
@@ -805,6 +797,7 @@ the IR element.  Returns marker plists with range metadata when available."
                               (gdocs-convert-code-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
                               (gdocs-convert-task-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
                               (gdocs-convert-list-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
+                              (gdocs-convert-verse-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
                               (when (and status-p (/= (length ranges) 1))
                                 (user-error "A status marker must have one contiguous range"))
                               (if (vectorp ranges) (aref ranges 0) (car ranges)))))
@@ -864,6 +857,7 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
     ('source-block (gdocs-convert--source-block-to-requests element index))
     ('example-block (gdocs-convert--example-block-to-requests element index))
     ('quote-block (gdocs-convert--quote-block-to-requests element index))
+    ('verse-block (gdocs-convert--verse-block-to-requests element index))
     ('callout-block (gdocs-convert--callout-block-to-requests element index))
     ('footnote (gdocs-convert--footnote-to-requests element index))))
 

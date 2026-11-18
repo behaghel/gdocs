@@ -167,11 +167,17 @@
     (should (>= (length ir) 1))))
 
 (ert-deftest gdocs-roundtrip/org-verse-block ()
-  "A verse block is parsed into IR."
-
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir
-              "#+BEGIN_VERSE\nLine one\nLine two\n#+END_VERSE")))
-    (should ir)))
+  "Verse retains hard lines, a semantic block and a whole-line native marker."
+  (let* ((source "#+BEGIN_VERSE\nLine one\nLine two\n#+END_VERSE\n")
+         (ir (gdocs-roundtrip-test--org-to-ir source))
+         (element (gdocs-roundtrip-test--find-ir-element ir 'verse-block)))
+    (should element)
+    (should (equal (mapcar #'gdocs-convert--runs-to-plain-text (plist-get element :lines)) '("Line one" "Line two")))
+    (should (equal (gdocs-convert-ir-to-org ir) source))
+    (should (seq-some (lambda (request)
+                        (when-let* ((marker (alist-get 'createNamedRange request)))
+                          (string-prefix-p "gdocs-org-marker:verse-block:" (alist-get 'name marker))))
+                      (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-example-block ()
   "A semantic example block retains literal lines and provider markers."

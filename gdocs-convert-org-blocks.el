@@ -53,8 +53,6 @@
         (gdocs-convert--format-src-block data element)))
      ((when-let* ((data (gdocs-convert--extract-marker-field marker 'keyword)))
         (format "#+%s: %s" (plist-get data :key) (plist-get data :value))))
-     ((gdocs-convert--extract-marker-field marker 'verse-block)
-      (format "#+BEGIN_VERSE\n%s\n#+END_VERSE" text))
      ((when-let* ((block-type (gdocs-convert--extract-marker-field marker 'special-block)))
         (format "#+BEGIN_%s\n%s\n#+END_%s" block-type text block-type)))
      ((when-let* ((data (gdocs-convert--extract-marker-field marker 'latex-environment))) data))

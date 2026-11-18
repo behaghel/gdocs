@@ -23,11 +23,11 @@
 (declare-function gdocs-convert--extract-link-url "gdocs-link-resolve" (link-obj))
 (declare-function gdocs-convert--docs-is-monospace-p "gdocs-convert-org-blocks" (style))
 
-(defun gdocs-convert--objects-to-runs (objects)
-  "Convert Org OBJECTS to merged inline run plists."
+(defun gdocs-convert--objects-to-runs (objects &optional inherited-props)
+  "Convert Org OBJECTS to merged runs with optional INHERITED-PROPS."
   (let (runs)
     (dolist (object (if (listp objects) objects (list objects)))
-      (setq runs (nconc runs (gdocs-convert--object-to-runs object nil))))
+      (setq runs (nconc runs (gdocs-convert--object-to-runs object inherited-props))))
     (gdocs-convert--merge-adjacent-runs runs)))
 
 (defun gdocs-convert--object-to-runs (object inherited-props)
@@ -110,8 +110,9 @@
         (setq trailing (match-string 1 inner) inner (substring inner 0 (match-beginning 1))))
       (if (string-empty-p inner) text (concat leading marker inner marker trailing)))))
 
-(defun gdocs-convert--docs-elements-to-runs (elements &optional markers)
-  "Decode native ELEMENTS using MARKERS and feature-owned part dispatch."
+(defun gdocs-convert--docs-elements-to-runs (elements &optional markers literal-whitespace)
+  "Decode native ELEMENTS using MARKERS and feature-owned part dispatch.
+LITERAL-WHITESPACE suppresses normalization of authored edge spacing."
   (let (runs previous-marker)
     (seq-doseq (element elements)
       (dolist (part (gdocs-convert--inline-element-parts element markers))
@@ -120,9 +121,9 @@
               (plist-put (car runs) :text (concat (plist-get (car runs) :text) (plist-get run :text)))
             (push run runs))
           (setq previous-marker marker))))
-    (gdocs-convert--normalize-run-whitespace
-     (gdocs-convert--merge-adjacent-runs
-      (gdocs-convert--inline-finalize-runs (nreverse runs))))))
+    (let ((decoded (gdocs-convert--merge-adjacent-runs
+                    (gdocs-convert--inline-finalize-runs (nreverse runs)))))
+      (if literal-whitespace decoded (gdocs-convert--normalize-run-whitespace decoded)))))
 
 (defun gdocs-convert--merge-adjacent-runs (runs)
   "Merge adjacent RUNS with matching formatting and compatible run policies."

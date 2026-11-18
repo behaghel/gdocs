@@ -39,11 +39,13 @@ Supported PROPS include inline formatting flags like `:bold', `:italic',
 
 (defun gdocs-convert--string-to-run (text inherited-props)
   "Create source text runs from TEXT with INHERITED-PROPS.
-Normalize soft source wraps to spaces; explicit line-break objects are handled
-by the caller.  Literal constructors do not apply this source-only policy."
+Normalize soft source wraps to spaces unless INHERITED-PROPS requests
+`:literal-whitespace'.  Literal constructors do not apply this source policy."
   (unless (string-empty-p text)
     (list (gdocs-convert--make-run
-           (string-replace "\n" " " (substring-no-properties text))
+           (if (plist-get inherited-props :literal-whitespace)
+               (substring-no-properties text)
+             (string-replace "\n" " " (substring-no-properties text)))
            inherited-props))))
 
 (defun gdocs-convert--strip-vertical-tabs (text)
