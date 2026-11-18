@@ -11,6 +11,45 @@
 (require 'gdocs-convert)
 (require 'gdocs-diff)
 
+(defconst gdocs-quotes-test--directory (file-name-directory (or load-file-name buffer-file-name))
+  "Directory containing the native quote captures.")
+
+(ert-deftest gdocs-quotes-live-captures-preserve-authored-emphasis-and-boundaries ()
+  "Both live presentation bases decode consistently after create, edit and toggle."
+  (let* ((created "#+BEGIN_QUOTE\nPlain /emphasized 😀/ text.\n\nsecond paragraph with *bold* and [[https://example.org][a link]].\n#+END_QUOTE\n\n#+BEGIN_QUOTE\nA separate quote.\n#+END_QUOTE\n")
+         (edited "#+BEGIN_QUOTE\nPlain emphasized 😀 /changed text/.\n\nsecond paragraph with *strong 😀* and [[https://example.org][a link]].\n#+END_QUOTE\n\n#+BEGIN_QUOTE\nAnother separate quote.\n#+END_QUOTE\n"))
+    (dolist (mode '("italic" "upright"))
+      (dolist (stage '("created" "edited" "native-toggled"))
+        (let* ((json-object-type 'alist) (json-array-type 'vector)
+               (document (json-read-file (expand-file-name (format "fixtures/live-native-quote-%s-%s.json" mode stage) gdocs-quotes-test--directory)))
+               (expected (pcase stage ("created" created) ("edited" edited)
+                                (_ (string-replace "/changed text/" "changed text" edited)))))
+          (should-not (alist-get 'revisionId document))
+          (dolist (local-base '(nil t))
+            (let* ((gdocs-style-definitions
+                    (append (mapcar (lambda (role) (list role :text (list :italic local-base)))
+                                    '(gdocs-quote-block gdocs-quote-block-first gdocs-quote-block-line gdocs-quote-block-last gdocs-quote-block-single))
+                            gdocs-style-definitions))
+                   (native (seq-filter #'gdocs-convert-quote-element-p (gdocs-convert-docs-json-to-ir document))))
+              (should (= (length native) 2))
+              (should (= (length (plist-get (car native) :paragraphs)) 2))
+              (should (equal (gdocs-convert-ir-to-org native) expected))
+              (should-not (gdocs-diff-generate native (gdocs-convert-org-string-to-ir expected))))))))))
+
+(ert-deftest gdocs-quotes-live-captures-without-provenance-fail-closed ()
+  "Removing an actual applied-base snapshot cannot cause guessed emphasis."
+  (dolist (mode '("italic" "upright"))
+    (let* ((json-object-type 'alist) (json-array-type 'vector)
+           (document (json-read-file (expand-file-name (format "fixtures/live-native-quote-%s-created.json" mode) gdocs-quotes-test--directory)))
+           (changed 0))
+      (dolist (entry (alist-get 'namedRanges document))
+        (let ((name (symbol-name (car entry))))
+          (when (string-prefix-p "gdocs-org-marker:quote-block:" name)
+            (setcar entry (intern (replace-regexp-in-string ":italic-v1-[01]$" "" name)))
+            (cl-incf changed))))
+      (should (> changed 0))
+      (should-error (gdocs-convert-docs-json-to-ir document) :type 'user-error))))
+
 (ert-deftest gdocs-quotes-physical-owners ()
   "Quote policy is not left in generic traversal or diff algorithms."
   (dolist (function '(gdocs-convert--quote-block-to-ir gdocs-convert--block-paragraph-runs
