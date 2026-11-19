@@ -99,7 +99,6 @@ that elements with identical content and formatting produce
 identical keys."
   (pcase (plist-get element :type)
     ('paragraph (gdocs-diff--paragraph-key element))
-    ('horizontal-rule "horizontal-rule")
     ('page-break "page-break")
     (_ (or (plist-get (gdocs-diff-semantic-element element) :key)
            (format "unknown:%s" (plist-get element :type))))))
@@ -359,9 +358,7 @@ the UTF-16 index where the first element begins (default 1)."
   (pcase (plist-get element :type)
     ('paragraph (or (plist-get (gdocs-diff-semantic-element element) :body-length)
                     (gdocs-diff--paragraph-utf16-length element)))
-    ;; Horizontal rules and page breaks each occupy a single
-    ;; structural element in the document body (1 UTF-16 unit).
-    ('horizontal-rule 1)
+    ;; Native page breaks occupy one body-model unit.
     ('page-break 1)
     (_ (or (plist-get (gdocs-diff-semantic-element element) :body-length)
            (error "gdocs-diff: unknown element type: %s" (plist-get element :type))))))
@@ -862,12 +859,11 @@ tokens so that comment anchors on unchanged text survive."
            (style-reqs (gdocs-convert--make-paragraph-style-requests
                         new-elem start para-end))
            (runs (plist-get new-elem :contents))
+           ;; Clear inherited styles before applying the complete authored runs,
+           ;; not only positively asserted formatting flags.
            (reset-reqs
-            (when (and has-status (> new-text-len 0))
-              (let ((reset (gdocs-convert--make-text-style-reset-request start (+ start new-text-len))))
-                (setf (alist-get 'fields (alist-get 'updateTextStyle reset))
-                      (concat (alist-get 'fields (alist-get 'updateTextStyle reset)) ",link"))
-                (list reset))))
+            (when (> new-text-len 0)
+              (list (gdocs-convert--make-text-style-reset-request start (+ start new-text-len)))))
            (logical-reqs
             (when-let* ((request (gdocs-convert--paragraph-logical-text-request
                                   new-elem start (+ start new-text-len))))

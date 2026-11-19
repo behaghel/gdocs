@@ -385,10 +385,17 @@
 ;;; 1e. Horizontal rules
 
 (ert-deftest gdocs-roundtrip/org-horizontal-rule ()
-  "A ----- line produces :type horizontal-rule."
+  "A section break has visible requests and recoverable native provenance."
   (let* ((ir (gdocs-roundtrip-test--org-to-ir "Above\n-----\nBelow"))
-         (hr (gdocs-roundtrip-test--find-ir-element ir 'horizontal-rule)))
-    (should hr)))
+         (hr (gdocs-roundtrip-test--find-ir-element ir 'horizontal-rule))
+         (requests (gdocs-convert-ir-to-docs-requests ir)))
+    (should hr)
+    (should (seq-some (lambda (request)
+                        (let ((border (alist-get 'borderBottom (alist-get 'paragraphStyle (alist-get 'updateParagraphStyle request)))))
+                          (> (or (alist-get 'magnitude (alist-get 'width border)) 0) 0))) requests))
+    (should (seq-some (lambda (request)
+                        (when-let* ((marker (alist-get 'createNamedRange request)))
+                          (string-prefix-p "gdocs-org-marker:section-break:" (alist-get 'name marker)))) requests))))
 
 ;; ---------------------------------------------------------------------------
 ;;; 1f. Org-only markers

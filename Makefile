@@ -31,6 +31,8 @@ TEST_FILES = \
   test/gdocs-fidelity-corrections-test.el \
   test/gdocs-verse-test.el \
   test/gdocs-centers-test.el \
+  test/gdocs-section-breaks-test.el \
+  test/gdocs-link-mutation-test.el \
   test/gdocs-callouts-test.el \
   test/gdocs-tasks-test.el \
   test/gdocs-list-conversion-test.el \

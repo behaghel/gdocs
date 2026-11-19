@@ -20,6 +20,16 @@
     (gdocs-list-first :paragraph (:space-above 0))
     (gdocs-list-item :paragraph (:space-above 0))
     (gdocs-task-prefix :text (:font-family "Noto Sans Symbols 2" :font-size 10))
+    (gdocs-section-break :parent normal
+                         :paragraph (:space-above 6 :space-below 6 :indent-start 0 :indent-first-line 0 :indent-end 0
+                                                  :borders ((top :width 0 :padding 0) (left :width 0 :padding 0)
+                                                            (right :width 0 :padding 0) (bottom :width 0.5 :padding 0)))
+                         :text (:font-size 1))
+    (gdocs-section-break-separator :parent normal
+                                   :paragraph (:space-above 0 :space-below 0 :indent-start 0 :indent-first-line 0 :indent-end 0
+                                                            :borders ((top :width 0 :padding 0) (left :width 0 :padding 0)
+                                                                      (right :width 0 :padding 0) (bottom :width 0 :padding 0)))
+                                   :text (:font-scale 1))
     (gdocs-center-first :parent normal :paragraph (:alignment center))
     (gdocs-center-line :parent normal :paragraph (:alignment center))
     (gdocs-center-last :parent normal :paragraph (:alignment center))

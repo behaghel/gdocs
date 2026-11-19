@@ -62,10 +62,12 @@ not an unmatched plan.")
 (require 'gdocs-diff-quotes)
 (require 'gdocs-diff-verse)
 (require 'gdocs-diff-centers)
+(require 'gdocs-diff-section-breaks)
 (require 'gdocs-diff-callouts)
 (require 'gdocs-diff-tasks)
 (require 'gdocs-diff-list-continuations)
 (require 'gdocs-diff-lists)
+(require 'gdocs-diff-links)
 
 (defun gdocs-diff-semantic-paragraph (element &optional old)
   "Describe ELEMENT's opaque paragraph structure and compatibility with OLD."

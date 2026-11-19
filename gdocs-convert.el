@@ -38,6 +38,8 @@
 (require 'gdocs-convert-quotes)
 (require 'gdocs-convert-verse)
 (require 'gdocs-convert-centers)
+(require 'gdocs-convert-section-breaks)
+(require 'gdocs-convert-links)
 (require 'gdocs-convert-callouts)
 (require 'gdocs-convert-tasks)
 (require 'gdocs-convert-org-blocks)
@@ -188,8 +190,7 @@ The result is sorted by buffer position."
                                           :begin (org-element-property :begin el))
                                     result)))
                            ('horizontal-rule
-                            (push (list :ir (list :type 'horizontal-rule
-                                                  :id (gdocs-convert--next-id))
+                            (push (list :ir (gdocs-convert-section-break-source el)
                                         :begin (org-element-property :begin el))
                                   result))
                            ('quote-block
@@ -363,7 +364,8 @@ whitespace from the last.  Returns nil if no text remains."
           (gdocs-convert-code-run-policy run)
           (gdocs-convert-date-run-policy run)
           (gdocs-convert-status-run-policy run)
-          (gdocs-convert-footnote-run-policy run)))
+          (gdocs-convert-footnote-run-policy run)
+          (gdocs-convert-links-run-policy run)))
 
 ;; ---------------------------------------------------------------------------
 ;;; Lists -> IR
@@ -556,19 +558,19 @@ merge the heading text into that list item."
           (and (eq previous-type 'paragraph)
                (gdocs-convert--heading-style-p previous-style))
           (eq type 'table)
-          (eq type 'horizontal-rule)
+          (gdocs-convert-section-break-element-p element)
           (eq type 'footnote)
           (gdocs-convert-image-element-p element)
           (and (eq type 'paragraph)
                (not compact)
-               (not (eq previous-type 'horizontal-rule)))))))
+               (not (gdocs-convert-section-break-element-p previous)))))))
 
 (defun gdocs-convert--ir-element-to-org (element)
   "Convert a single IR ELEMENT to an org string."
   (pcase (plist-get element :type)
     ('paragraph (gdocs-convert--ir-paragraph-to-org element))
     ('table (gdocs-convert--ir-table-to-org element))
-    ('horizontal-rule "-----")
+    ('horizontal-rule (gdocs-convert-section-break-to-org element))
     ('footnote (gdocs-convert--ir-footnote-to-org element))
     ('page-break "")
     ('image (gdocs-convert--ir-image-to-org element))
@@ -628,6 +630,7 @@ like `body', `title', `lists', and `namedRanges'."
     (gdocs-convert-list-validate-native-context content markers)
     (gdocs-convert-verse-validate-native-context content markers)
     (gdocs-convert-center-validate-native-context content markers)
+    (gdocs-convert-section-break-validate-native-context content markers)
     (when title
       (push (list :type 'paragraph
                   :style 'title
@@ -671,7 +674,9 @@ like `body', `title', `lists', and `namedRanges'."
                            (gdocs-convert--docs-footnotes-to-ir
                             (alist-get 'footnotes json) footnote-refs)))))))))
       (gdocs-convert--assign-list-counters ir)
-      (gdocs-convert--attach-center-block-markers (gdocs-convert--attach-verse-block-markers ir)))))
+      (gdocs-convert-links-annotate-native-ir
+       (gdocs-convert-section-breaks-finalize-native
+        (gdocs-convert--attach-center-block-markers (gdocs-convert--attach-verse-block-markers ir))) content))))
 
 (defun gdocs-convert--structural-element-to-ir (element lists-map markers
                                                         &optional inline-objects)
@@ -682,7 +687,9 @@ INLINE-OBJECTS is the document's inline object metadata map."
   (cond
    ((alist-get 'paragraph element)
     (let ((paragraph (alist-get 'paragraph element)))
-      (or (gdocs-convert--docs-special-paragraph-elements
+      (or (gdocs-convert-section-break-paragraph-from-docs
+           paragraph markers (alist-get 'startIndex element) (alist-get 'endIndex element))
+          (gdocs-convert--docs-special-paragraph-elements
            paragraph inline-objects markers
            (alist-get 'startIndex element)
            (alist-get 'endIndex element))
@@ -693,6 +700,7 @@ INLINE-OBJECTS is the document's inline object metadata map."
    ((alist-get 'table element)
     (gdocs-convert-status-validate-native-table element markers)
     (gdocs-convert-code-validate-native-table element markers)
+    (gdocs-convert-section-break-validate-native-table element)
     (gdocs-convert--docs-table-to-ir (alist-get 'table element)))
    ((alist-get 'sectionBreak element)
     nil)
@@ -785,6 +793,7 @@ the IR element.  Returns marker plists with range metadata when available."
                               (gdocs-convert-list-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
                               (gdocs-convert-verse-validate-native-marker (intern (nth 1 parts)) ranges range-entry)
                               (gdocs-convert-center-validate-native-marker (intern (nth 1 parts)) ranges)
+                              (gdocs-convert-section-break-validate-native-marker (intern (nth 1 parts)) ranges)
                               (when (and status-p (/= (length ranges) 1))
                                 (user-error "A status marker must have one contiguous range"))
                               (if (vectorp ranges) (aref ranges 0) (car ranges)))))
@@ -838,7 +847,7 @@ Returns a plist (:requests LIST :index NEW-INDEX)."
   (pcase (plist-get element :type)
     ('paragraph (gdocs-convert--paragraph-to-requests element index))
     ('table (gdocs-convert--table-to-requests element index))
-    ('horizontal-rule (gdocs-convert--horizontal-rule-to-requests index))
+    ('horizontal-rule (gdocs-convert--horizontal-rule-to-requests index element))
     ('page-break (gdocs-convert--page-break-to-requests index))
     ('image (gdocs-convert--image-to-requests element index))
     ('source-block (gdocs-convert--source-block-to-requests element index))
@@ -1014,7 +1023,7 @@ body are reset to their defaults by the Google Docs API."
                       (baselineOffset . "NONE")))
         (range . ((startIndex . ,start)
                   (endIndex . ,end)))
-        (fields . "bold,italic,underline,strikethrough,weightedFontFamily,baselineOffset,foregroundColor,backgroundColor")))))
+        (fields . "link,bold,italic,underline,strikethrough,weightedFontFamily,baselineOffset,foregroundColor,backgroundColor")))))
 
 (defun gdocs-convert--run-logical-style (run)
   "Return Google Docs TextStyle fields for RUN logical styles."
@@ -1075,18 +1084,7 @@ covering their newline, because Google Docs rejects zero-length named ranges."
               marker))))
 
 ;; ---------------------------------------------------------------------------
-;;; Horizontal rule -> requests
-
-(defun gdocs-convert--horizontal-rule-to-requests (index)
-  "Create requests for a horizontal rule at INDEX.
-Google Docs has no native horizontal rule element, so we represent
-it as a bare newline paragraph.
-Returns a plist (:requests LIST :index NEW-INDEX)."
-  (let* ((text "\n")
-         (len (gdocs-convert--string-to-utf16-length text))
-         (insert-req (gdocs-convert--make-insert-text-request text index)))
-    (list :requests (list insert-req)
-          :index (+ index len))))
+;;; Page break -> requests
 
 (defun gdocs-convert--page-break-to-requests (index)
   "Create requests for a page break at INDEX.

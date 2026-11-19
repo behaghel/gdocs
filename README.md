@@ -186,6 +186,15 @@ There is no feature registry, discovery mechanism or declaration DSL.
 
 Literal links are composed before emphasis so emphasis encloses the complete
 link. Native default link underlining is not mistaken for authored underline.
+`gdocs-convert-links.el` retains exact native hyperlink spans as addressing
+metadata, separately from normalized semantic runs. `gdocs-diff-links.el` clears
+actual old-coordinate link spans before modifying paragraph text, then ordinary
+run emission restores authored links. A whitespace-only unintended link can need
+an exact style repair even when paragraph text is unchanged. Linked whitespace
+is semantic: normalization preserves it across style-fragmented labels.
+Adjacent fragments of one linked label remain a group; intentional label spaces
+and authored links in untouched container cells are not stripped. Link cleanup
+changes styles rather than text, preserving comment-anchor positions.
 The source adapter preserves post-blank spacing and inherited formatting; native
 inline parts retain their grouping token until feature-owned completion runs.
 
@@ -375,6 +384,30 @@ so it cannot prove checkbox semantics: unmarked native checklists cannot be
 automatically recognized or faithfully imported. Use managed glyph tasks for
 synchronized state, or republish authoritative Org to establish that format;
 never infer completion from strike-through or an old metadata snapshot.
+
+## Section break conversion
+
+`gdocs-convert-section-breaks.el` owns Org horizontal-rule recognition, native
+horizontal-rule decoding, versioned identity, boundary validation, Org rendering
+and publication. A section break is an untitled semantic transition, not an
+arbitrary empty paragraph or paragraph border. Distinct and terminal breaks keep
+their identity; unchanged pulls and pushes do not rewrite them.
+
+The Docs API exposes native `horizontalRule` paragraph elements for reading but
+its [request catalog](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/request)
+has no horizontal-rule insertion request. Publication uses a marked empty
+paragraph with a configurable logical bottom border and an unbordered outside
+separator. Markers carry identity and version, never stale authored text.
+Arbitrary unmarked paragraph borders do not imply a section break. Recognized
+malformed markers, mixed native rule/text paragraphs, unsupported nesting and
+text inserted into a marked separator stop with actionable diagnostics rather
+than silently dropping authored content.
+
+`gdocs-diff-section-breaks.el` owns identity and UTF-16 body geometry through the
+neutral descriptor contract. Published breaks occupy a marked newline plus an
+outside separator; native horizontal-rule paragraphs occupy their object and
+terminal newline. Following prose keeps its own formatting and has no inherited
+rule border. Generic diff does not recognize the section-break semantic type.
 
 ## Centered prose conversion
 
