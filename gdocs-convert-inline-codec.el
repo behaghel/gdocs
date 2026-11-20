@@ -115,12 +115,18 @@
 LITERAL-WHITESPACE suppresses normalization of authored edge spacing."
   (let (runs previous-marker)
     (seq-doseq (element elements)
-      (dolist (part (gdocs-convert--inline-element-parts element markers))
-        (let ((marker (car part)) (run (cdr part)))
-          (if (and marker (eq marker previous-marker))
-              (plist-put (car runs) :text (concat (plist-get (car runs) :text) (plist-get run :text)))
-            (push run runs))
-          (setq previous-marker marker))))
+      (let ((parts (gdocs-convert--inline-element-parts element markers)))
+        (unless parts
+          (when-let* ((unknown (seq-remove (lambda (field)
+                                             (memq (car field) '(startIndex endIndex suggestedInsertionIds suggestedDeletionIds))) element)))
+            (user-error "Unsupported native inline object (%s); preserve the document and review its source representation"
+                        (mapconcat (lambda (field) (symbol-name (car field))) unknown ", "))))
+        (dolist (part parts)
+          (let ((marker (car part)) (run (cdr part)))
+            (if (and marker (eq marker previous-marker))
+                (plist-put (car runs) :text (concat (plist-get (car runs) :text) (plist-get run :text)))
+              (push run runs))
+            (setq previous-marker marker)))))
     (let ((decoded (gdocs-convert--merge-adjacent-runs
                     (gdocs-convert--inline-finalize-runs (nreverse runs)))))
       (if literal-whitespace decoded (gdocs-convert--normalize-run-whitespace decoded)))))

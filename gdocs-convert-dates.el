@@ -27,7 +27,11 @@
         (month (org-element-property :month-start timestamp))
         (day (org-element-property :day-start timestamp)))
     (list (append (gdocs-convert--make-run raw inherited-props)
-                  (when (and gdocs-convert-native-date-elements year month day)
+                  (when (and gdocs-convert-native-date-elements year month day
+                             (memq (org-element-property :type timestamp) '(active inactive))
+                             (not (org-element-property :hour-start timestamp))
+                             (not (org-element-property :repeater-type timestamp))
+                             (not (org-element-property :warning-type timestamp)))
                     (list :date-element
                           (list :timestamp (format "%04d-%02d-%02dT00:00:00Z" year month day)
                                 :raw raw :active (eq (org-element-property :type timestamp) 'active))))))))
@@ -42,6 +46,10 @@
   "Return native date addressing and atomicity policy for RUN, or nil."
   (when (plist-get run :date-element) '(:atomic t :model-length 1)))
 
+(defun gdocs-convert-date-paragraph-markers (markers)
+  "Exclude date-owned activity MARKERS from paragraph identity."
+  (seq-remove (lambda (marker) (eq (plist-get marker :type) 'timestamp-kind)) markers))
+
 (defun gdocs-convert--timestamp-kind-marker (markers start end)
   "Return timestamp kind marker overlapping START..END in MARKERS, or nil."
   (seq-find (lambda (marker)
@@ -51,12 +59,19 @@
 
 (defun gdocs-convert--timestamp-active-p (markers start end)
   "Return non-nil when timestamp marker at START..END in MARKERS is active."
-  (not (equal (plist-get (gdocs-convert--timestamp-kind-marker markers start end) :data) "inactive")))
+  (equal (plist-get (gdocs-convert--timestamp-kind-marker markers start end) :data) "active"))
 
 (defun gdocs-convert--docs-date-element-to-run (date-element &optional markers start end)
   "Convert DATE-ELEMENT with MARKERS at START..END to timestamp IR."
-  (let* ((timestamp (alist-get 'timestamp (alist-get 'dateElementProperties date-element)))
+  (let* ((properties (alist-get 'dateElementProperties date-element))
+         (timestamp (alist-get 'timestamp properties))
          (active (gdocs-convert--timestamp-active-p markers start end))
+         (_validated
+          (unless (and (stringp timestamp)
+                       (string-match-p "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}T00:00:00\\(?:\\.0+\\)?Z\\'" timestamp)
+                       (member (alist-get 'timeFormat properties) '(nil "TIME_FORMAT_DISABLED" "TIME_FORMAT_UNSPECIFIED"))
+                       (member (alist-get 'timeZoneId properties) '(nil "UTC" "Etc/UTC" "etc/UTC")))
+            (user-error "Unsupported native date value, time or timezone; use UTC day dates or explicit body text")))
          (raw (gdocs-convert--docs-date-timestamp-to-org timestamp (if active 'active 'inactive))))
     (list :text raw :date-element (list :timestamp timestamp :raw raw :active active))))
 
@@ -82,8 +97,7 @@
         (if-let* ((date (plist-get run :date-element)))
             (progn
               (push (gdocs-convert--make-insert-date-request date cursor) requests)
-              (unless (plist-get date :active)
-                (push (gdocs-convert--make-timestamp-kind-marker-request date cursor) requests))
+              (push (gdocs-convert--make-timestamp-kind-marker-request date cursor) requests)
               (setq cursor (1+ cursor)))
           (let ((text (plist-get run :text)))
             (unless (string-empty-p text)

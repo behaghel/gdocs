@@ -152,5 +152,20 @@
                                                 gdocs-style-default-border-padding gdocs-convert-monospace-font-families))
         (should-not (gdocs-style-resolve-test--contains forms symbol))))))
 
+(ert-deftest gdocs-style-resolve-small-caps-is-presentation-not-label-rewriting ()
+  "Small caps resolve to native styling and can be explicitly disabled/reset."
+  (should (eq (alist-get 'smallCaps (gdocs-convert--logical-text-style-to-docs '(:small-caps t))) t))
+  (should (eq (alist-get 'smallCaps (gdocs-convert--logical-text-style-to-docs '(:small-caps nil))) :json-false))
+  (let ((reset (alist-get 'updateTextStyle (gdocs-convert--make-text-style-reset-request 3 8))))
+    (should (member "smallCaps" (split-string (alist-get 'fields reset) ",")))
+    (should (eq (alist-get 'smallCaps (alist-get 'textStyle reset)) :json-false))))
+
+(ert-deftest gdocs-style-resolve-explicit-empty-background-clears-inherited-shading ()
+  "An outside paragraph clears shading without emitting empty wire objects."
+  (let* ((gdocs-style-definitions '((outside :parent normal :paragraph (:background-color nil))))
+         (request (alist-get 'updateParagraphStyle (gdocs-convert--logical-style-paragraph-request 'outside 5 6))))
+    (should (member "shading.backgroundColor" (split-string (alist-get 'fields request) ",")))
+    (should (equal (alist-get 'paragraphStyle request) '((namedStyleType . "NORMAL_TEXT"))))))
+
 (provide 'gdocs-style-resolve-test)
 ;;; gdocs-style-resolve-test.el ends here

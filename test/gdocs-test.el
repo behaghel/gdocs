@@ -582,5 +582,17 @@
   (should (equal "ok" (gdocs--sanitize-filename "---ok---")))
   (should (equal "a" (gdocs--sanitize-filename " a "))))
 
+(ert-deftest gdocs-test-invalid-source-stops-before-document-creation ()
+  "Conversion failure must not leave an empty remote document behind."
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+BEGIN_CENTER\n#+BEGIN_SRC text\nUnsupported nested block\n#+END_SRC\n#+END_CENTER\n")
+    (let (created)
+      (cl-letf (((symbol-function 'gdocs--effective-dir-locals) (lambda () nil))
+                ((symbol-function 'gdocs-api-create-document)
+                 (lambda (&rest _args) (setq created t))))
+               (should-error (gdocs-create "Synthetic" "personal") :type 'user-error)
+               (should-not created)))))
+
 (provide 'gdocs-test)
 ;;; gdocs-test.el ends here

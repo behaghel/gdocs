@@ -86,7 +86,26 @@ replacement. Remote list additions are accepted when existing structural counts
 remain intact; lost nesting, task state, blocks and other protected structure
 still block replacement. Parsing does not run user Org-mode hooks. File mtime
 is not proof that local content is unchanged: hash/shadow checks remain the
-source of that decision.
+source of that decision. Automatic text merging excludes all structured IR and
+atomic native inline runs. Centered paragraph counts and literal verse line,
+indentation and trailing-space geometry participate in pull integrity checks;
+word changes with stable geometry remain pullable. Unsupported native inline
+union members stop import instead of disappearing from surrounding text.
+Creation validates local conversion before creating a remote document.
+
+Native UTC day dates retain explicit active/inactive source provenance; unmarked
+remote dates import inactive. Activity provenance belongs to date runs, not
+paragraph identity, so adjacent prose edits keep unchanged chips. Source times,
+ranges, repeaters and warnings retain
+their complete literal timestamp rather than becoming lossy day chips. Native
+time-bearing, non-UTC or malformed date values stop import rather than being
+guessed or truncated.
+
+Small-cap static statuses publish lowercase glyph inputs for uniform height.
+Versioned inline provenance retains source label spelling; unchanged generated
+text restores that spelling on import, while native label edits remain edits.
+Token diffing distinguishes native display text from semantic source text.
+Legacy markers remain readable; oversized case provenance blocks publication.
 
 ## Semantic encapsulation
 
@@ -284,6 +303,11 @@ Description terms retain their rich inline content as visible `term :: body`
 text in ordinary Docs bullet paragraphs. Rendering and reparsing the standard
 Org description syntax preserves terms without duplicating them or requiring
 hidden term snapshots. Description syntax is not a native Docs control.
+`gdocs-convert-list-terms.el` owns the `gdocs-definition-term` role and inline
+bold provenance. Configured term bold is presentation; plain terms do not acquire
+Org emphasis, while authored bold remains authored. Metadata-free older terms
+retain native bold as authored rather than guessing it away. Unsupported atomic
+objects in terms and conflicting provenance stop conversion.
 
 ## List paragraph fidelity
 
@@ -505,8 +529,15 @@ paragraph decoding removes one terminator, not arbitrary trailing whitespace.
 Literal block text does not reinterpret Org emphasis, links or status syntax.
 Publication emits one shared paragraph plan per line, preserving code run
 properties, semantic markers and first/line/last/single logical style roles.
-Empty blocks still publish a terminal newline. UTF-16 body lengths count each
-literal line plus its newline. Shared paragraph construction owns only the
+Source blocks use `gdocs-source-block-*` roles and `gdocs-code`; examples use
+independent `gdocs-example-block-*` roles and `gdocs-example-code`.
+Empty blocks still publish a terminal newline. Each block also owns an unmarked
+outside paragraph styled by `gdocs-source-block-separator`; explicit empty
+background configuration clears inherited shading, and zero-width borders keep
+adjacent panels separate. This paragraph is not an authored literal line.
+UTF-16 publication lengths include this guard; native ranges remain authoritative
+for older blocks without it, including when regrouping following lists.
+Shared paragraph construction owns only the
 neutral line-position role constructor and opaque metadata assembly; code,
 quote and callout features choose their own roles and markers.
 

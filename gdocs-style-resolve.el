@@ -56,6 +56,8 @@ configuration translation, not document heading recognition."
     (when (plist-member style-plist :bold) (push `(bold . ,(plist-get style-plist :bold)) style))
     (when (plist-member style-plist :italic) (push `(italic . ,(plist-get style-plist :italic)) style))
     (when (plist-member style-plist :underline) (push `(underline . ,(plist-get style-plist :underline)) style))
+    (when (plist-member style-plist :small-caps)
+      (push `(smallCaps . ,(if (plist-get style-plist :small-caps) t :json-false)) style))
     (when-let ((fg (plist-get style-plist :foreground-color)))
       (push `(foregroundColor . ,(gdocs-convert--hex-to-color fg)) style))
     (when-let ((bg (plist-get style-plist :background-color)))
@@ -138,13 +140,18 @@ configuration translation, not document heading recognition."
   "Return logical STYLE-NAME paragraph request between START and END."
   (when-let* ((definition (gdocs-convert--style-definition style-name)))
     (let* ((parent (plist-get definition :parent))
-           (paragraph-style (gdocs-convert--logical-paragraph-style-to-docs (plist-get definition :paragraph)))
+           (paragraph (plist-get definition :paragraph))
+           (clear-background (and (plist-member paragraph :background-color)
+                                  (not (plist-get paragraph :background-color))))
+           (paragraph-style (gdocs-convert--logical-paragraph-style-to-docs paragraph))
            (named-style (and parent (gdocs-convert--ir-style-to-docs parent)))
-           (style (append (when named-style `((namedStyleType . ,named-style))) paragraph-style)))
+           (style (append (when named-style `((namedStyleType . ,named-style))) paragraph-style))
+           (fields (concat (gdocs-convert--style-fields-mask-from-alist style)
+                           (when clear-background ",shading.backgroundColor"))))
       (when style
         `((updateParagraphStyle . ((paragraphStyle . ,style)
                                    (range . ((startIndex . ,start) (endIndex . ,(1- end))))
-                                   (fields . ,(gdocs-convert--style-fields-mask-from-alist style)))))))))
+                                   (fields . ,fields))))))))
 
 (defun gdocs-convert--logical-style-text-fields (style-name)
   "Return native text fields for logical STYLE-NAME."

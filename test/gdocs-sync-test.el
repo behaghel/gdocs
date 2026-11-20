@@ -1760,5 +1760,56 @@ serialization is handled separately by `gdocs-sync--serialize-push'."
         (should (= get-doc-count 1))
         (should (eq gdocs-sync--status 'synced))))))
 
+(ert-deftest gdocs-sync-test-grouped-prose-concurrent-edits-stop-before-auto-merge ()
+  "Center and verse documents protect local edits just like other rich blocks."
+  (dolist (kind '("CENTER" "VERSE"))
+    (let ((local (format "#+BEGIN_%s\nLocal 😀\n#+END_%s\n" kind kind))
+          (shadow (format "#+BEGIN_%s\nOriginal\n#+END_%s\n" kind kind))
+          (remote (format "#+BEGIN_%s\nRemote 🧭\n#+END_%s\n" kind kind)))
+      (gdocs-sync-test-with-org-buffer local
+                                       (setq gdocs-sync--revision-id "rev-1"
+                                             gdocs-sync--shadow-ir (gdocs-convert-org-string-to-ir shadow))
+                                       (cl-letf (((symbol-function 'gdocs-convert-docs-json-to-ir)
+                                                  (lambda (_json) (gdocs-convert-org-string-to-ir remote)))
+                                                 ((symbol-function 'gdocs-sync--three-way-merge)
+                                                  (lambda (_ir) (error "Unsafe automatic merge entered"))))
+                                                (should-error (gdocs-sync--apply-pull '((body . ((content . [])))) "rev-2") :type 'user-error)
+                                                (should (equal local (buffer-string)))
+                                                (should (equal gdocs-sync--revision-id "rev-1"))
+                                                (should (eq gdocs-sync--status 'conflict)))))))
+
+(ert-deftest gdocs-sync-test-grouped-prose-shape-loss-stops-before-buffer-replacement ()
+  "Pull cannot silently flatten centered paragraphs or remove literal verse lines."
+  (dolist (pair '(("#+BEGIN_CENTER\nOne\n\nTwo\n#+END_CENTER\n" . "#+BEGIN_CENTER\nOne Two\n#+END_CENTER\n")
+                  ("#+BEGIN_VERSE\n  One\n\nTwo\n#+END_VERSE\n" . "#+BEGIN_VERSE\n  One\nTwo\n#+END_VERSE\n")))
+    (gdocs-sync-test-with-org-buffer (car pair)
+                                     (cl-letf (((symbol-function 'gdocs--ensure-org-tag) #'ignore))
+                                              (should-error (gdocs-sync--replace-buffer-content (cdr pair) "rev-2") :type 'user-error)
+                                              (should (equal (car pair) (buffer-string)))))))
+
+(ert-deftest gdocs-sync-test-grouped-prose-ordinary-remote-text-edits-remain-pullable ()
+  "The safety guard permits centered prose and verse word edits with stable geometry."
+  (dolist (pair '(("#+BEGIN_CENTER\nOne\n\nTwo\n#+END_CENTER\n" . "#+BEGIN_CENTER\nChanged 😀\n\nTwo\n#+END_CENTER\n")
+                  ("#+BEGIN_VERSE\n  One  \n\nTwo\n#+END_VERSE\n" . "#+BEGIN_VERSE\n  Changed 🧭  \n\nTwo\n#+END_VERSE\n")))
+    (gdocs-sync-test-with-org-buffer (car pair)
+                                     (let ((gdocs-pull-backup-directory temporary-file-directory))
+                                       (cl-letf (((symbol-function 'gdocs--ensure-org-tag) #'ignore))
+                                                (gdocs-sync--replace-buffer-content (cdr pair) "rev-2")
+                                                (should (equal (cdr pair) (gdocs-sync--metadata-normalized-buffer-string)))
+                                                (should (equal gdocs-sync--revision-id "rev-2")))))))
+
+(ert-deftest gdocs-sync-test-unknown-structured-ir-cannot-enter-text-merge ()
+  "A new structured IR kind defaults to semantic safety without a central allowlist."
+  (should (gdocs-sync--semantic-ir-p '((:type future-structured-feature)))))
+
+(ert-deftest gdocs-sync-test-native-atomic-runs-are-not-plain-text-merge-input ()
+  "A native one-unit date needs semantic conflict review, not plain-text merging."
+  (gdocs-sync-test-with-org-buffer "On [2026-11-19 Thu], local edit.\n"
+                                   (setq gdocs-sync--shadow-ir (gdocs-convert-org-string-to-ir "On [2026-11-19 Thu], original.\n"))
+                                   (let ((before (buffer-string)))
+                                     (should-error (gdocs-sync--abort-unsafe-semantic-merge-if-needed
+                                                    (gdocs-convert-org-string-to-ir "On [2026-11-19 Thu], remote edit.\n")) :type 'user-error)
+                                     (should (equal before (buffer-string))))))
+
 (provide 'gdocs-sync-test)
 ;;; gdocs-sync-test.el ends here

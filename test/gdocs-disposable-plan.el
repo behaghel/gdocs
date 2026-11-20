@@ -122,6 +122,14 @@
     (setf (alist-get 'documentId json) "disposable-fixture"
           (alist-get 'title json) "Disposable native list fixture")
     (setq json (assq-delete-all 'revisionId json))
+    (cl-labels ((scrub (value)
+                  (cond ((vectorp value) (vconcat (mapcar #'scrub value)))
+                        ((consp value)
+                         (if (eq (car value) 'contentUri)
+                             (cons 'contentUri "https://example.org/fixture-image.png")
+                           (cons (scrub (car value)) (scrub (cdr value)))))
+                        (t value))))
+               (setq json (scrub json)))
     (gdocs-disposable-plan--write-json destination json)
     (list :fixture-written t :revision-removed t)))
 

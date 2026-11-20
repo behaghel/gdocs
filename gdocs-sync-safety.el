@@ -14,15 +14,18 @@
 (require 'seq)
 (require 'subr-x)
 
+(declare-function gdocs-convert--inline-run-policy "gdocs-convert" (run))
+
 (defun gdocs-sync--semantic-ir-element-p (element)
   "Return non-nil when ELEMENT is unsafe for automatic text merge."
   (let ((type (plist-get element :type)))
-    (or (memq type '(table horizontal-rule page-break image source-block
-                           example-block quote-block callout-block footnote))
+    (or (not (eq type 'paragraph))
         (and (eq type 'paragraph)
              (or (not (eq (or (plist-get element :style) 'normal) 'normal))
                  (plist-get element :list)
-                 (seq-some (lambda (run) (plist-get run :status))
+                 (seq-some (lambda (run)
+                             (or (plist-get run :status)
+                                 (plist-get (gdocs-convert--inline-run-policy run) :atomic)))
                            (plist-get element :contents)))))))
 
 (defun gdocs-sync--semantic-ir-p (ir)
@@ -53,9 +56,9 @@
        (org-element-map tree 'item (lambda (item) (org-element-property :checkbox item)))
        :blocks
        (let (counts)
-         (dolist (type '(quote-block src-block example-block special-block))
+         (dolist (type '(quote-block src-block example-block special-block center-block verse-block))
            (push (cons type 0) counts))
-         (org-element-map tree '(quote-block src-block example-block special-block)
+         (org-element-map tree '(quote-block src-block example-block special-block center-block verse-block)
                           (lambda (block)
                             (let ((type (org-element-type block)))
                               (when (or (not (eq type 'special-block))
@@ -63,7 +66,7 @@
                                 (cl-incf (alist-get type counts))))))
          counts)
        :block-structure
-       (org-element-map tree '(quote-block src-block example-block special-block)
+       (org-element-map tree '(quote-block src-block example-block special-block center-block verse-block)
                         #'gdocs-sync--org-block-structure-entry)))))
 
 (defun gdocs-sync--list-structure-entry (item)
@@ -95,6 +98,21 @@
        (format "quote:%d" (length (seq-filter
                                    (lambda (child) (eq (org-element-type child) 'paragraph))
                                    (org-element-contents block)))))
+      ('center-block
+       (format "center:%d" (length (seq-filter
+                                    (lambda (child) (eq (org-element-type child) 'paragraph))
+                                    (org-element-contents block)))))
+      ('verse-block
+       (let* ((begin (org-element-property :contents-begin block))
+              (end (org-element-property :contents-end block))
+              (value (if (and begin end) (buffer-substring-no-properties begin end) ""))
+              (lines (unless (string-empty-p value)
+                       (split-string (string-remove-suffix "\n" value) "\n" nil))))
+         (format "verse:%S"
+                 (mapcar (lambda (line)
+                           (list (progn (string-match "\\`[[:blank:]]*" line) (match-string 0 line))
+                                 (progn (string-match "[[:blank:]]*\\'" line) (match-string 0 line))
+                                 (string-blank-p line))) lines))))
       ('src-block
        (format "src:%s:%d" (or (org-element-property :language block) "")
                (gdocs-sync--block-line-count (org-element-property :value block))))

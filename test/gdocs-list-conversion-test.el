@@ -170,5 +170,52 @@
       (should (equal (gdocs-convert-ir-to-org returned) source))
       (should-not (gdocs-diff-generate returned new)))))
 
+(ert-deftest gdocs-lists-definition-term-bold-is-presentation-not-source-emphasis ()
+  "Plain and authored-bold terms stay distinct through create, edits and repeats."
+  (let* ((gdocs-style-definitions (cons '(gdocs-definition-term :text (:bold t)) gdocs-style-definitions))
+         (source "- Term :: Definition /body/ with [[https://example.org][link]].\n- *Bépo 🧭* :: Authored emphasis.\n- /Italic/ ~code~ [[https://example.org][linked 🧭]] :: Rich term.\n")
+         (local (gdocs-convert-org-string-to-ir source))
+         (sent (gdocs-convert-ir-to-docs-requests local)))
+    (should (seq-some (lambda (request)
+                        (let ((style (alist-get 'updateTextStyle request)))
+                          (and (eq (alist-get 'bold (alist-get 'textStyle style)) t)
+                               (= (or (alist-get 'startIndex (alist-get 'range style)) -1) 1)
+                               (= (or (alist-get 'endIndex (alist-get 'range style)) -1) 5)))) sent))
+    (cl-labels ((fetched (requests)
+                  (let ((json (gdocs-fidelity-test--returned-json requests)))
+                    ;; This interpreter leaves bullet application to real captures.
+                    (seq-doseq (element (alist-get 'content (alist-get 'body json)))
+                      (when-let* ((paragraph (alist-get 'paragraph element)))
+                        (setf (alist-get 'paragraph element)
+                              (cons '(bullet . ((listId . "fixture-list"))) paragraph))))
+                    (gdocs-convert-docs-json-to-ir json))))
+               (let* ((native (fetched sent))
+                      (new (gdocs-convert-org-string-to-ir (string-replace "Definition" "Edited definition" source)))
+                      (edits (gdocs-diff-generate native new)))
+                 (should (equal (gdocs-convert-ir-to-org native) source))
+                 (should-not (gdocs-diff-generate native local))
+                 (should edits)
+                 (let ((returned (fetched (append sent edits))))
+                   (should (equal (gdocs-convert-ir-to-org returned) (string-replace "Definition" "Edited definition" source)))
+                   (should-not (gdocs-diff-generate returned new)))
+                 (let* ((bold-source (string-replace "- Term ::" "- *Term* ::" source))
+                        (bold (gdocs-convert-org-string-to-ir bold-source))
+                        (changes (gdocs-diff-generate native bold))
+                        (returned (fetched (append sent changes))))
+                   (should changes)
+                   (should (equal (gdocs-convert-ir-to-org returned) bold-source))
+                   (should-not (gdocs-diff-generate returned bold)))))))
+
+(ert-deftest gdocs-lists-term-provenance-refuses-conflicts-and-overlap ()
+  "Unsupported term metadata cannot silently remove authored emphasis."
+  (dolist (markers '(((:type definition-term :start 0 :end 4 :data "future"))
+                     ((:type definition-term :start 0 :end 4 :data "v1:0:1")
+                      (:type definition-term :start 0 :end 4 :data "v1:1:1"))))
+    (should-error (gdocs-convert-list-term-native-parts
+                   '((startIndex . 0)) markers
+                   (list (cons nil (gdocs-convert--make-run "Term" '(:bold t))))) :type 'user-error))
+  (dolist (source '("- [[status:green][Ready]] :: Body\n" "- src_text{x} :: Body\n"))
+    (should-error (gdocs-convert-org-string-to-ir source) :type 'user-error)))
+
 (provide 'gdocs-list-conversion-test)
 ;;; gdocs-list-conversion-test.el ends here

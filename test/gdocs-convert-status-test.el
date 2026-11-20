@@ -199,5 +199,41 @@ supplies a heading level whose uniform presentation is bold."
       (setq org-link-parameters saved)
       (org-link-make-regexps))))
 
+(ert-deftest gdocs-status-uniform-small-caps-preserves-source-case-and-native-edits ()
+  "Presentation removes tall capitals without losing source label spelling."
+  (let* ((case-fold-search nil)
+         (gdocs-style-definitions '((gdocs-status-green :text (:small-caps t))))
+         (source "State: [[status:green][Ready now Bépo 🧭]].\n")
+         (local (gdocs-convert-org-string-to-ir source))
+         (requests (gdocs-convert-ir-to-docs-requests local))
+         (text (mapconcat (lambda (request) (or (alist-get 'text (alist-get 'insertText request)) "")) requests ""))
+         (native (gdocs-convert-docs-json-to-ir
+                  (gdocs-convert-test--status-response requests '("State: rea" "dy now bépo 🧭.\n")))))
+    (should (equal text "State: ready now bépo 🧭.\n"))
+    (should (equal (gdocs-convert-ir-to-org native) source))
+    (should-not (gdocs-diff-generate native local))
+    (require 'gdocs-fidelity-corrections-test)
+    (let* ((next-source (string-replace "Ready now" "Next step" source))
+           (next (gdocs-convert-org-string-to-ir next-source))
+           (base (gdocs-convert-docs-json-to-ir (gdocs-fidelity-test--returned-json requests)))
+           (changes (gdocs-diff-generate base next))
+           (inserted (mapconcat (lambda (request) (or (alist-get 'text (alist-get 'insertText request)) "")) changes ""))
+           (returned (gdocs-convert-docs-json-to-ir (gdocs-fidelity-test--returned-json (append requests changes)))))
+      (should (string-match-p "next step bépo" inserted))
+      (should-not (string-match-p "Next step" inserted))
+      (should (equal (gdocs-convert-ir-to-org returned) next-source))
+      (should-not (gdocs-diff-generate returned next)))
+    (let ((edited (gdocs-convert-docs-json-to-ir
+                   (gdocs-convert-test--status-response requests '("State: next step bépo 🧭.\n")))))
+      (should (equal (gdocs-convert-ir-to-org edited) "State: [[status:green][next step bépo 🧭]].\n")))))
+
+(ert-deftest gdocs-status-uniform-case-provenance-is-validated-before-publication ()
+  "Oversized or malformed source spelling cannot make a lossy status chip."
+  (let ((gdocs-style-definitions '((gdocs-status-green :text (:small-caps t)))))
+    (should-error (gdocs-convert-org-string-to-ir
+                   (format "[[status:green][%s]]" (make-string 80 ?🧭))) :type 'user-error))
+  (dolist (data '("status:green:1:v2:%ZZ" "status:green:1:v2:" "status:green:1:v3:Ready"))
+    (should-error (gdocs-convert--status-marker-data (list :data data)) :type 'user-error)))
+
 (provide 'gdocs-convert-status-test)
 ;;; gdocs-convert-status-test.el ends here

@@ -1077,7 +1077,7 @@
              requests))))
 
 (ert-deftest gdocs-convert-test-docs-json-date-element-to-org-timestamp ()
-  "Google Docs date elements pull back as Org timestamps."
+  "Unmarked Google Docs date elements pull back as inactive Org timestamps."
   (let* ((json '((body . ((content . [((startIndex . 1)
                                        (endIndex . 15)
                                        (paragraph
@@ -1099,7 +1099,7 @@
                                                             (textStyle . ()))))]))))])))))
          (ir (gdocs-convert-docs-json-to-ir json)))
     (should (equal (gdocs-convert-ir-to-org ir)
-                   "Due <2026-07-12 Sun> done.\n"))))
+                   "Due [2026-07-12 Sun] done.\n"))))
 
 (ert-deftest gdocs-convert-test-docs-json-inactive-date-element-to-org-timestamp ()
   "Marked inactive Google Docs date elements pull back as inactive timestamps."
@@ -2829,6 +2829,63 @@ Regression test: the Google API rejects ranges where startIndex == endIndex."
          (ir (gdocs-convert--docs-footnotes-to-ir
               `((fn-one . ((content . ,content)))) '((:id "fn-one" :label "one")))))
     (should (= (plist-get (car ir) :segment-start) 1))))
+
+(ert-deftest gdocs-convert-test-unmarked-remote-date-is-agenda-safe ()
+  "A native date without authored provenance imports as an inactive timestamp."
+  (let ((run (gdocs-convert--docs-date-element-to-run
+              '((dateElementProperties . ((timestamp . "2026-11-19T00:00:00Z")))))))
+    (should-not (plist-get (plist-get run :date-element) :active))
+    (should (string-prefix-p "[2026-11-19" (plist-get run :text)))))
+
+(ert-deftest gdocs-convert-test-active-source-date-emits-explicit-kind-provenance ()
+  "Agenda-active intent is restored only from explicit source-owned provenance."
+  (let* ((ir (gdocs-convert-org-string-to-ir "On <2026-11-19 Thu>.\n"))
+         (requests (gdocs-convert-ir-to-docs-requests ir)))
+    (should (seq-some (lambda (request)
+                        (string-suffix-p ":active" (or (alist-get 'name (alist-get 'createNamedRange request)) "")))
+                      requests))))
+
+(ert-deftest gdocs-convert-test-rich-timestamps-do-not-lose-time-range-or-repeater ()
+  "Richer timestamp values use lossless literal text rather than lossy day chips."
+  (dolist (source '("On <2026-11-19 Thu 10:30>.\n"
+                    "On <2026-11-19 Thu +1w>.\n"
+                    "On <2026-11-19 Thu>--<2026-11-20 Fri>.\n"))
+    (let* ((ir (gdocs-convert-org-string-to-ir source))
+           (requests (gdocs-convert-ir-to-docs-requests ir))
+           (native (gdocs-convert--docs-paragraph-to-ir
+                    (list (cons 'elements (vector (list (cons 'textRun (list (cons 'content source))))))) nil nil)))
+      (should-not (seq-some (lambda (request) (alist-get 'insertDate request)) requests))
+      (should (equal (gdocs-convert-ir-to-org (list native)) source))
+      (should-not (gdocs-diff-generate (list native) ir)))))
+
+(ert-deftest gdocs-convert-test-unsupported-native-date-values-do-not-become-guessed-days ()
+  "Native time-bearing or malformed values block import rather than lose meaning."
+  (dolist (timestamp '("2026-11-19T10:30:00Z" "not-a-date"))
+    (should-error (gdocs-convert--docs-date-element-to-run
+                   (list (cons 'dateElementProperties (list (cons 'timestamp timestamp)))))
+                  :type 'user-error)))
+
+(ert-deftest gdocs-convert-test-date-provenance-does-not-invalidate-an-unchanged-neighbour ()
+  "Editing adjacent prose must keep native date chips and their paragraph identity."
+  (require 'gdocs-diff)
+  (let* ((source "Old paragraph.\n\nOn <2026-11-19 Thu> and [2026-11-20 Fri].\n")
+         (local (gdocs-convert-org-string-to-ir source))
+         (paragraph '((elements . [((startIndex . 16) (endIndex . 19) (textRun . ((content . "On "))))
+                                   ((startIndex . 19) (endIndex . 20)
+                                    (dateElement . ((dateElementProperties . ((timestamp . "2026-11-19T00:00:00Z"))))))
+                                   ((startIndex . 20) (endIndex . 25) (textRun . ((content . " and "))))
+                                   ((startIndex . 25) (endIndex . 26)
+                                    (dateElement . ((dateElementProperties . ((timestamp . "2026-11-20T00:00:00Z"))))))
+                                   ((startIndex . 26) (endIndex . 28) (textRun . ((content . ".\n"))))])))
+         (markers '((:type timestamp-kind :start 19 :end 20 :data "active")
+                    (:type timestamp-kind :start 25 :end 26 :data "inactive")))
+         (native (append (gdocs-convert-org-string-to-ir "Old paragraph.\n")
+                         (list (gdocs-convert--docs-paragraph-to-ir paragraph nil markers 16 28))))
+         (new (gdocs-convert-org-string-to-ir "Updated paragraph.\n\nOn <2026-11-19 Thu> and [2026-11-20 Fri].\n")))
+    (should (equal (gdocs-diff--element-keys native) (gdocs-diff--element-keys local)))
+    (should (seq-some (lambda (op) (and (eq (plist-get op :op) 'keep) (= (plist-get op :old-index) 1)))
+                      (gdocs-diff-compute-operations native new)))
+    (should-not (seq-some (lambda (request) (alist-get 'insertDate request)) (gdocs-diff-generate native new)))))
 
 (provide 'gdocs-convert-test)
 ;;; gdocs-convert-test.el ends here

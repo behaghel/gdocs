@@ -19,6 +19,7 @@
 (declare-function gdocs-convert--extract-marker-field "gdocs-convert" (marker type-sym))
 (declare-function gdocs-convert--plain-text "gdocs-convert" (element))
 (declare-function gdocs-convert--paragraph-to-requests "gdocs-convert" (element index))
+(declare-function gdocs-convert--make-text-style-reset-request "gdocs-convert" (start end))
 
 (defun gdocs-convert-code-block-element-p (element)
   "Return non-nil for semantic source or example block ELEMENT."
@@ -91,6 +92,11 @@ Source grouping requires matching language and native block identity."
                               (equal source-id (gdocs-convert-code-blocks--source-marker-id (car remaining)))))
                 (push (gdocs-convert--plain-text (car remaining)) lines)
                 (setq end (plist-get (car remaining) :doc-end) remaining (cdr remaining)))
+              (when (and remaining (not (plist-get (car remaining) :gdocs-marker))
+                         (not (plist-get (car remaining) :list))
+                         (gdocs-convert--empty-paragraph-p (car remaining)))
+                (let ((separator (gdocs-convert--consume-generated-separator remaining end)))
+                  (setq remaining (plist-get separator :remaining) end (plist-get separator :end))))
               (push (append (if (eq type 'source-block)
                                 (list :type type :language key :lines (nreverse lines) :id (gdocs-convert--next-id))
                               (list :type type :lines (nreverse lines) :id (gdocs-convert--next-id)))
@@ -162,8 +168,8 @@ The descriptor supplies :next-index, :org-text, :element and :blank-before."
 (defun gdocs-convert--example-block-line-element (element line line-index line-count)
   "Return paragraph IR for example-block ELEMENT LINE at LINE-INDEX."
   (gdocs-convert--typographic-block-paragraph
-   element (list (gdocs-convert--make-run line (gdocs-convert--code-props)))
-   'gdocs-source-block (list :type 'example-block :data (plist-get element :id)) line-index line-count))
+   element (list (gdocs-convert--make-run line '(:code t :style-names (gdocs-example-code))))
+   'gdocs-example-block (list :type 'example-block :data (plist-get element :id)) line-index line-count))
 
 (defun gdocs-convert-code-blocks--requests (element index line-function)
   "Plan ELEMENT at INDEX with feature-owned LINE-FUNCTION."
@@ -174,7 +180,13 @@ The descriptor supplies :next-index, :org-text, :element and :blank-before."
              (result (gdocs-convert--paragraph-to-requests paragraph current)))
         (setq requests (nconc requests (plist-get result :requests)) current (plist-get result :index))
         (cl-incf line-index)))
-    (list :requests requests :index current)))
+    (let* ((separator (gdocs-convert-make-paragraph
+                       (list (gdocs-convert--make-plain-run ""))
+                       :style-name 'gdocs-source-block-separator :id (plist-get element :id)))
+           (result (gdocs-convert--paragraph-to-requests separator current)))
+      (list :requests (append requests (plist-get result :requests)
+                              (list (gdocs-convert--make-text-style-reset-request current (1+ current))))
+            :index (plist-get result :index)))))
 
 (defun gdocs-convert--source-block-to-requests (element index)
   "Create paragraph requests for source-block ELEMENT at INDEX."

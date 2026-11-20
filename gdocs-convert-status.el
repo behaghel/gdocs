@@ -14,6 +14,8 @@
 (require 'seq)
 (require 's)
 (require 'subr-x)
+(require 'url-util)
+(require 'gdocs-convert-paragraphs)
 (require 'gdocs-styles)
 (require 'gdocs-style-resolve)
 (require 'gdocs-convert-text)
@@ -40,15 +42,46 @@
      (if definition (plist-get (cdr definition) :text)
        (cdr (assq (intern key) gdocs-status-default-styles))))))
 
-(defun gdocs-convert--status-marker-request (status start end &optional segment-id)
-  "Return the semantic STATUS marker covering START to END.
+(defun gdocs-convert-status--uniform-label (status label)
+  "Return STATUS LABEL's small-cap input without changing UTF-16 addressing."
+  (let ((value (if (eq (alist-get 'smallCaps (gdocs-convert--status-docs-style status)) t)
+                   (downcase label) label)))
+    (unless (= (gdocs-convert--string-to-utf16-length label)
+               (gdocs-convert--string-to-utf16-length value))
+      (user-error "Status case mapping changes its native width; use a simpler label"))
+    value))
+
+(defun gdocs-convert-status--marker-name (status start &optional label)
+  "Return STATUS provenance at START, retaining LABEL for uniform small caps."
+  (let ((name (format "gdocs-org-marker:status:run-%d:%s:%s:%d%s"
+                      start (plist-get status :link-type) (plist-get status :color)
+                      (if (plist-get status :described) 1 0)
+                      (if (and label (eq (alist-get 'smallCaps (gdocs-convert--status-docs-style status)) t))
+                          (concat ":v2:" (url-hexify-string label)) ""))))
+    (when (> (length name) 256)
+      (user-error "Status label case provenance exceeds the native named-range limit; shorten the label or disable small caps"))
+    name))
+
+(defun gdocs-convert--status-marker-request (status start end &optional segment-id label)
+  "Return semantic STATUS at START..END, preserving optional source LABEL.
 SEGMENT-ID must be nil; status labels inside footnotes are unsupported."
   (when segment-id (user-error "Status labels inside document segments are unsupported"))
+  (setq label (or label (plist-get status :source-label)))
   `((createNamedRange
-     . ((name . ,(format "gdocs-org-marker:status:run-%d:%s:%s:%d"
-                         start (plist-get status :link-type) (plist-get status :color)
-                         (if (plist-get status :described) 1 0)))
+     . ((name . ,(gdocs-convert-status--marker-name status start label))
         (range . ,(gdocs-convert--text-range start end))))))
+
+(defun gdocs-convert-status-inline-insert-requests (runs index prefix)
+  "Publish RUNS at INDEX with PREFIX, rendering uniform small-cap status text."
+  (when (seq-some (lambda (run) (and (plist-get run :status)
+                                     (eq (alist-get 'smallCaps (gdocs-convert--status-docs-style (plist-get run :status))) t))) runs)
+    (when (seq-some (lambda (run) (or (plist-get run :date-element) (plist-get run :footnote-label))) runs)
+      (user-error "Uniform status labels cannot share a paragraph with native dates or notes"))
+    (gdocs-convert-paragraph-text-requests
+     (mapconcat (lambda (run)
+                  (if-let* ((status (plist-get run :status)))
+                      (gdocs-convert-status--uniform-label status (plist-get run :text))
+                    (plist-get run :text))) runs "") index prefix)))
 
 (defun gdocs-convert--status-color-key (color)
   "Return the supported logical status key for COLOR, or signal an error."
@@ -85,8 +118,11 @@ INHERITED-PROPS must not add invisible emphasis to the generated pill style."
           (user-error "Status labels mixed with native dates or footnotes in one paragraph are unsupported"))
         (when (or (string-blank-p label) (string-match-p "[\n\r]" label))
           (user-error "A status label must be nonempty and stay in one paragraph"))
-        (plist-put (gdocs-convert--make-plain-run label) :status
-                   (list :link-type protocol :color color :described (not (null children))))))))
+        (let ((status (list :link-type protocol :color color :described (not (null children)))))
+          (gdocs-convert-status--uniform-label status label)
+          ;; Validate even a maximal native index before document creation.
+          (gdocs-convert-status--marker-name status 2147483647 label)
+          (plist-put (gdocs-convert--make-plain-run label) :status status))))))
 
 (defun gdocs-convert--status-run-to-org (run)
   "Render semantic status RUN using its original link spelling and label."
@@ -105,12 +141,26 @@ INHERITED-PROPS must not add invisible emphasis to the generated pill style."
   "Decode and validate semantic status MARKER data."
   (let* ((parts (s-split ":" (or (plist-get marker :data) "")))
          (protocol (nth 0 parts)) (color (nth 1 parts)) (described (nth 2 parts)))
-    (unless (and (= (length parts) 3)
+    (unless (and (or (= (length parts) 3)
+                     (and (= (length parts) 5) (equal (nth 3 parts) "v2")
+                          (gdocs-convert-status--source-label marker)))
                  (member (downcase protocol) '("status" "confluence-status"))
                  (member described '("0" "1")))
       (user-error "Invalid status marker metadata"))
     (gdocs-convert--status-color-key color)
     (list :link-type protocol :color color :described (equal described "1"))))
+
+(defun gdocs-convert-status--source-label (marker)
+  "Read versioned source spelling from MARKER, or nil for legacy provenance."
+  (let ((parts (s-split ":" (or (plist-get marker :data) ""))))
+    (when (equal (nth 3 parts) "v2")
+      (let* ((encoded (or (nth 4 parts) ""))
+             (label (decode-coding-string (url-unhex-string encoded) 'utf-8)))
+        (unless (and (= (length parts) 5) (not (string-blank-p label))
+                     (not (string-match-p "[\n\r]\\|\\]\\]" label))
+                     (equal (downcase encoded) (downcase (url-hexify-string label))))
+          (user-error "Invalid status source-label provenance"))
+        label))))
 
 (defun gdocs-convert--docs-status-text-parts (element markers)
   "Split text ELEMENT at semantic status MARKERS into (MARKER . RUN) pairs."
@@ -148,7 +198,9 @@ INHERITED-PROPS must not add invisible emphasis to the generated pill style."
               (when (string-match-p "[\n\r]" value)
                 (user-error "A status marker cannot cross paragraph boundaries"))
               (plist-put part :status (gdocs-convert--status-marker-data marker))
-              (plist-put part :status-marker-ids (list (plist-get marker :range-id))))
+              (plist-put part :status-marker-ids (list (plist-get marker :range-id)))
+              (when-let* ((label (gdocs-convert-status--source-label marker)))
+                (plist-put part :status-source-label label)))
             (push (cons marker part) parts))
           (setq cuts (cdr cuts)))
         (nreverse parts)))))
@@ -183,6 +235,10 @@ INHERITED-PROPS must not add invisible emphasis to the generated pill style."
   "Update authored-label spelling in reconstructed status RUNS."
   (dolist (run runs)
     (when-let* ((status (plist-get run :status)))
+      (plist-put run :status-native-text (plist-get run :text))
+      (when-let* ((label (plist-get run :status-source-label)))
+        (when (equal (plist-get run :text) (downcase label))
+          (plist-put run :text label)))
       (when (and (not (plist-get status :described))
                  (not (equal (plist-get run :text) (plist-get status :color))))
         (plist-put run :status (plist-put (copy-sequence status) :described t)))))
@@ -199,7 +255,7 @@ INHERITED-PROPS must not add invisible emphasis to the generated pill style."
 (defun gdocs-convert-status-run-marker-request (run start end segment-id omit)
   "Return RUN's status marker at START..END in SEGMENT-ID unless OMIT is non-nil."
   (when (and (plist-get run :status) (not omit))
-    (gdocs-convert--status-marker-request (plist-get run :status) start end segment-id)))
+    (gdocs-convert--status-marker-request (plist-get run :status) start end segment-id (plist-get run :text))))
 
 (provide 'gdocs-convert-status)
 ;;; gdocs-convert-status.el ends here

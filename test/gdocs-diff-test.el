@@ -99,10 +99,10 @@ ROWS is a list of lists of lists of run plists."
   (dolist (case '(("Old 😀\n\nNew Bépo.\n" . "Old 😀\nNew Bépo.\n")
                   ("Old 😀\n\nNext.\n\nLast 😀.\n" . "Old 😀\nNext.\nLast 😀.\n")
                   ("Old 😀\n\n- Item\n- Deux\n" . "Old 😀\nItem\nDeux\n")
-                  ("Old 😀\n\n#+BEGIN_EXAMPLE\nliteral.\n#+END_EXAMPLE\n" . "Old 😀\nliteral.\n")))
+                  ("Old 😀\n\n#+BEGIN_EXAMPLE\nliteral.\n#+END_EXAMPLE\n" . "Old 😀\nliteral.\n\n")))
     (let* ((json '((body . ((content . [((startIndex . 1) (endIndex . 8)
-                                        (paragraph . ((elements . [((startIndex . 1) (endIndex . 8)
-                                                                    (textRun . ((content . "Old 😀\n"))))]))))])))))
+                                         (paragraph . ((elements . [((startIndex . 1) (endIndex . 8)
+                                                                     (textRun . ((content . "Old 😀\n"))))]))))])))))
            (old (gdocs-convert-docs-json-to-ir json))
            (new (gdocs-convert-org-string-to-ir (car case)))
            (requests (gdocs-diff-generate old new)))
@@ -163,10 +163,10 @@ ROWS is a list of lists of lists of run plists."
                       (list :type 'example-block :lines '("two"))))))
 
 (ert-deftest gdocs-diff-test-example-block-utf16-length ()
-  "Example block length includes one paragraph newline per line."
+  "Example geometry includes literal newlines and its outside guard."
   (should (= (gdocs-diff--element-utf16-length
               (list :type 'example-block :lines '("one" "two")))
-             8)))
+             9)))
 
 (ert-deftest gdocs-diff-test-source-block-key-includes-style-revision ()
   "Source block style revisions can force block replacement."

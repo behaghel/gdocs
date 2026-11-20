@@ -9,9 +9,12 @@
 (require 'cl-lib)
 (require 'gdocs-convert-lists)
 (defvar gdocs-diff-semantic-plan-functions)
+(defvar gdocs-diff-semantic-run-functions)
+(declare-function gdocs-convert--run-model-length "gdocs-convert" (run))
 (declare-function gdocs-convert--make-marker-requests "gdocs-convert" (element start end))
 (declare-function gdocs-diff--marker-key "gdocs-diff" (element))
 (declare-function gdocs-diff--element-utf16-length "gdocs-diff" (element))
+(declare-function gdocs-diff--compute-element-indices "gdocs-diff" (ir &optional start-index))
 (declare-function gdocs-diff-compute-operations "gdocs-diff" (old-ir new-ir))
 (declare-function gdocs-convert--logical-style-paragraph-request "gdocs-style-resolve" (style-name start end))
 
@@ -101,11 +104,19 @@
     (list (if (plist-get element :list) 'item 'continuation)
           (plist-get info :type) (or (plist-get info :level) 0))))
 
-(defun gdocs-diff-lists--final-ranges (new start)
-  "Compute NEW's final physical ranges from START, not old document coordinates."
-  (let ((index 0) ranges)
+(defun gdocs-diff-lists--final-ranges (new start &optional old operations)
+  "Compute NEW's final physical ranges from START.
+Retain actual widths of kept OLD elements in OPERATIONS; new or replaced
+content uses its publication geometry, not obsolete native coordinates."
+  (let ((index 0) (kept-widths (make-hash-table :test #'eql)) ranges)
+    (when old
+      (let ((old-ranges (gdocs-diff--compute-element-indices old start)))
+        (dolist (operation operations)
+          (when (eq (plist-get operation :op) 'keep)
+            (let ((range (cdr (assq (plist-get operation :old-index) old-ranges))))
+              (puthash (plist-get operation :new-index) (- (cdr range) (car range)) kept-widths))))))
     (dolist (element new (nreverse ranges))
-      (let ((end (+ start (gdocs-diff--element-utf16-length element))))
+      (let ((end (+ start (or (gethash index kept-widths) (gdocs-diff--element-utf16-length element)))))
         (push (list :element element :index index :start start :end end) ranges)
         (setq start end index (1+ index))))))
 
@@ -162,7 +173,7 @@
       (when (and (not (eq (plist-get expected :op) 'keep))
                  (not (member expected operations)))
         (user-error "Native list regrouping needs a complete body plan; push nesting changes separately from declined or comment-protected edits")))
-    (let* ((ranges (gdocs-diff-lists--final-ranges new start))
+    (let* ((ranges (gdocs-diff-lists--final-ranges new start old operations))
            (groups (gdocs-convert--find-list-groups ranges)) requests)
       (gdocs-convert--alternate-numbered-presets groups)
       (dolist (group (reverse groups) requests)
@@ -181,6 +192,8 @@
       (let* ((kind (plist-get operation :op))
              (element (when (memq kind '(modify delete)) (nth (plist-get operation :old-index) old)))
              (updated (when (eq kind 'modify) (nth (plist-get operation :new-index) new))))
+        (dolist (run (plist-get element :contents))
+          (setq ids (append ids (plist-get run :definition-term-range-ids))))
         (when (and (listp element) (plist-get element :list)
                    (or (eq kind 'delete)
                        (not (equal (gdocs-convert--runs-to-plain-text (plist-get element :contents))
@@ -196,6 +209,14 @@
                               (delete-dups (delq nil (nreverse ids))))
               :after after)))))
 
+(defun gdocs-diff-lists--term-run (run)
+  "Supply inline term RUN's provenance after word-level modifications."
+  (when (plist-get run :definition-term)
+    (list :requests (lambda (value index)
+                      (gdocs-convert-list-term-run-requests
+                       value index (+ index (gdocs-convert--run-model-length value)) nil)))))
+
+(add-hook 'gdocs-diff-semantic-run-functions #'gdocs-diff-lists--term-run t)
 (add-hook 'gdocs-diff-semantic-plan-functions #'gdocs-diff-lists--plan t)
 
 (provide 'gdocs-diff-lists)

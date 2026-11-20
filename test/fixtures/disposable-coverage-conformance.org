@@ -1,0 +1,82 @@
+#+TITLE: Synthetic coverage closeout
+
+* Mixed coverage
+Before *ready 🧭* prose with [[https://example.org/kept][kept link]], /italic/, _underline_, +strike+, ~inline code~ and =verbatim= 😀.
+
+Native dates: <2026-11-19 Thu> and [2026-11-20 Fri]. Literal time: [2026-11-19 Thu 10:30].
+
+Person identity: [[person:ada@example.org][Ada]].
+
+Static status: [[status:green][Ready]].
+
+1. Parent one
+   1. Child one
+   2. Child two
+
+   Parent continuation with *bold* and [[https://example.org/list][list link]] 😀.
+2. Parent two
+
+- [ ] Open task
+- [X] Checked task
+- [-] Partial task
+
+- *Term* :: Definition with /emphasis/.
+
+#+BEGIN_QUOTE
+Quoted *bold* and /italic/ with [[https://example.org/quote][quote link]].
+
+Second quoted paragraph 😀.
+#+END_QUOTE
+
+#+ATTR_CALLOUT: :type note :title "Coverage note"
+#+BEGIN_CALLOUT
+Callout *prose*.
+
+- Flat item one
+- Flat item two
+#+END_CALLOUT
+
+#+BEGIN_CENTER
+Centered *first* paragraph with [[https://example.org/center][center link]].
+
+Centered second paragraph 😀.
+#+END_CENTER
+
+#+BEGIN_VERSE
+  Verse *first* line
+second line 😀
+
+  stanza with [[https://example.org/verse][verse link]]
+#+END_VERSE
+
+-----
+
+-----
+#+BEGIN_SRC org
+#+AUTHOR: Literal code, not document metadata
+Literal code line.
+
+Code blank line retained.
+#+END_SRC
+
+#+BEGIN_EXAMPLE
+Example literal *asterisks*.
+
+#+LANGUAGE: Literal example, not metadata
+#+END_EXAMPLE
+
+| *Name* | Value |
+|--------+-------|
+| First  | /one/ |
+| Second | 😀    |
+
+#+CAPTION: Public image used as a synthetic inline-image specimen.
+[[file:coverage.png]]
+
+Final paragraph with a rich native note[fn:coverage-note].
+
+-----
+
+* Footnotes
+
+[fn:coverage-note] Note *bold* and /italic/ with [[https://example.org/note][note link]] 😀.

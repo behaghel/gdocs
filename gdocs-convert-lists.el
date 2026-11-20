@@ -14,6 +14,7 @@
 (require 'gdocs-convert-tasks)
 (require 'gdocs-convert-list-source)
 (require 'gdocs-convert-list-publish)
+(require 'gdocs-convert-list-terms)
 
 (declare-function gdocs-convert--range-marker "gdocs-convert" (markers type start end))
 (declare-function gdocs-convert--next-id "gdocs-convert" ())
@@ -35,7 +36,8 @@
         (gdocs-convert-task-validate-native-list paragraph lists-map markers start end)
         (let ((info (gdocs-convert--docs-bullet-to-list
                      bullet lists-map markers start end (alist-get 'paragraphStyle paragraph))))
-          (gdocs-convert-paragraph-from-docs paragraph runs markers start end 'normal (list :list info))))))
+          (gdocs-convert-paragraph-from-docs paragraph (gdocs-convert-list-term-infer-legacy runs)
+                                             markers start end 'normal (list :list info))))))
 
 (defun gdocs-convert-list-paragraph-to-org (element text)
   "Render list paragraph ELEMENT and TEXT, or nil when unhandled."
@@ -211,8 +213,9 @@ FALLBACK is the containing list's type.  Continuations have no new bullet."
                                   (gdocs-convert--strip-continuation-indent
                                    (gdocs-convert--objects-to-runs (org-element-contents paragraph))))))
                          (body (if (and first tag)
-                                   (append (gdocs-convert--trim-runs
-                                            (gdocs-convert--objects-to-runs (if (stringp tag) (list tag) tag)))
+                                   (append (gdocs-convert-list-term-source-runs
+                                            (gdocs-convert--trim-runs
+                                             (gdocs-convert--objects-to-runs (if (stringp tag) (list tag) tag))))
                                            (list (gdocs-convert--make-plain-run " :: ")) runs)
                                  runs))
                          (element (list :type 'paragraph :style 'normal

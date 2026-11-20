@@ -17,6 +17,13 @@
 
 (defcustom gdocs-style-definitions
   '((gdocs-code :text (:monospace t))
+    (gdocs-example-code :text (:monospace t))
+    (gdocs-definition-term :text nil)
+    (gdocs-example-block :parent normal)
+    (gdocs-example-block-first :parent normal)
+    (gdocs-example-block-line :parent normal)
+    (gdocs-example-block-last :parent normal)
+    (gdocs-example-block-single :parent normal)
     (gdocs-list-first :paragraph (:space-above 0))
     (gdocs-list-item :paragraph (:space-above 0))
     (gdocs-task-prefix :text (:font-family "Noto Sans Symbols 2" :font-size 10))
@@ -58,6 +65,10 @@
     (gdocs-callout-important-line-compact :parent normal)
     (gdocs-callout-important-last-compact :parent normal)
     (gdocs-callout-important-single-compact :parent normal)
+    (gdocs-source-block-separator :parent normal
+                                  :paragraph (:space-above 0 :space-below 0 :background-color nil
+                                                           :borders ((top :width 0 :padding 0) (bottom :width 0 :padding 0)
+                                                                     (left :width 0 :padding 0) (right :width 0 :padding 0))))
     (gdocs-source-block :parent normal)
     (gdocs-source-block-first :parent normal)
     (gdocs-source-block-line :parent normal)
@@ -96,10 +107,11 @@
     (gdocs-image-caption :parent normal))
   "Logical presentation styles, resolved when building Google Docs requests.
 Each style has an optional :parent, :text, and :paragraph plist.  Text may set
-:font-family, :font-size, :font-weight, :foreground-color, and
+:font-family, :font-size, :font-weight, :foreground-color, :small-caps, and
 :background-color.
 Paragraphs may set :space-above, :space-below, :indent-start, :indent-end,
-:indent-first-line, :border-padding, and :borders.  Distances are in points.
+:indent-first-line, :border-padding, and :borders.  An explicit nil paragraph
+:background-color clears inherited shading.  Distances are in points.
 These choices do not change Org or IR semantics."
   :type '(alist :key-type symbol :value-type plist)
   :group 'gdocs-styles)

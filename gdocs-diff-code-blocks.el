@@ -28,12 +28,12 @@
                      (or (plist-get element :lines) '("")))))
 
 (defun gdocs-diff--source-block-utf16-length (element)
-  "Compute UTF-16 length of source-block ELEMENT."
-  (gdocs-diff-code-blocks--body-length element))
+  "Compute UTF-16 length of source-block ELEMENT including its outside guard."
+  (1+ (gdocs-diff-code-blocks--body-length element)))
 
 (defun gdocs-diff--example-block-utf16-length (element)
-  "Compute UTF-16 length of example-block ELEMENT."
-  (gdocs-diff-code-blocks--body-length element))
+  "Compute UTF-16 length of example-block ELEMENT including its outside guard."
+  (1+ (gdocs-diff-code-blocks--body-length element)))
 
 (defun gdocs-diff-code-blocks--element (element)
   "Describe code/example ELEMENT, or decline other kinds."

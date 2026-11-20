@@ -346,12 +346,14 @@ whitespace from the last.  Returns nil if no text remains."
 
 (defun gdocs-convert--inline-element-parts (element markers)
   "Compose native ELEMENT decoding with semantic MARKERS."
-  (gdocs-convert-code-native-parts
+  (gdocs-convert-list-term-native-parts
    element markers
-   (or (gdocs-convert-status-native-parts element markers)
-       (gdocs-convert-footnote-native-parts element markers)
-       (gdocs-convert-date-native-parts element markers)
-       (gdocs-convert-status-unsupported-native element markers))))
+   (gdocs-convert-code-native-parts
+    element markers
+    (or (gdocs-convert-status-native-parts element markers)
+        (gdocs-convert-footnote-native-parts element markers)
+        (gdocs-convert-date-native-parts element markers)
+        (gdocs-convert-status-unsupported-native element markers)))))
 
 (defun gdocs-convert--inline-finalize-runs (runs)
   "Compose feature-owned completion of reconstructed RUNS."
@@ -359,7 +361,8 @@ whitespace from the last.  Returns nil if no text remains."
 
 (defun gdocs-convert--inline-run-policy (run)
   "Compose feature-owned normalization and addressing policy for RUN."
-  (append (gdocs-convert-list-continuation-run-policy run)
+  (append (gdocs-convert-list-term-run-policy run)
+          (gdocs-convert-list-continuation-run-policy run)
           (gdocs-convert-task-run-policy run)
           (gdocs-convert-code-run-policy run)
           (gdocs-convert-date-run-policy run)
@@ -750,11 +753,13 @@ otherwise."
 
 (defun gdocs-convert--paragraph-markers-for-range (markers start end)
   "Compose paragraph annotations from MARKERS overlapping START..END."
-  (gdocs-convert-footnote-paragraph-markers
-   (gdocs-convert-task-paragraph-markers
-    (gdocs-convert-code-paragraph-markers
-     (gdocs-convert--without-inline-status-markers
-      (gdocs-convert--markers-for-range markers start end))))))
+  (gdocs-convert-list-term-paragraph-markers
+   (gdocs-convert-date-paragraph-markers
+    (gdocs-convert-footnote-paragraph-markers
+     (gdocs-convert-task-paragraph-markers
+      (gdocs-convert-code-paragraph-markers
+       (gdocs-convert--without-inline-status-markers
+        (gdocs-convert--markers-for-range markers start end))))))))
 
 (defun gdocs-convert--range-marker (markers marker-type start end)
   "Return MARKER-TYPE marker from MARKERS overlapping START..END, or nil."
@@ -929,7 +934,8 @@ clear any inherited formatting before per-run styles are applied."
 (defun gdocs-convert--make-inline-insert-requests (runs index &optional prefix)
   "Compose semantic and literal insertion plans for RUNS at INDEX with PREFIX."
   (setq prefix (or prefix ""))
-  (or (gdocs-convert-date-inline-insert-requests runs index prefix)
+  (or (gdocs-convert-status-inline-insert-requests runs index prefix)
+      (gdocs-convert-date-inline-insert-requests runs index prefix)
       (gdocs-convert-paragraph-text-requests
        (gdocs-convert--runs-to-plain-text runs) index prefix)))
 
@@ -999,7 +1005,8 @@ separately by diff."
           (push marker requests))
         (unless omit-status-markers
           (dolist (request (append (gdocs-convert-task-run-requests run index segment-id)
-                                   (gdocs-convert-list-continuation-run-requests run index segment-id)))
+                                   (gdocs-convert-list-continuation-run-requests run index segment-id)
+                                   (gdocs-convert-list-term-run-requests run index end segment-id)))
             (push request requests)))
         (setq index end)))
     (nreverse requests)))
@@ -1010,7 +1017,7 @@ separately by diff."
 
 (defun gdocs-convert--make-text-style-reset-request (start end)
   "Create an updateTextStyle request that resets formatting from START to END.
-Clears bold, italic, underline, strikethrough, weightedFontFamily,
+Clears bold, italic, underline, strikethrough, smallCaps, weightedFontFamily,
 baselineOffset, foregroundColor, and backgroundColor by listing
 them in the fields mask with only default-valued properties in the
 textStyle body.  Fields present in the mask but absent from the
@@ -1020,10 +1027,11 @@ body are reset to their defaults by the Google Docs API."
                       (italic . :json-false)
                       (underline . :json-false)
                       (strikethrough . :json-false)
+                      (smallCaps . :json-false)
                       (baselineOffset . "NONE")))
         (range . ((startIndex . ,start)
                   (endIndex . ,end)))
-        (fields . "link,bold,italic,underline,strikethrough,weightedFontFamily,baselineOffset,foregroundColor,backgroundColor")))))
+        (fields . "link,bold,italic,underline,strikethrough,smallCaps,weightedFontFamily,baselineOffset,foregroundColor,backgroundColor")))))
 
 (defun gdocs-convert--run-logical-style (run)
   "Return Google Docs TextStyle fields for RUN logical styles."

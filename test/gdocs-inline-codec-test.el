@@ -127,5 +127,17 @@
                                    "--batch" "-Q" "-L" directory "--eval" (prin1-to-string program))))
         (ert-info ((buffer-string)) (should (zerop status)))))))
 
+(ert-deftest gdocs-inline-codec-unknown-native-objects-stop-instead-of-disappearing ()
+  "Unsupported native union members cannot vanish from surrounding paragraph text."
+  (dolist (kind '(person richLink equation futureInlineObject))
+    (let* ((parts (vector '((textRun . ((content . "Before "))))
+                          (list (cons kind '((displayText . "Synthetic object"))))
+                          '((textRun . ((content . " after.\n"))))))
+           (document (list (cons 'body (list (cons 'content
+                                                   (vector (list (cons 'startIndex 1)
+                                                                 (cons 'endIndex 30)
+                                                                 (cons 'paragraph (list (cons 'elements parts)))))))))))
+      (should-error (gdocs-convert-docs-json-to-ir document) :type 'user-error))))
+
 (provide 'gdocs-inline-codec-test)
 ;;; gdocs-inline-codec-test.el ends here
