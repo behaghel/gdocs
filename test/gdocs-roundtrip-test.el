@@ -142,42 +142,79 @@
     (should (eq (plist-get elem :style) 'normal))))
 
 (ert-deftest gdocs-roundtrip/org-quote-block ()
-  "A quote block produces :style quote."
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir
-              "#+BEGIN_QUOTE\nQuoted text.\n#+END_QUOTE"))
-         (elem (gdocs-roundtrip-test--find-ir-element ir 'paragraph 'quote)))
-    (should elem)))
+  "A semantic quote block retains its body and emits provider markers."
+  (let* ((source "#+BEGIN_QUOTE\nQuoted text.\n#+END_QUOTE\n")
+         (ir (gdocs-roundtrip-test--org-to-ir source))
+         (element (gdocs-roundtrip-test--find-ir-element ir 'quote-block)))
+    (should element)
+    (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
+                          (plist-get element :paragraphs))
+                   '("Quoted text.")))
+    (should (equal (gdocs-convert-ir-to-org ir) source))
+    (should (seq-some
+             (lambda (request)
+               (when-let* ((marker (alist-get 'createNamedRange request)))
+                 (string-prefix-p "gdocs-org-marker:quote-block:"
+                                  (alist-get 'name marker))))
+             (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-center-block ()
-  "A center block is parsed into IR."
-
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir
-              "#+BEGIN_CENTER\nCentered.\n#+END_CENTER")))
-    (should ir)
-    (should (>= (length ir) 1))))
+  "One centered block retains multiple rich paragraphs and native provenance."
+  (let* ((source "#+BEGIN_CENTER\nCentered *bold* 😀.\n\nSecond /paragraph/.\n#+END_CENTER\n")
+         (ir (gdocs-roundtrip-test--org-to-ir source))
+         (element (gdocs-roundtrip-test--find-ir-element ir 'center-block)))
+    (should element)
+    (should (= (length (plist-get element :paragraphs)) 2))
+    (should (equal (gdocs-convert-ir-to-org ir) source))
+    (should (seq-some (lambda (request)
+                        (when-let* ((marker (alist-get 'createNamedRange request)))
+                          (string-prefix-p "gdocs-org-marker:center-block:" (alist-get 'name marker))))
+                      (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-verse-block ()
-  "A verse block is parsed into IR."
-
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir
-              "#+BEGIN_VERSE\nLine one\nLine two\n#+END_VERSE")))
-    (should ir)))
+  "Verse retains hard lines, a semantic block and a whole-line native marker."
+  (let* ((source "#+BEGIN_VERSE\nLine one\nLine two\n#+END_VERSE\n")
+         (ir (gdocs-roundtrip-test--org-to-ir source))
+         (element (gdocs-roundtrip-test--find-ir-element ir 'verse-block)))
+    (should element)
+    (should (equal (mapcar #'gdocs-convert--runs-to-plain-text (plist-get element :lines)) '("Line one" "Line two")))
+    (should (equal (gdocs-convert-ir-to-org ir) source))
+    (should (seq-some (lambda (request)
+                        (when-let* ((marker (alist-get 'createNamedRange request)))
+                          (string-prefix-p "gdocs-org-marker:verse-block:" (alist-get 'name marker))))
+                      (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-example-block ()
-  "An example block produces code-formatted IR elements."
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir
-              "#+BEGIN_EXAMPLE\nExample text.\n#+END_EXAMPLE")))
-    (should ir)
-    ;; Example blocks should produce runs with :code t
-    (let ((code-run (gdocs-roundtrip-test--find-run-with-prop ir :code)))
-      (should code-run))))
+  "A semantic example block retains literal lines and provider markers."
+  (let* ((source "#+BEGIN_EXAMPLE\nExample text.\n#+END_EXAMPLE\n")
+         (ir (gdocs-roundtrip-test--org-to-ir source))
+         (element (gdocs-roundtrip-test--find-ir-element ir 'example-block)))
+    (should element)
+    (should (equal (plist-get element :lines) '("Example text.")))
+    (should (equal (gdocs-convert-ir-to-org ir) source))
+    (should (seq-some
+             (lambda (request)
+               (when-let* ((marker (alist-get 'createNamedRange request)))
+                 (string-prefix-p "gdocs-org-marker:example-block:"
+                                  (alist-get 'name marker))))
+             (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-src-block ()
-  "A src block produces a :gdocs-marker of type src-block."
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir
-              "#+BEGIN_SRC python\nprint('hi')\n#+END_SRC"))
-         (elem (gdocs-roundtrip-test--find-marker ir 'src-block)))
-    (should elem)))
+  "A semantic source block retains code, language, and provider markers."
+  (let* ((source "#+BEGIN_SRC python\nprint('hi')\n#+END_SRC\n")
+         (ir (gdocs-roundtrip-test--org-to-ir source))
+         (element (gdocs-roundtrip-test--find-ir-element ir 'source-block)))
+    (should element)
+    (should (equal (plist-get element :language) "python"))
+    (should (equal (plist-get element :lines) '("print('hi')")))
+    (should (equal (gdocs-convert-ir-to-org ir) source))
+    (should (seq-some
+             (lambda (request)
+               (when-let* ((marker (alist-get 'createNamedRange request)))
+                 (and (string-prefix-p "gdocs-org-marker:src-block:"
+                                       (alist-get 'name marker))
+                      (string-suffix-p ":python" (alist-get 'name marker)))))
+             (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-special-block ()
   "A special block (e.g., #+BEGIN_WARNING) is parsed into IR."
@@ -295,10 +332,15 @@
     (should (plist-get (plist-get (car items) :list) :checked))))
 
 (ert-deftest gdocs-roundtrip/org-descriptive-list ()
-  "Descriptive list items are parsed into IR."
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir "- Term :: Definition")))
-    (should ir)
-    (should (>= (length ir) 1))))
+  "Description terms and definitions survive IR, publication and reparse."
+  (let* ((ir (gdocs-roundtrip-test--org-to-ir "- Term :: Definition"))
+         (rendered (gdocs-convert-ir-to-org ir))
+         (again (gdocs-convert-org-string-to-ir rendered)))
+    (should (equal rendered "- Term :: Definition\n"))
+    (should (equal (gdocs-convert-ir-to-org again) rendered))
+    (should (seq-some (lambda (request)
+                        (equal (alist-get 'text (alist-get 'insertText request)) "Term :: Definition\n"))
+                      (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-nested-list-levels ()
   "Nested lists produce items with increasing :level."
@@ -343,10 +385,17 @@
 ;;; 1e. Horizontal rules
 
 (ert-deftest gdocs-roundtrip/org-horizontal-rule ()
-  "A ----- line produces :type horizontal-rule."
+  "A section break has visible requests and recoverable native provenance."
   (let* ((ir (gdocs-roundtrip-test--org-to-ir "Above\n-----\nBelow"))
-         (hr (gdocs-roundtrip-test--find-ir-element ir 'horizontal-rule)))
-    (should hr)))
+         (hr (gdocs-roundtrip-test--find-ir-element ir 'horizontal-rule))
+         (requests (gdocs-convert-ir-to-docs-requests ir)))
+    (should hr)
+    (should (seq-some (lambda (request)
+                        (let ((border (alist-get 'borderBottom (alist-get 'paragraphStyle (alist-get 'updateParagraphStyle request)))))
+                          (> (or (alist-get 'magnitude (alist-get 'width border)) 0) 0))) requests))
+    (should (seq-some (lambda (request)
+                        (when-let* ((marker (alist-get 'createNamedRange request)))
+                          (string-prefix-p "gdocs-org-marker:section-break:" (alist-get 'name marker)))) requests))))
 
 ;; ---------------------------------------------------------------------------
 ;;; 1f. Org-only markers
@@ -392,10 +441,17 @@
     (should elem)))
 
 (ert-deftest gdocs-roundtrip/org-keyword-author ()
-  "#+AUTHOR produces a marker with :type keyword."
-  (let* ((ir (gdocs-roundtrip-test--org-to-ir "#+AUTHOR: Test"))
-         (elem (gdocs-roundtrip-test--find-marker ir 'keyword)))
-    (should elem)))
+  "AUTHOR remains local metadata rather than a published body marker."
+  (let ((source "#+AUTHOR: Test\n\nBody.\n"))
+    (with-temp-buffer
+      (org-mode)
+      (insert source)
+      (let* ((ir (gdocs-convert-org-buffer-to-ir))
+             (requests (gdocs-convert-ir-to-docs-requests ir)))
+        (should (equal (buffer-string) source))
+        (should (equal (gdocs-convert-ir-to-org ir) "Body.\n"))
+        (should-not (gdocs-roundtrip-test--find-marker ir 'keyword))
+        (should-not (string-match-p "AUTHOR\\|Test" (json-encode requests)))))))
 
 ;; ---------------------------------------------------------------------------
 ;;; 1g. Inline elements
@@ -432,11 +488,12 @@
     (should (gdocs-roundtrip-test--find-ir-element ir 'footnote))))
 
 (ert-deftest gdocs-roundtrip/org-footnote-reference ()
-  "Footnote references produce a dedicated IR marker, not just text."
-  :expected-result :failed
+  "Footnote references produce zero-width semantic runs, not literal text."
   (let* ((ir (gdocs-roundtrip-test--org-to-ir "Text[fn:1]."))
-         (elem (gdocs-roundtrip-test--find-marker ir 'footnote)))
-    (should elem)))
+         (run (seq-find (lambda (entry) (equal (plist-get entry :footnote-label) "1"))
+                        (plist-get (car ir) :contents))))
+    (should run)
+    (should (equal (plist-get run :text) ""))))
 
 (ert-deftest gdocs-roundtrip/org-latex-fragment ()
   "LaTeX fragments produce a code-formatted run preserving the LaTeX source."
@@ -482,13 +539,16 @@
 
 (ert-deftest gdocs-roundtrip/org-inline-src-block ()
   "Inline source blocks (src_lang{code}) produce a code run with language info."
-  :expected-result :failed
   (let* ((ir (gdocs-roundtrip-test--org-to-ir "Result: src_python{1+1}"))
          (run (gdocs-roundtrip-test--find-run-with-text ir "1+1")))
     (should run)
     (should (plist-get run :code))
-    ;; Should also have language metadata
-    (should (gdocs-roundtrip-test--find-marker ir 'inline-src-block))))
+    (should (equal (plist-get (plist-get run :inline-source) :language) "python"))
+    (should (equal (gdocs-convert-ir-to-org ir) "Result: src_python{1+1}\n"))
+    (should (seq-some (lambda (request)
+                        (when-let* ((marker (alist-get 'createNamedRange request)))
+                          (string-prefix-p "gdocs-org-marker:inline-src-block:" (alist-get 'name marker))))
+                      (gdocs-convert-ir-to-docs-requests ir)))))
 
 (ert-deftest gdocs-roundtrip/org-statistics-cookie ()
   "Statistics cookies [2/5] survive org→IR→org via fallback."
@@ -692,14 +752,25 @@
     (should (> (length items) 0))))
 
 (ert-deftest gdocs-roundtrip/json-has-checkbox-lists ()
-  "The JSON fixture contains checkbox list items.
-The MCP markdown renderer doesn't produce BULLET_CHECKBOX presets,
-so this requires manual fixture update or a doc created via the GDocs UI."
-  :expected-result :failed
+  "The public specimen plus a managed glyph task preserves visible checked state.
+The unmodified public capture has no managed task metadata; this addition is
+synthetic fixture coverage, not a claim about that capture or live acceptance."
   (let* ((json (gdocs-roundtrip-test--read-json-fixture))
-         (ir (gdocs-convert-docs-json-to-ir json))
-         (items (gdocs-roundtrip-test--find-ir-list-elements ir 'check)))
-    (should (> (length items) 0))))
+         (body (alist-get 'body json)))
+    (setf (alist-get 'content body)
+          (vconcat (alist-get 'content body)
+                   [((startIndex . 100000) (endIndex . 100020)
+                     (paragraph . ((elements . [((textRun . ((content . "☑ Checked synthetic\n"))))]))))]))
+    (setf (alist-get 'namedRanges json)
+          (cons '(gdocs-org-marker:managed-task:synthetic:v1:0
+                  . ((namedRanges . [((namedRangeId . "synthetic-task")
+                                      (ranges . [((startIndex . 100001) (endIndex . 100002))]))])))
+                (alist-get 'namedRanges json)))
+    (let* ((ir (gdocs-convert-docs-json-to-ir json))
+           (items (gdocs-roundtrip-test--find-ir-list-elements ir 'check)))
+      (should (> (length items) 0))
+      (should (seq-some (lambda (item) (plist-get (plist-get item :list) :checked)) items))
+      (should (string-match-p (regexp-quote "- [X] Checked synthetic") (gdocs-convert-ir-to-org ir))))))
 
 (ert-deftest gdocs-roundtrip/json-has-table ()
   "The JSON fixture contains a table element."
@@ -728,17 +799,28 @@ so this requires manual fixture update or a doc created via the GDocs UI."
     (should run)))
 
 (ert-deftest gdocs-roundtrip/json-has-block-quote ()
-  "The JSON fixture contains a quote-styled paragraph."
-  :expected-result :failed  ;; GDocs doesn't have native block quotes
+  "Explicit native quote provenance reconstructs a semantic quote block.
+The public capture lacks these semantic markers; append synthetic native data
+rather than requiring an obsolete quote-styled-paragraph representation."
   (let* ((json (gdocs-roundtrip-test--read-json-fixture))
-         (ir (gdocs-convert-docs-json-to-ir json))
-         (quote-elem (gdocs-roundtrip-test--find-ir-element
-                      ir 'paragraph 'quote)))
-    (should quote-elem)))
+         (body (alist-get 'body json)))
+    (setf (alist-get 'content body)
+          (vconcat (alist-get 'content body)
+                   [((startIndex . 100000) (endIndex . 100010)
+                     (paragraph . ((elements . [((textRun . ((content . "Synthetic\n") (textStyle . ((italic . t))))))]))))]))
+    (setf (alist-get 'namedRanges json)
+          (cons '(gdocs-org-marker:quote-block:synthetic:italic-v1-1
+                  . ((namedRanges . [((ranges . [((startIndex . 100000) (endIndex . 100009))]))])))
+                (alist-get 'namedRanges json)))
+    (let* ((ir (gdocs-convert-docs-json-to-ir json))
+           (quote-elem (gdocs-roundtrip-test--find-ir-element ir 'quote-block)))
+      (should quote-elem)
+      (should (equal (mapcar #'gdocs-convert--runs-to-plain-text (plist-get quote-elem :paragraphs)) '("Synthetic")))
+      (should (string-match-p (regexp-quote "#+BEGIN_QUOTE\nSynthetic\n#+END_QUOTE") (gdocs-convert-ir-to-org ir))))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Suite 2b: GDocs features not yet supported in IR
-;;            These tests document expected failures.
+;;            Explicit coverage distinguishes fixture gaps from runtime defects.
 
 (ert-deftest gdocs-roundtrip/json-has-inline-image ()
   "The JSON fixture's inline image is handled in IR."
@@ -866,6 +948,331 @@ so this requires manual fixture update or a doc created via the GDocs UI."
     (should (memq 'insertTable types))))
 
 ;; ---------------------------------------------------------------------------
+
+(ert-deftest gdocs-roundtrip/specimen-styling-does-not-change-semantic-identity ()
+  "Changing presentation policy must not change standard specimen semantics."
+  (require 'gdocs-diff)
+  (let* ((source (gdocs-roundtrip-test--read-org-fixture))
+         (before (gdocs-roundtrip-test--org-to-ir source))
+         (gdocs-style-definitions
+          (cons '(gdocs-body :text (:font-family "Specimen Serif" :font-size 23 :bold t))
+                gdocs-style-definitions))
+         (after (gdocs-roundtrip-test--org-to-ir source)))
+    (should (equal (gdocs-diff--element-keys before)
+                   (gdocs-diff--element-keys after)))
+    ;; The override must actually affect presentation, not be ignored.
+    (should (seq-some
+             (lambda (request)
+               (equal (alist-get 'fontFamily
+                                 (alist-get 'weightedFontFamily
+                                            (alist-get 'textStyle (alist-get 'updateTextStyle request))))
+                      "Specimen Serif"))
+             (gdocs-convert-ir-to-docs-requests after)))))
+
+(ert-deftest gdocs-roundtrip/specimen-local-preamble-preservation ()
+  "Preserve the standard specimen's raw metadata without touching its body."
+  (require 'gdocs-preamble)
+  (let* ((source (gdocs-roundtrip-test--read-org-fixture))
+         (parts (gdocs-preamble-split source))
+         (remote (concat "#+TITLE: Different remote title\n\n" (plist-get parts :body))))
+    (should (string-match-p "GDOCS_DOCUMENT_ID" (plist-get parts :preamble)))
+    (should (string-match-p "#\\+AUTHOR:" (plist-get parts :preamble)))
+    (should (equal (gdocs-preamble-preserve source remote) source))))
+
+(ert-deftest gdocs-roundtrip/specimen-shared-paragraph-wire-contract ()
+  "Both standard specimens retain the established literal paragraph wire shape."
+  (dolist (ir (list (gdocs-roundtrip-test--org-to-ir
+                    (gdocs-roundtrip-test--read-org-fixture))
+                   (gdocs-convert-docs-json-to-ir
+                    (gdocs-roundtrip-test--read-json-fixture))))
+    (let ((actual (gdocs-convert-ir-to-docs-requests ir)) (calls 0))
+      ;; Independent reference for the existing wire contract, not a golden
+      ;; regenerated from the new module.  All other request stages run normally.
+      (cl-letf (((symbol-function 'gdocs-convert-paragraph-text-requests)
+                 (lambda (text index &optional prefix)
+                   (setq calls (1+ calls))
+                   (let ((body (concat prefix text "\n")))
+                     (list :requests `(((insertText . ((text . ,body)
+                                                       (location . ((index . ,index)))))))
+                           :length (/ (length (encode-coding-string body 'utf-16le t)) 2))))))
+        (should (equal actual (gdocs-convert-ir-to-docs-requests ir))))
+      (should (> calls 0)))))
+
+(ert-deftest gdocs-roundtrip/specimen-bidirectional-paragraph-codec ()
+  "Both standard specimens compose the paragraph codec through complete flows."
+  (require 'gdocs-diff)
+  (let ((source-decoder (symbol-function 'gdocs-convert-paragraph-org-runs))
+        (native-decoder (symbol-function 'gdocs-convert-paragraph-docs-runs))
+        (renderer (symbol-function 'gdocs-convert-paragraph-to-org))
+        (source-count 0) (native-count 0) (render-count 0))
+    (cl-letf (((symbol-function 'gdocs-convert-paragraph-org-runs)
+               (lambda (&rest args) (setq source-count (1+ source-count)) (apply source-decoder args)))
+              ((symbol-function 'gdocs-convert-paragraph-docs-runs)
+               (lambda (&rest args) (setq native-count (1+ native-count)) (apply native-decoder args)))
+              ((symbol-function 'gdocs-convert-paragraph-to-org)
+               (lambda (&rest args) (setq render-count (1+ render-count)) (apply renderer args))))
+      (dolist (ir (list (gdocs-roundtrip-test--org-to-ir (gdocs-roundtrip-test--read-org-fixture))
+                        (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture))))
+        (should (stringp (gdocs-convert-ir-to-org ir)))
+        (should (gdocs-convert-ir-to-docs-requests ir))
+        (should-not (gdocs-diff-generate ir ir))
+        (should-not (gdocs-diff-generate ir ir))))
+    (should (> source-count 0))
+    (should (> native-count 0))
+    (should (> render-count 0))))
+
+(ert-deftest gdocs-roundtrip/specimen-bidirectional-inline-codec ()
+  "Both standard specimens exercise shared inline conversion and stable diffs."
+  (require 'gdocs-diff)
+  (let ((source (symbol-function 'gdocs-convert--objects-to-runs))
+        (native (symbol-function 'gdocs-convert--docs-text-run-to-ir))
+        (render (symbol-function 'gdocs-convert-inline-plain-run-to-org))
+        (source-count 0) (native-count 0) (render-count 0))
+    (cl-letf (((symbol-function 'gdocs-convert--objects-to-runs)
+               (lambda (&rest args) (setq source-count (1+ source-count)) (apply source args)))
+              ((symbol-function 'gdocs-convert--docs-text-run-to-ir)
+               (lambda (&rest args) (setq native-count (1+ native-count)) (apply native args)))
+              ((symbol-function 'gdocs-convert-inline-plain-run-to-org)
+               (lambda (&rest args) (setq render-count (1+ render-count)) (apply render args))))
+      (dolist (ir (list (gdocs-roundtrip-test--org-to-ir (gdocs-roundtrip-test--read-org-fixture))
+                        (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture))))
+        (should (stringp (gdocs-convert-ir-to-org ir)))
+        (should (gdocs-convert-ir-to-docs-requests ir))
+        (should-not (gdocs-diff-generate ir ir))
+        (should-not (gdocs-diff-generate ir ir))))
+    (should (> source-count 0))
+    (should (> native-count 0))
+    (should (> render-count 0))))
+
+(ert-deftest gdocs-roundtrip/specimen-style-resolution-changes-presentation-only ()
+  "Both standard conversion directions retain identity, text and non-style plans."
+  (require 'gdocs-diff)
+  (let* ((source (gdocs-roundtrip-test--read-org-fixture))
+         (native (gdocs-roundtrip-test--read-json-fixture))
+         (before-source (gdocs-convert-org-string-to-ir source))
+         (before-native (gdocs-convert-docs-json-to-ir native))
+         (before-requests (mapcar #'gdocs-convert-ir-to-docs-requests
+                                  (list before-source before-native)))
+         (gdocs-style-definitions
+          (cons '(gdocs-body :parent normal
+                             :text (:font-family "Specimen Sans" :font-size 19)
+                             :paragraph (:space-above 0 :space-below 8 :indent-first-line 0
+                                                      :borders ((left . (:color "#345678" :width 2 :padding 4)))))
+                gdocs-style-definitions))
+         (after-source (gdocs-convert-org-string-to-ir source))
+         (after-native (gdocs-convert-docs-json-to-ir native)))
+    (cl-mapc
+     (lambda (before after old-requests)
+       (should (equal before after))
+       (should (equal (gdocs-convert-ir-to-org before) (gdocs-convert-ir-to-org after)))
+       (should-not (gdocs-diff-generate before after))
+       (should-not (gdocs-diff-generate after after))
+       (let ((requests (gdocs-convert-ir-to-docs-requests after))
+             (style-request-p (lambda (request) (or (alist-get 'updateTextStyle request)
+                                                    (alist-get 'updateParagraphStyle request)))))
+         (should-not (equal old-requests requests))
+         (should (equal (seq-remove style-request-p old-requests)
+                        (seq-remove style-request-p requests)))
+         (should (seq-some
+                  (lambda (request)
+                    (equal (alist-get 'fontFamily
+                                      (alist-get 'weightedFontFamily
+                                                 (alist-get 'textStyle (alist-get 'updateTextStyle request))))
+                           "Specimen Sans")) requests))))
+     (list before-source before-native) (list after-source after-native) before-requests)))
+
+(ert-deftest gdocs-roundtrip/specimen-document-link-services ()
+  "Default specimen conversion uses link services without discovering documents."
+  (require 'gdocs-diff)
+  (let ((source-resolver (symbol-function 'gdocs-convert--link-url))
+        (native-resolver (symbol-function 'gdocs-convert--extract-link-url))
+        (source-count 0) (native-count 0)
+        (gdocs-convert--link-context nil))
+    (cl-letf (((symbol-function 'gdocs-convert--link-url)
+               (lambda (&rest args) (setq source-count (1+ source-count)) (apply source-resolver args)))
+              ((symbol-function 'gdocs-convert--extract-link-url)
+               (lambda (&rest args) (setq native-count (1+ native-count)) (apply native-resolver args)))
+              ((symbol-function 'gdocs-convert--build-docid-to-file-map)
+               (lambda (&rest _) (ert-fail "Default conversion discovered local notes")))
+              ((symbol-function 'gdocs-convert--read-file-property-gdocs-id)
+               (lambda (&rest _) (ert-fail "Default conversion read local note metadata"))))
+      (dolist (ir (list (gdocs-roundtrip-test--org-to-ir (gdocs-roundtrip-test--read-org-fixture))
+                        (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture))))
+        (should (stringp (gdocs-convert-ir-to-org ir)))
+        (should (gdocs-convert-ir-to-docs-requests ir))
+        (should-not (gdocs-diff-generate ir ir))
+        (should-not (gdocs-diff-generate ir ir))))
+    (should (> source-count 0))
+    (should (> native-count 0))))
+
+(ert-deftest gdocs-roundtrip/specimen-table-feature-descriptors-and-planning ()
+  "Both specimen tables use feature-owned descriptors and full request planning."
+  (require 'gdocs-diff)
+  (let ((planner (symbol-function 'gdocs-convert--table-to-requests)) (calls 0))
+    (cl-letf (((symbol-function 'gdocs-convert--table-to-requests)
+               (lambda (&rest args) (setq calls (1+ calls)) (apply planner args))))
+      (dolist (ir (list (gdocs-roundtrip-test--org-to-ir (gdocs-roundtrip-test--read-org-fixture))
+                        (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture))))
+        (let* ((table (seq-find (lambda (element) (eq (plist-get element :type) 'table)) ir))
+               (descriptor (gdocs-diff-semantic-element table))
+               (requests (gdocs-convert-ir-to-docs-requests ir)))
+          (should table)
+          (should (equal (plist-get descriptor :key) (gdocs-diff--element-key table)))
+          (should (= (plist-get descriptor :body-length) (gdocs-diff--element-utf16-length table)))
+          (should (seq-some (lambda (request) (alist-get 'insertTable request)) requests))
+          (should (stringp (gdocs-convert-ir-to-org ir)))
+          (should-not (gdocs-diff-generate ir ir))
+          (should-not (gdocs-diff-generate ir ir)))))
+    (should (>= calls 2))))
+
+(ert-deftest gdocs-roundtrip/specimen-image-feature-composition ()
+  "Specimen publishing composes image planning and neutral diff descriptors."
+  (require 'gdocs-diff)
+  (let ((planner (symbol-function 'gdocs-convert--image-to-requests)) (calls 0))
+    (cl-letf (((symbol-function 'gdocs-convert--image-to-requests)
+               (lambda (&rest args) (setq calls (1+ calls)) (apply planner args))))
+      (dolist (ir (list (gdocs-roundtrip-test--org-to-ir
+                         (concat "#+CAPTION: Synthetic 😀\n[[file:synthetic.png]]\n\n"
+                                 (gdocs-roundtrip-test--read-org-fixture)))
+                        (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture))))
+        ;; URI enrichment is an explicit synthetic preflight result, not an upload.
+        (dolist (element ir)
+          (when (eq (plist-get element :type) 'image)
+            (plist-put element :uri "https://images.invalid/synthetic.png")))
+        (let* ((image (seq-find #'gdocs-convert-image-element-p ir))
+               (descriptor (gdocs-diff-semantic-element image))
+               (requests (gdocs-convert-ir-to-docs-requests ir)))
+          (should image)
+          (should (equal (plist-get descriptor :key) (gdocs-diff--element-key image)))
+          (should (= (plist-get descriptor :body-length) 1))
+          (should (seq-some (lambda (request) (alist-get 'insertInlineImage request)) requests))
+          (should (stringp (gdocs-convert-ir-to-org ir)))
+          (should-not (gdocs-diff-generate ir ir))
+          (should-not (gdocs-diff-generate ir ir)))))
+    (should (>= calls 2))))
+
+(ert-deftest gdocs-roundtrip/specimen-code-block-feature-composition ()
+  "Both specimen flows compose code/example rendering, planning and descriptors."
+  (require 'gdocs-diff)
+  (let* ((native (gdocs-roundtrip-test--read-json-fixture))
+         (body (alist-get 'body native)))
+    ;; The returned specimen has no semantic block markers.  Extend its native
+    ;; input explicitly, keeping the unmodified specimen fingerprints separate.
+    (setf (alist-get 'content body)
+          (vconcat (alist-get 'content body)
+                   [((startIndex . 100000) (endIndex . 100012)
+                     (paragraph . ((elements . [((textRun . ((content . "specimen 😀\n"))))]))))]))
+    (setf (alist-get 'namedRanges native)
+          (cons '(gdocs-org-marker:src-block:synthetic:text
+                  . ((namedRanges . [((ranges . [((startIndex . 100000) (endIndex . 100012))]))])))
+                (alist-get 'namedRanges native)))
+    (dolist (ir (list (gdocs-roundtrip-test--org-to-ir (gdocs-roundtrip-test--read-org-fixture))
+                      (gdocs-convert-docs-json-to-ir native)))
+      (let* ((rendered (gdocs-convert-ir-to-org ir))
+             (parsed (gdocs-roundtrip-test--org-to-ir rendered))
+             (blocks (seq-filter #'gdocs-convert-code-block-element-p parsed))
+             (requests (gdocs-convert-ir-to-docs-requests parsed)))
+        (should blocks)
+        (should requests)
+        (dolist (block blocks)
+          (let ((descriptor (gdocs-diff-semantic-element block)))
+            (should (equal (plist-get descriptor :key) (gdocs-diff--element-key block)))
+            (should (= (plist-get descriptor :body-length) (gdocs-diff--element-utf16-length block)))))
+        (should-not (gdocs-diff-generate parsed parsed))
+        (should-not (gdocs-diff-generate parsed parsed))))))
+
+(ert-deftest gdocs-roundtrip/specimen-quote-feature-composition ()
+  "Both specimen flows compose quote grouping, planning and neutral descriptors."
+  (require 'gdocs-diff)
+  (let* ((native (gdocs-roundtrip-test--read-json-fixture))
+         (body (alist-get 'body native)))
+    ;; Add explicit native semantic quote input; do not alter standard fixtures.
+    (setf (alist-get 'content body)
+          (vconcat (alist-get 'content body)
+                   [((startIndex . 100000) (endIndex . 100010)
+                     (paragraph . ((elements . [((textRun . ((content . "synthetic\n"))))]))))
+                    ((startIndex . 100010) (endIndex . 100011)
+                     (paragraph . ((elements . [((textRun . ((content . "\n"))))]))))]))
+    (setf (alist-get 'namedRanges native)
+          (cons '(gdocs-org-marker:quote-block:synthetic:italic-v1-0
+                  . ((namedRanges . [((ranges . [((startIndex . 100000) (endIndex . 100010))]))])))
+                (alist-get 'namedRanges native)))
+    (dolist (ir (list (gdocs-roundtrip-test--org-to-ir (gdocs-roundtrip-test--read-org-fixture))
+                      (gdocs-convert-docs-json-to-ir native)))
+      (let* ((quotes (seq-filter #'gdocs-convert-quote-element-p ir))
+             (requests (gdocs-convert-ir-to-docs-requests ir)))
+        (should quotes)
+        (should requests)
+        (dolist (quote quotes)
+          (let ((descriptor (gdocs-diff-semantic-element quote)))
+            (should (equal (plist-get descriptor :key) (gdocs-diff--element-key quote)))
+            (should (= (plist-get descriptor :body-length) (gdocs-diff--element-utf16-length quote)))))
+        (should (string-match-p (regexp-quote "#+BEGIN_QUOTE") (gdocs-convert-ir-to-org ir)))
+        (should-not (gdocs-diff-generate ir ir))
+        (should-not (gdocs-diff-generate ir ir))))))
+
+(ert-deftest gdocs-roundtrip/specimen-callout-feature-composition ()
+  "Public source/native specimens compose with explicitly synthetic callout data."
+  (require 'gdocs-fidelity-corrections-test)
+  (let* ((extension "#+ATTR_CALLOUT: :type note :title \"Résumé 😀\"\n#+BEGIN_CALLOUT\nFirst paragraph.\n\nSecond *paragraph*.\n#+END_CALLOUT\n")
+         (feature (gdocs-convert-org-string-to-ir extension))
+         (source (gdocs-convert-org-string-to-ir (concat (gdocs-roundtrip-test--read-org-fixture) "\n" extension)))
+         (native-feature (gdocs-convert-docs-json-to-ir
+                          (gdocs-fidelity-test--returned-json (gdocs-convert-ir-to-docs-requests feature))))
+         (native (append (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture)) native-feature)))
+    (should (seq-some (lambda (element) (eq (plist-get element :type) 'callout-block)) source))
+    (should (equal (gdocs-diff--element-key (car feature)) (gdocs-diff--element-key (car native-feature))))
+    (should (equal (gdocs-convert-ir-to-org native-feature) extension))
+    (should (gdocs-convert-ir-to-docs-requests source))
+    (should (gdocs-convert-ir-to-docs-requests native))))
+
+(ert-deftest gdocs-roundtrip/specimen-managed-task-feature-composition ()
+  "Public specimens compose with synthetic visible task state in both directions."
+  (require 'gdocs-fidelity-corrections-test)
+  (let* ((extension "- [ ] open 😀\n- [X] *done*\n- [-] partial\n")
+         (feature (gdocs-convert-org-string-to-ir extension))
+         (source (gdocs-convert-org-string-to-ir (concat (gdocs-roundtrip-test--read-org-fixture) "\n" extension)))
+         (native-feature (gdocs-convert-docs-json-to-ir
+                          (gdocs-fidelity-test--returned-json (gdocs-convert-ir-to-docs-requests feature))))
+         (native (append (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture)) native-feature)))
+    (should (equal (gdocs-convert-ir-to-org native-feature) extension))
+    (should-not (gdocs-diff-generate native-feature feature))
+    (dolist (ir (list source native))
+      (let ((text (mapconcat (lambda (request) (or (alist-get 'text (alist-get 'insertText request)) ""))
+                             (gdocs-convert-ir-to-docs-requests ir) "")))
+        (dolist (glyph '("☐" "☑" "◩")) (should (string-match-p glyph text)))))))
+
+(ert-deftest gdocs-roundtrip/specimen-list-paragraph-fidelity ()
+  "Public specimens compose with explicit continuation and nested-counter fixtures."
+  (require 'gdocs-fidelity-corrections-test)
+  (let* ((extension "- [X] Head 😀\n\n  Continued *body* src_python{  x  }.\n")
+         (feature (gdocs-convert-org-string-to-ir extension))
+         (expected (gdocs-convert-ir-to-org feature))
+         (native-feature (gdocs-convert-docs-json-to-ir
+                          (gdocs-fidelity-test--returned-json (gdocs-convert-ir-to-docs-requests feature))))
+         (source (gdocs-convert-org-string-to-ir (concat (gdocs-roundtrip-test--read-org-fixture) "\n" extension)))
+         (native (append (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture)) native-feature)))
+    (should (equal (gdocs-convert-ir-to-org native-feature) expected))
+    (should-not (gdocs-diff-generate native-feature feature))
+    (dolist (ir (list source native))
+      (should (seq-some #'gdocs-convert-list-continuation-p ir))
+      (should (gdocs-convert-ir-to-docs-requests ir)))
+    (let ((rendered (gdocs-convert-ir-to-org
+                     (gdocs-convert-org-string-to-ir
+                      "1. Parent\n   1. Child\n   2. Child two\n2. Next parent\n"))))
+      (should (string-match-p "^2\\. Next parent$" rendered)))))
+
+(ert-deftest gdocs-roundtrip/specimen-list-feature-encapsulation ()
+  "Public specimens retain description terms and list feature publication."
+  (let* ((source (gdocs-convert-org-string-to-ir (gdocs-roundtrip-test--read-org-fixture)))
+         (native (gdocs-convert-docs-json-to-ir (gdocs-roundtrip-test--read-json-fixture)))
+         (rendered (gdocs-convert-ir-to-org source))
+         (requests (gdocs-convert-ir-to-docs-requests source))
+         (text (mapconcat (lambda (request) (or (alist-get 'text (alist-get 'insertText request)) "")) requests "")))
+    (dolist (term '("Emacs ::" "Org mode ::" "gdocs ::"))
+      (should (string-match-p (regexp-quote term) rendered))
+      (should (string-match-p (regexp-quote term) text)))
+    (should (gdocs-convert-ir-to-docs-requests native))))
 
 (provide 'gdocs-roundtrip-test)
 ;;; gdocs-roundtrip-test.el ends here

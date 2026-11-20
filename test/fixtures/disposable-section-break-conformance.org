@@ -1,0 +1,13 @@
+* Disposable section-break conformance
+
+Before *bold* prose 😀.
+
+-----
+Middle /italic/ prose with [[https://example.org][a link]].
+
+-----
+
+-----
+After final prose 😀.
+
+-----

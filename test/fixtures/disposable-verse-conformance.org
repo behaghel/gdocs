@@ -1,0 +1,17 @@
+* Disposable verse conformance
+
+Only synthetic verse content 😀 is present.
+
+#+BEGIN_VERSE
+  First *bold* line 😀.
+second /emphasized/ line with [[https://example.org][a link]].
+
+    A stanza with ~literal  spaces~.
+  final line.
+#+END_VERSE
+
+#+BEGIN_VERSE
+Separate poem.
+#+END_VERSE
+
+After both verses 😀.

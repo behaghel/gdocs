@@ -1,0 +1,16 @@
+#+TITLE: Synthetic status, term and example create
+
+Status: [[status:green][Ready Bépo 🧭]].
+
+- Term :: Plain source, intrinsically bold.
+- *Emphasis* :: Explicit authored bold remains distinct.
+
+#+begin_src text
+Source surface remains unchanged.
+#+end_src
+
+#+begin_example
+Brown example surface.
+
+Literal blank line retained.
+#+end_example

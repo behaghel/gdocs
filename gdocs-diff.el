@@ -23,6 +23,8 @@
 (require 'dash)
 (require 's)
 (require 'gdocs-convert)
+(require 'gdocs-diff-status)
+(require 'gdocs-diff-semantics)
 
 ;; ---------------------------------------------------------------------------
 ;;; Public API
@@ -43,7 +45,9 @@ account for title elements or other content that precedes the IR."
   "Compute diff operations between OLD-IR and NEW-IR.
 Returns a list of operation plists with :op and relevant indices.
 Operations: :keep, :delete, :insert, :modify."
-  (let* ((old-keys (gdocs-diff--element-keys old-ir))
+  (let* ((old-ir (gdocs-diff-semantic-project-ir old-ir))
+         (new-ir (gdocs-diff-semantic-project-ir new-ir))
+         (old-keys (gdocs-diff--element-keys old-ir))
          (new-keys (gdocs-diff--element-keys new-ir))
          (lcs-pairs (gdocs-diff--lcs old-keys new-keys)))
     (gdocs-diff--classify-operations old-ir new-ir lcs-pairs)))
@@ -53,8 +57,15 @@ Operations: :keep, :delete, :insert, :modify."
 OLD-IR and NEW-IR are the element lists.  DIFF-OPS is the output
 of `gdocs-diff-compute-operations'.  START-INDEX is the UTF-16
 index where the first element begins (default 1)."
-  (gdocs-diff--filter-invalid-requests
-   (gdocs-diff--generate-requests old-ir new-ir diff-ops (or start-index 1))))
+  (let* ((old-ir (gdocs-diff-semantic-project-ir old-ir))
+         (new-ir (gdocs-diff-semantic-project-ir new-ir))
+         (start (or start-index 1))
+         (plan (gdocs-diff-semantic-plan old-ir new-ir diff-ops start)))
+    (gdocs-diff--filter-invalid-requests
+     (append (plist-get plan :before)
+             (gdocs-diff--generate-requests
+              old-ir new-ir (plist-get plan :operations) start)
+             (plist-get plan :after)))))
 
 (defun gdocs-diff--non-empty-delete-request-p (request)
   "Return non-nil if REQUEST is a non-empty deleteContentRange request."
@@ -88,16 +99,9 @@ that elements with identical content and formatting produce
 identical keys."
   (pcase (plist-get element :type)
     ('paragraph (gdocs-diff--paragraph-key element))
-    ('table (gdocs-diff--table-key element))
-    ('horizontal-rule "horizontal-rule")
     ('page-break "page-break")
-    ('image (gdocs-diff--image-key element))
-    ('source-block (gdocs-diff--source-block-key element))
-    ('example-block (gdocs-diff--example-block-key element))
-    ('quote-block (gdocs-diff--quote-block-key element))
-    ('callout-block (gdocs-diff--callout-block-key element))
-    ('footnote (gdocs-diff--footnote-key element))
-    (_ (format "unknown:%s" (plist-get element :type)))))
+    (_ (or (plist-get (gdocs-diff-semantic-element element) :key)
+           (format "unknown:%s" (plist-get element :type))))))
 
 (defun gdocs-diff--marker-key (element)
   "Return a stable key fragment for semantic markers on ELEMENT."
@@ -118,106 +122,41 @@ identical keys."
 (defun gdocs-diff--run-semantic-text (run)
   "Return semantic text contribution for RUN."
   (cond
+   ((plist-get run :status)
+    (format "@status%S" (list (plist-get run :status)
+                              (substring-no-properties (plist-get run :text)))))
    ((plist-get run :date-element)
     (let ((date (plist-get run :date-element)))
       (format "@date(%s:%s)"
               (plist-get date :timestamp)
               (if (plist-get date :active) "active" "inactive"))))
-   ((plist-get run :footnote-label)
-    (format "@footnote(%s)" (plist-get run :footnote-label)))
+   ((plist-get (gdocs-diff-semantic-run run) :text))
    (t (or (plist-get run :text) ""))))
 
 (defun gdocs-diff--runs-semantic-text (runs)
   "Return stable semantic text for RUNS.
-When native date chips or footnote references are present, Google Docs may split
-or trim adjacent whitespace around the non-text element.  Collapse whitespace in
-that case while keeping a semantic token for the element itself."
+Non-text inline elements may split or trim adjacent whitespace on import.
+Normalize whitespace when requested by their semantic descriptors."
   (let ((text (mapconcat #'gdocs-diff--run-semantic-text runs "")))
     (if (seq-some (lambda (run)
                     (or (plist-get run :date-element)
-                        (plist-get run :footnote-label)))
+                        (plist-get (gdocs-diff-semantic-run run) :normalize-whitespace)))
                   runs)
         (string-trim (replace-regexp-in-string "[[:space:]]+" " " text))
       text)))
 
 (defun gdocs-diff--paragraph-key (element)
   "Compute a content key for a paragraph ELEMENT.
-Includes type, style, list info, semantic markers, and full run details."
+Includes style, opaque paragraph structure, markers, and full run details."
   (let ((style (symbol-name (or (plist-get element :style) 'normal)))
         (style-name (symbol-name (or (plist-get element :style-name) 'none)))
         (text (gdocs-diff--runs-semantic-text (plist-get element :contents)))
         (formatting (gdocs-diff--runs-formatting-key
                      (plist-get element :contents)))
-        (list-key (gdocs-diff--list-key (plist-get element :list)))
+        (structure-key (plist-get (gdocs-diff-semantic-paragraph element) :structure-key))
         (marker-key (gdocs-diff--marker-key element)))
     (format "paragraph:%s:%s:%s:%s:%s:%s"
-            style style-name list-key marker-key formatting text)))
-
-(defun gdocs-diff--table-key (element)
-  "Compute a content key for a table ELEMENT.
-Concatenates all cell text across all rows."
-  (let ((cell-texts nil))
-    (dolist (row (plist-get element :rows))
-      (dolist (cell row)
-        (push (gdocs-convert--runs-to-plain-text cell) cell-texts)))
-    (format "table:%s" (s-join "|" (nreverse cell-texts)))))
-
-(defun gdocs-diff--source-block-key (element)
-  "Compute a content key for a source-block ELEMENT."
-  (format "source-block:%s:%s:%s"
-          (or (plist-get element :language) "")
-          (or (plist-get element :style-revision) "")
-          (s-join "\n" (plist-get element :lines))))
-
-(defun gdocs-diff--example-block-key (element)
-  "Compute a content key for example-block ELEMENT."
-  (format "example-block:%s" (s-join "\n" (plist-get element :lines))))
-
-(defun gdocs-diff--quote-block-key (element)
-  "Compute a content key for quote-block ELEMENT."
-  (format "quote-block:%s:%s"
-          (or (plist-get element :style-revision) "")
-          (mapconcat (lambda (runs)
-                       (format "%s:%s"
-                               (gdocs-diff--runs-formatting-key runs)
-                               (gdocs-convert--runs-to-plain-text runs)))
-                     (plist-get element :paragraphs)
-                     "\n\n")))
-
-(defun gdocs-diff--callout-block-key (element)
-  "Compute a content key for callout-block ELEMENT."
-  (format "callout-block:%s:%s:%s:%s"
-          (or (plist-get element :callout-type) "info")
-          (or (plist-get element :title) "")
-          (or (plist-get element :style-revision) "")
-          (mapconcat (lambda (body-element)
-                       (let ((runs (plist-get body-element :contents)))
-                         (format "%s:%s:%s"
-                                 (or (plist-get body-element :list) 'none)
-                                 (gdocs-diff--runs-formatting-key runs)
-                                 (gdocs-convert--runs-to-plain-text runs))))
-                     (gdocs-convert--callout-body-elements-from-paragraphs
-                      element)
-                     "\n\n")))
-
-(defun gdocs-diff--image-key (element)
-  "Compute a content key for an image ELEMENT.
-When an Org source `:path' marker is present, treat that path plus caption as
-semantic identity and ignore Google-assigned object IDs and transient image
-URIs.  This keeps create/fetch stable after native image insertion."
-  (format "image:%s:%s"
-          (or (plist-get element :path)
-              (plist-get element :source-uri)
-              (plist-get element :content-uri)
-              (plist-get element :object-id)
-              "")
-          (or (plist-get element :caption) "")))
-
-(defun gdocs-diff--footnote-key (element)
-  "Compute a content key for a footnote ELEMENT."
-  (let ((label (or (plist-get element :label) ""))
-        (text (gdocs-convert--runs-to-plain-text (plist-get element :contents))))
-    (format "footnote:%s:%s" label text)))
+            style style-name structure-key marker-key formatting text)))
 
 (defun gdocs-diff--normalized-runs-for-key (runs)
   "Return RUNS merged for formatting-key comparison."
@@ -232,42 +171,40 @@ URIs.  This keeps create/fetch stable after native image insertion."
         (push (copy-sequence run) result)))))
 
 (defun gdocs-diff--runs-formatting-key (runs)
-  "Produce a string capturing the formatting of each run in RUNS.
-Adjacent runs with identical semantic formatting are normalized first, because
-Google Docs often splits whitespace into separate text runs after fetch."
-  (mapconcat #'gdocs-diff--run-formatting-key
+  "Capture formatting and semantic span lengths of RUNS.
+Normalize adjacent equal formats before comparing native run fragmentation.
+Feature-provided semantic text keeps temporary insertion sentinels out of
+reference identity."
+  (mapconcat (lambda (run)
+               (let ((semantic (gdocs-diff-semantic-run run)))
+                 (format "%s@%d" (gdocs-diff--run-formatting-key run)
+                         (if (plist-member semantic :text)
+                             (gdocs-convert--string-to-utf16-length (plist-get semantic :text))
+                           (gdocs-convert--run-model-length run)))))
              (gdocs-diff--normalized-runs-for-key runs)
              ";"))
 
 (defun gdocs-diff--run-formatting-key (run)
   "Produce a formatting fingerprint string for RUN."
-  (format "%s%s%s%s%s%s%s%s"
-          (if (plist-get run :bold) "B" "")
-          (if (plist-get run :italic) "I" "")
-          (if (plist-get run :underline) "U" "")
-          (if (plist-get run :strikethrough) "S" "")
-          (if (plist-get run :code) "C" "")
-          (if-let* ((style-names (plist-get run :style-names)))
-              (format "Y(%s)" (mapconcat #'symbol-name style-names ","))
-            "")
-          (if (plist-get run :link) (format "L(%s)" (plist-get run :link)) "")
-          (if-let* ((date (plist-get run :date-element)))
-              (format "D(%s:%s)"
-                      (plist-get date :timestamp)
-                      (if (plist-get date :active) "active" "inactive"))
-            "")
-          (if (plist-get run :footnote-label)
-              (format "F(%s)" (plist-get run :footnote-label))
-            "")))
-
-(defun gdocs-diff--list-key (list-info)
-  "Produce a key fragment for LIST-INFO, or empty string if nil."
-  (if list-info
-      (format "%s:%d:%s"
-              (plist-get list-info :type)
-              (plist-get list-info :level)
-              (plist-get list-info :checked))
-    ""))
+  (concat (when (plist-get run :status) (format "T%S" (plist-get run :status)))
+          (format "%s%s%s%s%s%s%s%s"
+                  (if (plist-get run :bold) "B" "")
+                  (if (plist-get run :italic) "I" "")
+                  (if (plist-get run :underline) "U" "")
+                  (if (plist-get run :strikethrough) "S" "")
+                  (if (plist-get run :code) "C" "")
+                  (if-let* ((style-names (plist-get run :style-names)))
+                      (format "Y(%s)" (mapconcat #'symbol-name style-names ","))
+                    "")
+                  (if (plist-get run :link) (format "L(%s)" (plist-get run :link)) "")
+                  (if-let* ((date (plist-get run :date-element)))
+                      (format "D(%s:%s)"
+                              (plist-get date :timestamp)
+                              (if (plist-get date :active) "active" "inactive"))
+                    ""))
+          (when (plist-get run :subscript) "_sub")
+          (when (plist-get run :superscript) "^sup")
+          (plist-get (gdocs-diff-semantic-run run) :key)))
 
 ;; ---------------------------------------------------------------------------
 ;;; LCS (Longest Common Subsequence)
@@ -419,85 +356,17 @@ the UTF-16 index where the first element begins (default 1)."
 (defun gdocs-diff--element-utf16-length (element)
   "Compute the UTF-16 code unit length of ELEMENT in the document."
   (pcase (plist-get element :type)
-    ('paragraph (gdocs-diff--paragraph-utf16-length element))
-    ('table (gdocs-diff--table-utf16-length element))
-    ;; Horizontal rules, page breaks, and images each occupy a single
-    ;; structural element in the document body (1 UTF-16 unit).
-    ('horizontal-rule 1)
+    ('paragraph (or (plist-get (gdocs-diff-semantic-element element) :body-length)
+                    (gdocs-diff--paragraph-utf16-length element)))
+    ;; Native page breaks occupy one body-model unit.
     ('page-break 1)
-    ('image 1)
-    ('source-block (gdocs-diff--source-block-utf16-length element))
-    ('example-block (gdocs-diff--example-block-utf16-length element))
-    ('quote-block (gdocs-diff--quote-block-utf16-length element))
-    ('callout-block (gdocs-diff--callout-block-utf16-length element))
-    ;; Footnotes are inline references; their content lives in a
-    ;; separate segment and does not consume body UTF-16 units.
-    ('footnote 0)
-    (_ (error "gdocs-diff: unknown element type: %s" (plist-get element :type)))))
-
-(defun gdocs-diff--source-block-utf16-length (element)
-  "Compute UTF-16 length of source-block ELEMENT."
-  (apply #'+
-         (mapcar (lambda (line)
-                   (1+ (gdocs-convert--string-to-utf16-length line)))
-                 (or (plist-get element :lines) '("")))))
-
-(defun gdocs-diff--example-block-utf16-length (element)
-  "Compute UTF-16 length of example-block ELEMENT."
-  (apply #'+
-         (mapcar (lambda (line)
-                   (1+ (gdocs-convert--string-to-utf16-length line)))
-                 (or (plist-get element :lines) '("")))))
-
-(defun gdocs-diff--quote-block-utf16-length (element)
-  "Compute UTF-16 length of quote-block ELEMENT."
-  ;; Includes the generated unmarked empty separator paragraph.
-  (1+ (apply #'+
-             (mapcar (lambda (runs)
-                       (1+ (gdocs-convert--string-to-utf16-length
-                            (gdocs-convert--runs-to-plain-text runs))))
-                     (or (plist-get element :paragraphs)
-                         (list (list (gdocs-convert--make-plain-run ""))))))))
-
-(defun gdocs-diff--callout-block-utf16-length (element)
-  "Compute UTF-16 length of callout-block ELEMENT."
-  (let* ((type (or (plist-get element :callout-type) "info"))
-         (title (plist-get element :title))
-         (label-len (1+ (gdocs-convert--string-to-utf16-length
-                         (gdocs-convert--callout-label type title))))
-         (body-len (apply #'+
-                          (mapcar (lambda (body-element)
-                                    (1+ (gdocs-convert--string-to-utf16-length
-                                         (gdocs-convert--runs-to-plain-text
-                                          (plist-get body-element :contents)))))
-                                  (gdocs-convert--callout-body-elements-from-paragraphs
-                                   element)))))
-    ;; Includes the generated unmarked empty separator paragraph.
-    (+ label-len body-len 1)))
+    (_ (or (plist-get (gdocs-diff-semantic-element element) :body-length)
+           (error "gdocs-diff: unknown element type: %s" (plist-get element :type))))))
 
 (defun gdocs-diff--paragraph-utf16-length (element)
   "Compute UTF-16 length of a paragraph ELEMENT including trailing newline."
   (let ((text (gdocs-convert--runs-to-plain-text (plist-get element :contents))))
     (+ (gdocs-convert--string-to-utf16-length text) 1))) ;trailing \n
-
-(defun gdocs-diff--table-utf16-length (element)
-  "Compute UTF-16 length of a table ELEMENT in the document.
-Tables have structural overhead: 1 for table start, 1 for table
-end, plus for each row 1 marker, plus for each cell 1 marker +
-content length + 1 newline.
-Note: `gdocs-convert--table-to-requests' uses 3 as the base
-instead of 2 because insertTable preserves the existing paragraph
-at the insertion point (an extra +1 not part of the table itself)."
-  (let ((total 2)
-        (rows (plist-get element :rows)))
-    (dolist (row rows)
-      (setq total (+ total 1))
-      (dolist (cell row)
-        (let ((text (gdocs-convert--runs-to-plain-text cell)))
-          (setq total (+ total 1
-                         (gdocs-convert--string-to-utf16-length text)
-                         1)))))
-    total))
 
 ;; ---------------------------------------------------------------------------
 ;;; Request generation from diff operations
@@ -539,7 +408,8 @@ START-INDEX is the UTF-16 index where the first element begins."
           (when (< start end)
             (push (list :index start
                         :sort-phase gdocs-diff--sort-phase-delete/modify
-                        :reqs (list (gdocs-diff--make-delete-request start end)))
+                        :reqs (append (gdocs-diff--status-marker-delete-requests (plist-get elem :contents))
+                                      (list (gdocs-diff--make-delete-request start end))))
                   groups)))))
     ;; Modifications (keep delete+insert+style together)
     (dolist (op diff-ops)
@@ -599,15 +469,8 @@ START-INDEX is the UTF-16 index where the first element begins."
      . ((range . ((startIndex . ,start)
                   (endIndex . ,end)
                   ;; Empty segmentId targets the document body
-                  ;; (as opposed to headers, footers, or footnotes)
+                  ;; rather than another document segment
                   (segmentId . "")))))))
-
-(defun gdocs-diff--make-delete-bullets-request (start end)
-  "Create a deleteParagraphBullets request covering START to END."
-  `((deleteParagraphBullets
-     . ((range . ((startIndex . ,start)
-                  ;; Exclude trailing newline from bullet range
-                  (endIndex . ,(1- end))))))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Insertion requests
@@ -640,12 +503,37 @@ to stale same-index ranges before later inserts shift the document."
              (setq requests (append requests (plist-get result :requests))
                    cursor (plist-get result :index)
                    max-new-index (max max-new-index ni))))
+         (when (and old-indices
+                    (= insert-index (cdr (cdar (last old-indices)))))
+           (setq requests (gdocs-diff--terminal-insertion-requests
+                           requests insert-index cursor)))
          (push (list :index insert-index
                      :new-index max-new-index
                      :reqs requests)
                groups)))
      by-index)
     groups))
+
+(defun gdocs-diff--terminal-insertion-requests (requests start end)
+  "Make terminal REQUESTS legal while preserving the final body newline.
+START is the old segment end, an invalid insertion location.  Split the
+last paragraph before its protected newline to make START available.
+END is the converter's final cursor.  When generated text supplies its
+own trailing newline, remove that newline before the protected one so
+repeated append/pull cycles do not accumulate empty paragraphs."
+  (append
+   (list `((insertText . ((text . "\n")
+                         (location . ((index . ,(1- start))))))))
+   requests
+   (when (seq-some
+          (lambda (request)
+            (when-let* ((insert (alist-get 'insertText request))
+                        (text (alist-get 'text insert))
+                        (index (alist-get 'index (alist-get 'location insert))))
+              (and (string-suffix-p "\n" text)
+                   (= (+ index (gdocs-convert--string-to-utf16-length text)) end))))
+          requests)
+     (list (gdocs-diff--make-delete-request (1- end) end)))))
 
 (defun gdocs-diff--insertion-point (op diff-ops old-indices start-index)
   "Determine the document index at which to insert for OP.
@@ -686,30 +574,18 @@ RANGE is a (START . END) cons.  Returns a plist with
          (cond
           ((gdocs-diff--only-marker-changed-p old-elem new-elem)
            (gdocs-diff--marker-only-modification new-elem range))
+          ((and (eq (plist-get old-elem :type) 'paragraph)
+                (eq (plist-get new-elem :type) 'paragraph)
+                (seq-some (lambda (run) (plist-get run :status))
+                          (append (plist-get old-elem :contents) (plist-get new-elem :contents))))
+           (gdocs-diff--content-modification old-elem new-elem range))
           ((gdocs-diff--only-style-changed-p old-elem new-elem)
            (gdocs-diff--style-only-modification old-elem new-elem range))
           ((gdocs-diff--only-formatting-changed-p old-elem new-elem)
            (gdocs-diff--formatting-only-modification new-elem range))
           (t
            (gdocs-diff--content-modification old-elem new-elem range)))))
-    ;; Handle bullet removal: all modification paths preserve the
-    ;; trailing newline (paragraph identity), so residual bullets
-    ;; persist unless explicitly deleted.  Use the NEW paragraph
-    ;; extent for the range because by the time this request
-    ;; executes, the content modification has already replaced the
-    ;; text—the old range can exceed the document boundary if the
-    ;; new text is shorter.
-    (when (and (plist-get old-elem :list)
-               (not (plist-get new-elem :list)))
-      (let* ((new-text (gdocs-convert--runs-to-plain-text
-                        (plist-get new-elem :contents)))
-             (new-len (gdocs-convert--string-to-utf16-length new-text))
-             (new-end (+ (car range) new-len 1)))
-        (plist-put result :style-reqs
-                   (append (plist-get result :style-reqs)
-                           (list (gdocs-diff--make-delete-bullets-request
-                                  (car range) new-end))))))
-    result))
+    (gdocs-diff-semantic-finish-paragraph old-elem new-elem range result 'modification)))
 
 (defun gdocs-diff--same-text-paragraphs-p (old-elem new-elem)
   "Return non-nil if OLD-ELEM and NEW-ELEM are paragraphs with identical text."
@@ -717,15 +593,6 @@ RANGE is a (START . END) cons.  Returns a plist with
        (eq (plist-get new-elem :type) 'paragraph)
        (equal (gdocs-diff--runs-semantic-text (plist-get old-elem :contents))
               (gdocs-diff--runs-semantic-text (plist-get new-elem :contents)))))
-
-(defun gdocs-diff--same-list-p (old-elem new-elem)
-  "Return non-nil if both elements are list items of the same type and level."
-  (let ((old-list (plist-get old-elem :list))
-        (new-list (plist-get new-elem :list)))
-    (and old-list new-list
-         (eq (plist-get old-list :type) (plist-get new-list :type))
-         (= (or (plist-get old-list :level) 0)
-            (or (plist-get new-list :level) 0)))))
 
 (defun gdocs-diff--same-paragraph-shape-p (old-elem new-elem)
   "Return non-nil if OLD-ELEM and NEW-ELEM have same paragraph shape."
@@ -737,8 +604,8 @@ RANGE is a (START . END) cons.  Returns a plist with
                (plist-get old-elem :contents))
               (gdocs-diff--runs-formatting-key
                (plist-get new-elem :contents)))
-       (equal (gdocs-diff--list-key (plist-get old-elem :list))
-              (gdocs-diff--list-key (plist-get new-elem :list)))))
+       (equal (plist-get (gdocs-diff-semantic-paragraph old-elem) :structure-key)
+              (plist-get (gdocs-diff-semantic-paragraph new-elem) :structure-key))))
 
 (defun gdocs-diff--only-marker-changed-p (old-elem new-elem)
   "Return non-nil if only semantic paragraph markers differ."
@@ -758,6 +625,7 @@ RANGE is a (START . END) cons.  Returns a plist with
 (defun gdocs-diff--only-style-changed-p (old-elem new-elem)
   "Return non-nil if only the paragraph style differs between elements."
   (and (gdocs-diff--same-text-paragraphs-p old-elem new-elem)
+       (plist-get (gdocs-diff-semantic-paragraph new-elem old-elem) :compatible)
        (or (not (equal (plist-get old-elem :style)
                        (plist-get new-elem :style)))
            (not (equal (plist-get old-elem :style-name)
@@ -770,6 +638,7 @@ RANGE is a (START . END) cons.  Returns a plist with
 (defun gdocs-diff--only-formatting-changed-p (old-elem new-elem)
   "Return non-nil if only run formatting differs between elements."
   (and (gdocs-diff--same-text-paragraphs-p old-elem new-elem)
+       (plist-get (gdocs-diff-semantic-paragraph new-elem old-elem) :compatible)
        (equal (plist-get old-elem :style)
               (plist-get new-elem :style))
        (equal (plist-get old-elem :style-name)
@@ -804,14 +673,16 @@ followed by per-run style requests for the new formatting."
                       (gdocs-convert--make-text-style-reset-request
                        start reset-end)))
          (runs (plist-get new-elem :contents))
-         (style-reqs (gdocs-convert--make-text-style-requests runs start))
-         (footnote-reqs
-          (gdocs-convert--make-footnote-reference-requests runs start)))
+         (logical-request (gdocs-convert--paragraph-logical-text-request
+                           new-elem start reset-end))
+         (style-reqs (gdocs-convert-make-text-style-requests runs start nil t))
+         (semantic-reqs (gdocs-diff-semantic-run-requests runs start)))
     (list :delete-reqs nil
           :insert-reqs nil
           :style-reqs (append (when reset-req (list reset-req))
+                              (when logical-request (list logical-request))
                               style-reqs
-                              footnote-reqs))))
+                              semantic-reqs))))
 
 (defun gdocs-diff--content-modification (old-elem new-elem range)
   "Generate delete+insert requests for a content change.
@@ -823,46 +694,23 @@ paragraph) or non-paragraph old element, performs a full delete
 and re-insert to avoid partial structural deletions that the API
 rejects.
 
-When both paragraphs are list items of the same type and level,
-the `createParagraphBullets' request is suppressed.  The trailing
-newline preservation keeps the paragraph in its existing list
-object, so re-emitting a bullet with a fixed preset would
-overwrite the alternated preset from the create path and cause
-Google Docs to merge separate numbered lists.
-
-When the list structure is unchanged (same type and level, or both
-non-list), a word-level diff is used to generate targeted delete
-and insert requests for only the changed tokens, preserving
-comment anchors on unchanged text."
+Compatible paragraph structures use a word-level diff to preserve comment
+anchors on unchanged tokens.  Feature-owned finalizers retain or replace the
+native paragraph structure; the kernel does not interpret its identity."
   (let* ((start (car range))
          (end (cdr range)))
     (if (and (eq (plist-get old-elem :type) 'paragraph)
              (eq (plist-get new-elem :type) 'paragraph))
-        (let* ((same-list-structure
-                (or (and (null (plist-get old-elem :list))
-                         (null (plist-get new-elem :list)))
-                    (gdocs-diff--same-list-p old-elem new-elem)))
-               (result
-                (if same-list-structure
-                    (gdocs-diff--word-level-paragraph-modification
-                     old-elem new-elem start end)
-                  (gdocs-diff--paragraph-content-modification
-                   new-elem start end))))
-          ;; Suppress createParagraphBullets when list membership is
-          ;; unchanged — the paragraph retains its existing list object.
-          (when (or (gdocs-diff--same-list-p old-elem new-elem)
-                    (and (null (plist-get old-elem :list))
-                         (null (plist-get new-elem :list))))
-            (plist-put result :insert-reqs
-                       (cl-remove-if
-                        (lambda (req)
-                          (alist-get 'createParagraphBullets req))
-                        (plist-get result :insert-reqs))))
-          result)
+        (let ((result
+               (if (plist-get (gdocs-diff-semantic-paragraph new-elem old-elem) :compatible)
+                   (gdocs-diff--word-level-paragraph-modification old-elem new-elem start end)
+                 (gdocs-diff--paragraph-content-modification new-elem start end))))
+          (gdocs-diff-semantic-finish-paragraph old-elem new-elem range result 'content))
       (let* ((delete-req (gdocs-diff--make-delete-request start end))
              (insert-result (gdocs-convert--ir-element-to-requests
                              new-elem start)))
-        (list :delete-reqs (list delete-req)
+        (list :delete-reqs (append (gdocs-diff--status-marker-delete-requests
+                                    (plist-get old-elem :contents)) (list delete-req))
               :insert-reqs (plist-get insert-result :requests)
               :style-reqs nil)))))
 
@@ -872,17 +720,13 @@ Handles text deletion and insertion, paragraph style, text
 formatting, and list properties.  Deletes [START, END-1) to
 preserve the trailing newline, then inserts new text at START.
 
-For nested list items, prepends tab characters so
-`createParagraphBullets' can determine the nesting level.
-A text-style reset clears inherited formatting before per-run
-styles are applied."
+Feature-owned physical prefixes precede body text.  A text-style reset
+clears inherited formatting before per-run styles are applied."
   (let* ((text (gdocs-convert--runs-to-plain-text
                 (plist-get new-elem :contents)))
-         (list-info (plist-get new-elem :list))
-         (level (if list-info (or (plist-get list-info :level) 0) 0))
-         (tabs (make-string level ?\t))
-         (tab-offset level)          ; each \t = 1 UTF-16 unit
-         (insert-text (concat tabs text))
+         (prefix (or (plist-get (gdocs-diff-semantic-paragraph new-elem) :prefix) ""))
+         (prefix-length (gdocs-convert--string-to-utf16-length prefix))
+         (insert-text (concat prefix text))
          (text-len (gdocs-convert--string-to-utf16-length text))
          (insert-len (gdocs-convert--string-to-utf16-length insert-text))
          ;; para-end accounts for tabs + text + trailing newline
@@ -897,16 +741,15 @@ styles are applied."
                       new-elem start para-end))
          ;; Reset formatting on tabs + text (excluding trailing
          ;; newline) to clear inherited styles.
-         (reset-end (+ start tab-offset text-len))
+         (reset-end (+ start prefix-length text-len))
          (reset-req (when (> reset-end start)
                       (gdocs-convert--make-text-style-reset-request
                        start reset-end)))
          ;; Per-run styles start after the tab prefix.
          (run-reqs (gdocs-convert--make-text-style-requests
                     (plist-get new-elem :contents)
-                    (+ start tab-offset)))
-         (list-reqs (gdocs-convert--make-list-requests
-                     new-elem start para-end)))
+                    (+ start prefix-length)))
+         (list-reqs (gdocs-diff-semantic-paragraph-requests new-elem start para-end)))
     ;; Pack style, run, and list requests into :insert-reqs so the
     ;; caller groups them with the text insertion at the same index,
     ;; keeping the whole modification atomic.
@@ -952,7 +795,7 @@ with :text, :offset (UTF-16 offset from start of TEXT), and
     (nreverse tokens)))
 
 (defun gdocs-diff--word-level-paragraph-modification (old-elem new-elem
-                                                                start end)
+                                                               start end)
   "Generate word-level diff requests for a paragraph text change.
 OLD-ELEM and NEW-ELEM are paragraph elements.  START and END are
 the document range of OLD-ELEM (END includes trailing newline).
@@ -964,20 +807,39 @@ tokens so that comment anchors on unchanged text survive."
                     (plist-get old-elem :contents)))
          (new-text (gdocs-convert--runs-to-plain-text
                     (plist-get new-elem :contents)))
-         (old-tokens (gdocs-diff--tokenize-text old-text))
-         (new-tokens (gdocs-diff--tokenize-text new-text))
-         (old-strs (mapcar (lambda (tk) (plist-get tk :text)) old-tokens))
-         (new-strs (mapcar (lambda (tk) (plist-get tk :text)) new-tokens))
+         (has-status (seq-some (lambda (run) (plist-get run :status))
+                               (append (plist-get old-elem :contents) (plist-get new-elem :contents))))
+         (old-tokens (if has-status (gdocs-diff--tokenize-status-runs (plist-get old-elem :contents) t)
+                       (gdocs-diff--tokenize-text old-text)))
+         (new-tokens (if has-status (gdocs-diff--tokenize-status-runs (plist-get new-elem :contents))
+                       (gdocs-diff--tokenize-text new-text)))
+         (same-visible-text (and has-status
+                                 (equal (mapconcat (lambda (token) (plist-get token :text)) old-tokens "")
+                                        (mapconcat (lambda (token) (plist-get token :text)) new-tokens ""))))
+         (old-strs (mapcar (lambda (tk) (or (plist-get tk :key) (plist-get tk :text))) old-tokens))
+         (new-strs (mapcar (lambda (tk) (or (plist-get tk :key) (plist-get tk :text))) new-tokens))
          (lcs-pairs (gdocs-diff--lcs old-strs new-strs))
          ;; Build kept-index sets and new→old index mapping
          (old-kept (make-hash-table :test 'eql))
          (new-kept (make-hash-table :test 'eql))
          (new-to-old (make-hash-table :test 'eql)))
     (dolist (pair lcs-pairs)
-      (puthash (car pair) t old-kept)
-      (puthash (cdr pair) t new-kept)
-      (puthash (cdr pair) (car pair) new-to-old))
-    (let* ((delete-ranges (gdocs-diff--deleted-token-ranges
+      (let ((old-token (nth (car pair) old-tokens))
+            (new-token (nth (cdr pair) new-tokens)))
+        ;; With identical visible text no characters move: a moved semantic
+        ;; boundary requires a new marker, not an LCS-based retained marker.
+        (unless (and same-visible-text (plist-get new-token :status)
+                     (/= (plist-get old-token :offset) (plist-get new-token :offset)))
+          (puthash (car pair) t old-kept)
+          (puthash (cdr pair) t new-kept)
+          (puthash (cdr pair) (car pair) new-to-old))))
+    (let* ((marker-deletions
+            (when has-status
+              (gdocs-diff--status-marker-delete-requests
+               (cl-loop for token in old-tokens for index from 0
+                        when (and (plist-get token :status) (not (gethash index old-kept)))
+                        collect token))))
+           (delete-ranges (gdocs-diff--deleted-token-ranges
                            old-tokens old-kept start))
            (delete-reqs
             (mapcar (lambda (r)
@@ -999,14 +861,30 @@ tokens so that comment anchors on unchanged text survive."
            (style-reqs (gdocs-convert--make-paragraph-style-requests
                         new-elem start para-end))
            (runs (plist-get new-elem :contents))
-           (run-reqs (gdocs-convert--make-text-style-requests runs start))
-           (list-reqs (gdocs-convert--make-list-requests
-                       new-elem start para-end))
-           (footnote-reqs
-            (gdocs-convert--make-footnote-reference-requests runs start)))
-      (list :delete-reqs delete-reqs
-            :insert-reqs (append insert-reqs style-reqs run-reqs list-reqs
-                                 footnote-reqs)
+           ;; Clear inherited styles before applying the complete authored runs,
+           ;; not only positively asserted formatting flags.
+           (reset-reqs
+            (when (> new-text-len 0)
+              (list (gdocs-convert--make-text-style-reset-request start (+ start new-text-len)))))
+           (logical-reqs
+            (when-let* ((request (gdocs-convert--paragraph-logical-text-request
+                                  new-elem start (+ start new-text-len))))
+              (list request)))
+           (run-reqs (gdocs-convert-make-text-style-requests runs start nil t))
+           (status-markers
+            (when has-status
+              (cl-loop for token in new-tokens for index from 0
+                       when (and (plist-get token :status) (not (gethash index new-kept)))
+                       collect (gdocs-convert--status-marker-request
+                                (plist-get token :status)
+                                (+ start (plist-get token :offset))
+                                (+ start (plist-get token :offset) (plist-get token :length))))))
+           (list-reqs (gdocs-diff-semantic-paragraph-requests new-elem start para-end))
+           (semantic-reqs (gdocs-diff-semantic-run-requests runs start)))
+      (list :delete-reqs (append marker-deletions (unless same-visible-text delete-reqs))
+            :insert-reqs (append (unless same-visible-text insert-reqs)
+                                 style-reqs reset-reqs logical-reqs
+                                 run-reqs status-markers list-reqs semantic-reqs)
             :style-reqs nil))))
 
 (defun gdocs-diff--deleted-token-ranges (old-tokens old-kept start)

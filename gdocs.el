@@ -183,6 +183,8 @@ account or prompt.  If the current directory is linked to a
 Google Drive folder via `gdocs-folder-id', the new document is
 placed in that folder."
   (interactive)
+  (let ((gdocs-convert--link-context (gdocs-sync--make-link-context)))
+    (gdocs-convert-org-buffer-to-ir))
   (let* ((dir-locals (gdocs--effective-dir-locals))
          (doc-title (or title (gdocs--buffer-title)))
          (acct (or account

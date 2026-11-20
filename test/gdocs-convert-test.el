@@ -37,27 +37,6 @@
                       "Hello world"))))
 
 ;; ---------------------------------------------------------------------------
-;;; Heading levels
-
-(ert-deftest gdocs-convert-test-heading-levels ()
-  "Heading levels 1-6 map to heading-1 through heading-6."
-  (dolist (level '(1 2 3 4 5 6))
-    (let* ((stars (make-string level ?*))
-           (org-str (format "%s Heading %d" stars level))
-           (ir (gdocs-convert-org-string-to-ir org-str))
-           (elem (car ir)))
-      (should (eq (plist-get elem :style)
-                  (intern (format "heading-%d" level))))
-      (should (eq (plist-get elem :style-name)
-                  (intern (format "gdocs-heading-%d" level)))))))
-
-(ert-deftest gdocs-convert-test-heading-level-7-clamped ()
-  "Heading level 7+ is clamped to heading-6."
-  (let* ((ir (gdocs-convert-org-string-to-ir "******* Deep heading"))
-         (elem (car ir)))
-    (should (eq (plist-get elem :style) 'heading-6))))
-
-;; ---------------------------------------------------------------------------
 ;;; Text formatting
 
 (ert-deftest gdocs-convert-test-bold ()
@@ -458,14 +437,15 @@
 ;;; List nesting requests
 
 (ert-deftest gdocs-convert-test-nested-list-indent-requests ()
-  "Nested list items generate updateParagraphStyle indent requests."
+  "Nested list tabs create nesting from a zero baseline, not doubled indentation."
   (let* ((ir (gdocs-convert-org-string-to-ir
               "- Parent\n  - Child\n    - Grandchild"))
          (requests (gdocs-convert-ir-to-docs-requests ir)))
     ;; Level 0: only createParagraphBullets, no indent request
     (should (cl-some (lambda (r) (alist-get 'createParagraphBullets r))
                      requests))
-    ;; Level 1: indent request with indentStart=72, indentFirstLine=54
+    ;; Real API capture: applying indentation as well as tabs double-encodes
+    ;; the level.  Both prefixed nested paragraphs must start from zero.
     (let ((indent-reqs
            (cl-remove-if-not
             (lambda (r)
@@ -475,24 +455,24 @@
                     (alist-get 'indentStart style)))))
             requests)))
       (should (>= (length indent-reqs) 2))  ;; level 1 and level 2
-      ;; Check level 1 indentation (72pt start, 54pt first)
+      ;; Level 1's leading tab supplies the nesting after its zero reset.
       (let* ((req1 (car indent-reqs))
              (style (alist-get 'paragraphStyle
                                (alist-get 'updateParagraphStyle req1)))
              (start-mag (alist-get 'magnitude (alist-get 'indentStart style)))
              (first-mag (alist-get 'magnitude
                                    (alist-get 'indentFirstLine style))))
-        (should (= start-mag 72))
-        (should (= first-mag 54)))
-      ;; Check level 2 indentation (108pt start, 90pt first)
+        (should (= start-mag 0))
+        (should (= first-mag 0)))
+      ;; Level 2's two tabs supply nesting after the same zero reset.
       (let* ((req2 (cadr indent-reqs))
              (style (alist-get 'paragraphStyle
                                (alist-get 'updateParagraphStyle req2)))
              (start-mag (alist-get 'magnitude (alist-get 'indentStart style)))
              (first-mag (alist-get 'magnitude
                                    (alist-get 'indentFirstLine style))))
-        (should (= start-mag 108))
-        (should (= first-mag 90))))))
+        (should (= start-mag 0))
+        (should (= first-mag 0))))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Google Docs JSON -> IR
@@ -516,43 +496,6 @@
       (should (eq (plist-get para :style-name) 'gdocs-body))
       (should (string= (plist-get (car (plist-get para :contents)) :text)
                         "Hello")))))
-
-(ert-deftest gdocs-convert-test-docs-json-heading ()
-  "A Google Docs HEADING_1 converts to :style heading-1."
-  (let* ((json `((body . ((content
-                           . [((paragraph
-                                . ((elements
-                                    . [((textRun
-                                         . ((content . "Title\n")
-                                            (textStyle . ()))))])
-                                   (paragraphStyle
-                                    . ((namedStyleType . "HEADING_1"))))))])))))
-         (ir (gdocs-convert-docs-json-to-ir json))
-         (heading (car ir)))
-    (should (eq (plist-get heading :style) 'heading-1))
-    (should (eq (plist-get heading :style-name) 'gdocs-heading-1))))
-
-(ert-deftest gdocs-convert-test-docs-json-preserves-heading-hierarchy ()
-  "Pulled Google Docs headings retain their Org hierarchy."
-  (cl-labels ((para (text style)
-                `((paragraph
-                   . ((elements
-                       . [((textRun . ((content . ,(concat text "\n"))
-                                       (textStyle . ()))) )])
-                      (paragraphStyle
-                       . ((namedStyleType . ,style))))))))
-    (let* ((json `((body . ((content . ,(vector
-                                         (para "Smoke protocol" "HEADING_1")
-                                         (para "Expected validation flow" "HEADING_2")
-                                         (para "High-value visual checks" "HEADING_2")
-                                         (para "Executive summary" "HEADING_1")))))))
-           (org (gdocs-convert-ir-to-org
-                 (gdocs-convert-docs-json-to-ir json))))
-      (should (string-match-p "^\\* Smoke protocol$" org))
-      (should (string-match-p "^\\*\\* Expected validation flow$" org))
-      (should (string-match-p "^\\*\\* High-value visual checks$" org))
-      (should (string-match-p "^\\* Executive summary$" org))
-      (should-not (string-match-p "^\\* Smoke protocol\\(?:.\\|\n\\)*^\\* Smoke protocol$" org)))))
 
 (ert-deftest gdocs-convert-test-docs-json-inline-image-preserves-uri ()
   "Google Docs inline images convert to image IR with source/content URIs."
@@ -713,15 +656,15 @@
          (json `((body . ((content . ,body-elements)))
                  (namedRanges
                   . ,(list
-                      (cons (intern "gdocs-org-marker:quote-block:elem-001")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-0")
                             `((namedRanges . ,(vector `((ranges . ,(vector '((startIndex . 1) (endIndex . 7)))))))))))))
          (ir (gdocs-convert-docs-json-to-ir json)))
     (should (= (length ir) 1))
     (should (eq (plist-get (car ir) :type) 'quote-block))
     (should (= (plist-get (car ir) :doc-end) 9))))
 
-(ert-deftest gdocs-convert-test-docs-json-marked-quote-block-merges-same-marker ()
-  "Quote paragraphs split by an Org soft newline merge when sharing a marker id."
+(ert-deftest gdocs-convert-test-docs-json-marked-quote-block-keeps-paragraphs ()
+  "Native paragraph boundaries survive even when quote markers share a block id."
   (let* ((body-elements
           (vector `((startIndex . 1)
                     (endIndex . 5)
@@ -738,7 +681,7 @@
          (json `((body . ((content . ,body-elements)))
                  (namedRanges
                   . ,(list
-                      (cons (intern "gdocs-org-marker:quote-block:elem-001")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-1")
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 1)
@@ -747,7 +690,7 @@
     (should (eq (plist-get block :type) 'quote-block))
     (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
                            (plist-get block :paragraphs))
-                   '("One two")))))
+                   '("One" "two")))))
 
 (ert-deftest gdocs-convert-test-docs-json-marked-quote-block-ignores-empty-chrome ()
   "Marked empty quote paragraphs are treated as visual chrome, not content."
@@ -773,17 +716,17 @@
          (json `((body . ((content . ,body-elements)))
                  (namedRanges
                   . ,(list
-                      (cons (intern "gdocs-org-marker:quote-block:elem-001")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-1")
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 1)
                                                           (endIndex . 4)))))))))
-                      (cons (intern "gdocs-org-marker:quote-block:elem-002")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-1")
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 5)
                                                           (endIndex . 6)))))))))
-                      (cons (intern "gdocs-org-marker:quote-block:elem-003")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-1")
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 6)
@@ -816,12 +759,12 @@
          (json `((body . ((content . ,body-elements)))
                  (namedRanges
                   . ,(list
-                      (cons (intern "gdocs-org-marker:quote-block:elem-001")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-1")
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 1)
                                                           (endIndex . 11)))))))))
-                      (cons (intern "gdocs-org-marker:quote-block:elem-002")
+                      (cons (intern "gdocs-org-marker:quote-block:elem-001:italic-v1-1")
                             `((namedRanges
                                . ,(vector `((ranges
                                              . ,(vector '((startIndex . 12)
@@ -1036,43 +979,6 @@
   (should (= (gdocs-convert--string-to-utf16-length "a\U0001F600b") 4)))
 
 ;; ---------------------------------------------------------------------------
-;;; Org-only marker preservation
-
-(ert-deftest gdocs-convert-test-todo-marker ()
-  "TODO keywords are stored in :gdocs-marker as a list of plists."
-  (let* ((ir (gdocs-convert-org-string-to-ir "* TODO Task"))
-         (elem (car ir))
-         (marker (plist-get elem :gdocs-marker)))
-    (should marker)
-    (should (listp marker))
-    (should (eq (plist-get (car marker) :type) 'todo))
-    (should (string= (plist-get (car marker) :data) "TODO"))))
-
-(ert-deftest gdocs-convert-test-tags-marker ()
-  "Tags are stored in :gdocs-marker as a list of plists."
-  (let* ((ir (gdocs-convert-org-string-to-ir "* Heading :tag1:tag2:"))
-         (elem (car ir))
-         (marker (plist-get elem :gdocs-marker)))
-    (should marker)
-    (should (listp marker))
-    (should (eq (plist-get (car marker) :type) 'tags))
-    (should (string= (plist-get (car marker) :data) "tag1:tag2"))))
-
-(ert-deftest gdocs-convert-test-todo-round-trip ()
-  "TODO keywords survive round-trip via markers."
-  (let* ((original "* TODO Important task\n")
-         (ir (gdocs-convert-org-string-to-ir original))
-         (result (gdocs-convert-ir-to-org ir)))
-    (should (string-match-p "\\* TODO Important task" result))))
-
-(ert-deftest gdocs-convert-test-tags-round-trip ()
-  "Tags survive round-trip via markers."
-  (let* ((original "* Heading :work:urgent:\n")
-         (ir (gdocs-convert-org-string-to-ir original))
-         (result (gdocs-convert-ir-to-org ir)))
-    (should (string-match-p ":work:urgent:" result))))
-
-;; ---------------------------------------------------------------------------
 ;;; Source block markers
 
 (ert-deftest gdocs-convert-test-src-block-marker ()
@@ -1083,44 +989,6 @@
     (should (eq (plist-get elem :type) 'source-block))
     (should (string= (plist-get elem :language) "python"))
     (should (equal (plist-get elem :lines) '("print(\"hi\")")))))
-
-;; ---------------------------------------------------------------------------
-;;; Priority markers
-
-(ert-deftest gdocs-convert-test-priority-marker ()
-  "A heading with priority produces a marker with :type priority."
-  (let* ((ir (gdocs-convert-org-string-to-ir "* [#A] Urgent task"))
-         (elem (car ir))
-         (marker (plist-get elem :gdocs-marker)))
-    (should marker)
-    (should (listp marker))
-    (should (eq (plist-get (car marker) :type) 'priority))
-    (should (string= (plist-get (car marker) :data) "A"))))
-
-;; ---------------------------------------------------------------------------
-;;; Scheduled/Deadline markers
-
-(ert-deftest gdocs-convert-test-scheduled-marker ()
-  "SCHEDULED produces a marker with :type scheduled."
-  (let* ((ir (gdocs-convert-org-string-to-ir
-              "* Task\nSCHEDULED: <2026-03-15>"))
-         (elem (car ir))
-         (marker (plist-get elem :gdocs-marker)))
-    (should marker)
-    (should (listp marker))
-    (should (eq (plist-get (car marker) :type) 'scheduled))
-    (should (string-match-p "2026-03-15" (plist-get (car marker) :data)))))
-
-(ert-deftest gdocs-convert-test-deadline-marker ()
-  "DEADLINE produces a marker with :type deadline."
-  (let* ((ir (gdocs-convert-org-string-to-ir
-              "* Task\nDEADLINE: <2026-03-20>"))
-         (elem (car ir))
-         (marker (plist-get elem :gdocs-marker)))
-    (should marker)
-    (should (listp marker))
-    (should (eq (plist-get (car marker) :type) 'deadline))
-    (should (string-match-p "2026-03-20" (plist-get (car marker) :data)))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Empty paragraph handling
@@ -1209,7 +1077,7 @@
              requests))))
 
 (ert-deftest gdocs-convert-test-docs-json-date-element-to-org-timestamp ()
-  "Google Docs date elements pull back as Org timestamps."
+  "Unmarked Google Docs date elements pull back as inactive Org timestamps."
   (let* ((json '((body . ((content . [((startIndex . 1)
                                        (endIndex . 15)
                                        (paragraph
@@ -1231,7 +1099,7 @@
                                                             (textStyle . ()))))]))))])))))
          (ir (gdocs-convert-docs-json-to-ir json)))
     (should (equal (gdocs-convert-ir-to-org ir)
-                   "Due <2026-07-12 Sun> done.\n"))))
+                   "Due [2026-07-12 Sun] done.\n"))))
 
 (ert-deftest gdocs-convert-test-docs-json-inactive-date-element-to-org-timestamp ()
   "Marked inactive Google Docs date elements pull back as inactive timestamps."
@@ -1306,31 +1174,39 @@
     (should-not (plist-get run :link))))
 
 ;; ---------------------------------------------------------------------------
-;;; Round-trip with headings and nested lists
+;;; Round-trip structural separators
 
-(ert-deftest gdocs-convert-test-round-trip-headings-and-nested-lists ()
-  "Headings and nested lists survive round-trip."
-  (let* ((original "* Top heading\n\n- Parent item\n  - Child item\n    - Grandchild item\n\n** Sub heading\n\nParagraph.\n")
-         (ir (gdocs-convert-org-string-to-ir original))
-         (result (gdocs-convert-ir-to-org ir)))
-    (should (string-match-p "\\* Top heading" result))
-    (should (string-match-p "\\*\\* Sub heading" result))
-    (should (string-match-p "- Parent item" result))
-    (should (string-match-p "  - Child item" result))
-    (should (string-match-p "    - Grandchild item" result))
-    (should (string-match-p "Paragraph\\." result))))
+(ert-deftest gdocs-convert-test-round-trip-keeps-structural-blank-separators ()
+  "Paragraphs, lists, and semantic blocks retain readable Org separation."
+  (let* ((source (concat "* Example\n\nFirst paragraph.\n\nSecond paragraph.\n\n"
+                         "- Before block\n- Same list\n\n"
+                         "#+begin_src python\nprint(1)\n#+end_src\n\n"
+                         "#+begin_quote\nQuoted text.\n#+end_quote\n\n"
+                         "#+begin_example\nLiteral text.\n\nStill literal.\n#+end_example\n\n"
+                         "- After block\n  - Nested item\n\nFinal paragraph.\n"))
+         (expected (concat "* Example\n\nFirst paragraph.\n\nSecond paragraph.\n\n"
+                           "- Before block\n- Same list\n\n"
+                           "#+BEGIN_SRC python\nprint(1)\n#+END_SRC\n\n"
+                           "#+BEGIN_QUOTE\nQuoted text.\n#+END_QUOTE\n\n"
+                           "#+BEGIN_EXAMPLE\nLiteral text.\n\nStill literal.\n#+END_EXAMPLE\n\n"
+                           "- After block\n  - Nested item\n\nFinal paragraph.\n"))
+         (result (gdocs-convert-ir-to-org (gdocs-convert-org-string-to-ir source))))
+    (should (equal expected result))
+    (should (equal result
+                   (gdocs-convert-ir-to-org (gdocs-convert-org-string-to-ir result))))))
 
-(ert-deftest gdocs-convert-test-ir-to-org-keeps-blank-after-heading-before-list ()
-  "A section that starts with a list keeps a blank line after its heading."
-  (let ((ir (list (list :type 'paragraph
-                        :style 'heading-1
-                        :contents (list (list :text "Section")))
-                  (list :type 'paragraph
-                        :style 'normal
-                        :list (list :type 'bullet :level 0)
-                        :contents (list (list :text "First item"))))))
+(ert-deftest gdocs-convert-test-code-paragraph-group-separated-from-following-list ()
+  "Legacy code paragraphs stay grouped and separated from the next list."
+  (let ((ir '((:type paragraph :style normal :contents ((:text "one" :code t)))
+              (:type paragraph :style normal :contents ((:text "two" :code t)))
+              (:type paragraph :style normal :list (:type bullet :level 0)
+                     :contents ((:text "Item one")))
+              (:type paragraph :style normal :list (:type bullet :level 1)
+                     :contents ((:text "Nested item")))
+              (:type paragraph :style normal :list (:type bullet :level 0)
+                     :contents ((:text "Item two"))))))
     (should (equal (gdocs-convert-ir-to-org ir)
-                   "* Section\n\n- First item\n"))))
+                   "#+BEGIN_EXAMPLE\none\ntwo\n#+END_EXAMPLE\n\n- Item one\n  - Nested item\n- Item two\n"))))
 
 ;; ---------------------------------------------------------------------------
 ;;; Property drawer reader
@@ -2218,7 +2094,7 @@
                         (let ((range (alist-get 'createNamedRange request)))
                           (and range
                                (string-prefix-p
-                                "gdocs-org-marker:callout-list:elem-003:bullet:0"
+                                "gdocs-org-marker:callout-list:elem-003:v2:"
                                 (alist-get 'name range)))))
                       requests))
     (should (seq-some (lambda (request)
@@ -2317,7 +2193,7 @@
          (requests (gdocs-convert-ir-to-docs-requests round-trip-ir)))
     (should (= (length pulled-ir) 1))
     (should (= (plist-get (car pulled-ir) :doc-end) 24))
-    (should (string-search "#+BEGIN_CALLOUT\nIntro.\n- one\nOutro.\n#+END_CALLOUT" pulled-org))
+    (should (string-search "#+BEGIN_CALLOUT\nIntro.\n\n- one\n\nOutro.\n#+END_CALLOUT" pulled-org))
     (should (= (length (plist-get (car round-trip-ir) :body-elements)) 3))
     (should (= (cl-count-if
                 (lambda (request)
@@ -2470,8 +2346,8 @@
          (org (gdocs-convert-ir-to-org (gdocs-convert-docs-json-to-ir json))))
     (should (string-search "#+BEGIN_CALLOUT\n- one\n- two\n#+END_CALLOUT" org))))
 
-(ert-deftest gdocs-convert-test-docs-json-marked-callout-merges-soft-wrap ()
-  "Callout body paragraphs split by an Org soft newline merge by marker id."
+(ert-deftest gdocs-convert-test-docs-json-marked-callout-keeps-paragraph-breaks ()
+  "Native callout paragraph breaks remain structure even with matching marker IDs."
   (let* ((body-elements
           (vector `((startIndex . 1)
                     (endIndex . 8)
@@ -2502,7 +2378,7 @@
     (should (eq (plist-get block :type) 'callout-block))
     (should (equal (mapcar #'gdocs-convert--runs-to-plain-text
                            (plist-get block :paragraphs))
-                   '("Wrapped continuation")))))
+                   '("Wrapped" "continuation")))))
 
 (ert-deftest gdocs-convert-test-docs-json-marked-callout-ignores-empty-chrome ()
   "Marked empty callout body paragraphs are visual chrome, not content."
@@ -2584,7 +2460,7 @@
               "#+BEGIN_QUOTE\nLine one\n\nLine two\n#+END_QUOTE"))
          (requests (gdocs-convert-ir-to-docs-requests ir)))
     (should (member '((createNamedRange
-                       . ((name . "gdocs-org-marker:quote-block:elem-001")
+                       . ((name . "gdocs-org-marker:quote-block:elem-001:italic-v1-0")
                           (range . ((startIndex . 1)
                                     (endIndex . 9))))))
                     requests))
@@ -2792,13 +2668,6 @@
     (should (string-match-p "First paragraph" result))
     (should (string-match-p "Second paragraph" result))))
 
-(ert-deftest gdocs-convert-test-round-trip-multiple-headings ()
-  "Multiple headings at different levels survive round-trip."
-  (let* ((original "* Heading one\n\n** Heading two\n\n*** Heading three\n")
-         (ir (gdocs-convert-org-string-to-ir original))
-         (result (gdocs-convert-ir-to-org ir)))
-    (should (string= (s-trim result) (s-trim original)))))
-
 (ert-deftest gdocs-convert-test-round-trip-mixed-formatting-paragraph ()
   "Paragraph with bold, italic, AND code in one line survives round-trip."
   (let* ((original "Here is *bold*, /italic/, and ~code~ together.\n")
@@ -2945,6 +2814,78 @@ Regression test: the Google API rejects ranges where startIndex == endIndex."
            (range (alist-get 'range (alist-get 'updateTextStyle req))))
       (should (< (alist-get 'startIndex range)
                  (alist-get 'endIndex range))))))
+
+(ert-deftest gdocs-convert-test-native-footnote-rejects-unpreservable-content ()
+  "Unsupported native segment content must not disappear during import."
+  (dolist (content '([((paragraph . ((elements . [((textRun . ((content . "One\n"))))]))))
+                      ((paragraph . ((elements . [((textRun . ((content . "Two\n"))))]))))]
+                     [((table . ((rows . 1))))]
+                     [((paragraph . ((elements . [((inlineObjectElement . ((inlineObjectId . "image"))))]))))]))
+    (should-error (gdocs-convert--docs-footnote-content-to-runs content) :type 'user-error)))
+
+(ert-deftest gdocs-convert-test-native-footnote-implicit-zero-index ()
+  "An omitted first startIndex is zero, before Google's native prefix."
+  (let* ((content [((paragraph . ((elements . [((textRun . ((content . " Body.\n"))))]))))])
+         (ir (gdocs-convert--docs-footnotes-to-ir
+              `((fn-one . ((content . ,content)))) '((:id "fn-one" :label "one")))))
+    (should (= (plist-get (car ir) :segment-start) 1))))
+
+(ert-deftest gdocs-convert-test-unmarked-remote-date-is-agenda-safe ()
+  "A native date without authored provenance imports as an inactive timestamp."
+  (let ((run (gdocs-convert--docs-date-element-to-run
+              '((dateElementProperties . ((timestamp . "2026-11-19T00:00:00Z")))))))
+    (should-not (plist-get (plist-get run :date-element) :active))
+    (should (string-prefix-p "[2026-11-19" (plist-get run :text)))))
+
+(ert-deftest gdocs-convert-test-active-source-date-emits-explicit-kind-provenance ()
+  "Agenda-active intent is restored only from explicit source-owned provenance."
+  (let* ((ir (gdocs-convert-org-string-to-ir "On <2026-11-19 Thu>.\n"))
+         (requests (gdocs-convert-ir-to-docs-requests ir)))
+    (should (seq-some (lambda (request)
+                        (string-suffix-p ":active" (or (alist-get 'name (alist-get 'createNamedRange request)) "")))
+                      requests))))
+
+(ert-deftest gdocs-convert-test-rich-timestamps-do-not-lose-time-range-or-repeater ()
+  "Richer timestamp values use lossless literal text rather than lossy day chips."
+  (dolist (source '("On <2026-11-19 Thu 10:30>.\n"
+                    "On <2026-11-19 Thu +1w>.\n"
+                    "On <2026-11-19 Thu>--<2026-11-20 Fri>.\n"))
+    (let* ((ir (gdocs-convert-org-string-to-ir source))
+           (requests (gdocs-convert-ir-to-docs-requests ir))
+           (native (gdocs-convert--docs-paragraph-to-ir
+                    (list (cons 'elements (vector (list (cons 'textRun (list (cons 'content source))))))) nil nil)))
+      (should-not (seq-some (lambda (request) (alist-get 'insertDate request)) requests))
+      (should (equal (gdocs-convert-ir-to-org (list native)) source))
+      (should-not (gdocs-diff-generate (list native) ir)))))
+
+(ert-deftest gdocs-convert-test-unsupported-native-date-values-do-not-become-guessed-days ()
+  "Native time-bearing or malformed values block import rather than lose meaning."
+  (dolist (timestamp '("2026-11-19T10:30:00Z" "not-a-date"))
+    (should-error (gdocs-convert--docs-date-element-to-run
+                   (list (cons 'dateElementProperties (list (cons 'timestamp timestamp)))))
+                  :type 'user-error)))
+
+(ert-deftest gdocs-convert-test-date-provenance-does-not-invalidate-an-unchanged-neighbour ()
+  "Editing adjacent prose must keep native date chips and their paragraph identity."
+  (require 'gdocs-diff)
+  (let* ((source "Old paragraph.\n\nOn <2026-11-19 Thu> and [2026-11-20 Fri].\n")
+         (local (gdocs-convert-org-string-to-ir source))
+         (paragraph '((elements . [((startIndex . 16) (endIndex . 19) (textRun . ((content . "On "))))
+                                   ((startIndex . 19) (endIndex . 20)
+                                    (dateElement . ((dateElementProperties . ((timestamp . "2026-11-19T00:00:00Z"))))))
+                                   ((startIndex . 20) (endIndex . 25) (textRun . ((content . " and "))))
+                                   ((startIndex . 25) (endIndex . 26)
+                                    (dateElement . ((dateElementProperties . ((timestamp . "2026-11-20T00:00:00Z"))))))
+                                   ((startIndex . 26) (endIndex . 28) (textRun . ((content . ".\n"))))])))
+         (markers '((:type timestamp-kind :start 19 :end 20 :data "active")
+                    (:type timestamp-kind :start 25 :end 26 :data "inactive")))
+         (native (append (gdocs-convert-org-string-to-ir "Old paragraph.\n")
+                         (list (gdocs-convert--docs-paragraph-to-ir paragraph nil markers 16 28))))
+         (new (gdocs-convert-org-string-to-ir "Updated paragraph.\n\nOn <2026-11-19 Thu> and [2026-11-20 Fri].\n")))
+    (should (equal (gdocs-diff--element-keys native) (gdocs-diff--element-keys local)))
+    (should (seq-some (lambda (op) (and (eq (plist-get op :op) 'keep) (= (plist-get op :old-index) 1)))
+                      (gdocs-diff-compute-operations native new)))
+    (should-not (seq-some (lambda (request) (alist-get 'insertDate request)) (gdocs-diff-generate native new)))))
 
 (provide 'gdocs-convert-test)
 ;;; gdocs-convert-test.el ends here

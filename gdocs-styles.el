@@ -1,0 +1,163 @@
+;;; gdocs-styles.el --- Configurable publishing presentation -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 Pablo Stafforini
+
+;;; Commentary:
+;; Presentation data only: logical styles, fonts, colours, and visual distances.
+;; This library loads without conversion, transport, accounts, or credentials.
+;; Consumers override these values; conversion retains semantic identities.
+
+;;; Code:
+
+(require 'custom)
+
+(defgroup gdocs-styles nil
+  "Presentation configuration for Google Docs publishing."
+  :group 'gdocs)
+
+(defcustom gdocs-style-definitions
+  '((gdocs-code :text (:monospace t))
+    (gdocs-example-code :text (:monospace t))
+    (gdocs-definition-term :text nil)
+    (gdocs-example-block :parent normal)
+    (gdocs-example-block-first :parent normal)
+    (gdocs-example-block-line :parent normal)
+    (gdocs-example-block-last :parent normal)
+    (gdocs-example-block-single :parent normal)
+    (gdocs-list-first :paragraph (:space-above 0))
+    (gdocs-list-item :paragraph (:space-above 0))
+    (gdocs-task-prefix :text (:font-family "Noto Sans Symbols 2" :font-size 10))
+    (gdocs-section-break :parent normal
+                         :paragraph (:space-above 6 :space-below 6 :indent-start 0 :indent-first-line 0 :indent-end 0
+                                                  :borders ((top :width 0 :padding 0) (left :width 0 :padding 0)
+                                                            (right :width 0 :padding 0) (bottom :width 0.5 :padding 0)))
+                         :text (:font-size 1))
+    (gdocs-section-break-separator :parent normal
+                                   :paragraph (:space-above 0 :space-below 0 :indent-start 0 :indent-first-line 0 :indent-end 0
+                                                            :borders ((top :width 0 :padding 0) (left :width 0 :padding 0)
+                                                                      (right :width 0 :padding 0) (bottom :width 0 :padding 0)))
+                                   :text (:font-scale 1))
+    (gdocs-center-first :parent normal :paragraph (:alignment center))
+    (gdocs-center-line :parent normal :paragraph (:alignment center))
+    (gdocs-center-last :parent normal :paragraph (:alignment center))
+    (gdocs-center-single :parent normal :paragraph (:alignment center))
+    (gdocs-verse-first :parent normal :paragraph (:space-above 0 :space-below 0))
+    (gdocs-verse-line :parent normal :paragraph (:space-above 0 :space-below 0))
+    (gdocs-verse-last :parent normal :paragraph (:space-above 0 :space-below 0))
+    (gdocs-verse-single :parent normal :paragraph (:space-above 0 :space-below 0))
+    (gdocs-callout-info-first-compact :parent normal)
+    (gdocs-callout-info-line-compact :parent normal)
+    (gdocs-callout-info-last-compact :parent normal)
+    (gdocs-callout-info-single-compact :parent normal)
+    (gdocs-callout-note-first-compact :parent normal)
+    (gdocs-callout-note-line-compact :parent normal)
+    (gdocs-callout-note-last-compact :parent normal)
+    (gdocs-callout-note-single-compact :parent normal)
+    (gdocs-callout-warning-first-compact :parent normal)
+    (gdocs-callout-warning-line-compact :parent normal)
+    (gdocs-callout-warning-last-compact :parent normal)
+    (gdocs-callout-warning-single-compact :parent normal)
+    (gdocs-callout-tip-first-compact :parent normal)
+    (gdocs-callout-tip-line-compact :parent normal)
+    (gdocs-callout-tip-last-compact :parent normal)
+    (gdocs-callout-tip-single-compact :parent normal)
+    (gdocs-callout-important-first-compact :parent normal)
+    (gdocs-callout-important-line-compact :parent normal)
+    (gdocs-callout-important-last-compact :parent normal)
+    (gdocs-callout-important-single-compact :parent normal)
+    (gdocs-source-block-separator :parent normal
+                                  :paragraph (:space-above 0 :space-below 0 :background-color nil
+                                                           :borders ((top :width 0 :padding 0) (bottom :width 0 :padding 0)
+                                                                     (left :width 0 :padding 0) (right :width 0 :padding 0))))
+    (gdocs-source-block :parent normal)
+    (gdocs-source-block-first :parent normal)
+    (gdocs-source-block-line :parent normal)
+    (gdocs-source-block-last :parent normal)
+    (gdocs-source-block-single :parent normal)
+    (gdocs-quote-block :parent normal)
+    (gdocs-quote-block-first :parent normal)
+    (gdocs-quote-block-line :parent normal)
+    (gdocs-quote-block-last :parent normal)
+    (gdocs-quote-block-single :parent normal)
+    (gdocs-callout-info-label :parent normal :text (:bold t))
+    (gdocs-callout-note-label :parent normal :text (:bold t))
+    (gdocs-callout-warning-label :parent normal :text (:bold t))
+    (gdocs-callout-tip-label :parent normal :text (:bold t))
+    (gdocs-callout-important-label :parent normal :text (:bold t))
+    (gdocs-callout-info-first :parent normal)
+    (gdocs-callout-info-line :parent normal)
+    (gdocs-callout-info-last :parent normal)
+    (gdocs-callout-info-single :parent normal)
+    (gdocs-callout-note-first :parent normal)
+    (gdocs-callout-note-line :parent normal)
+    (gdocs-callout-note-last :parent normal)
+    (gdocs-callout-note-single :parent normal)
+    (gdocs-callout-warning-first :parent normal)
+    (gdocs-callout-warning-line :parent normal)
+    (gdocs-callout-warning-last :parent normal)
+    (gdocs-callout-warning-single :parent normal)
+    (gdocs-callout-tip-first :parent normal)
+    (gdocs-callout-tip-line :parent normal)
+    (gdocs-callout-tip-last :parent normal)
+    (gdocs-callout-tip-single :parent normal)
+    (gdocs-callout-important-first :parent normal)
+    (gdocs-callout-important-line :parent normal)
+    (gdocs-callout-important-last :parent normal)
+    (gdocs-callout-important-single :parent normal)
+    (gdocs-image-caption :parent normal))
+  "Logical presentation styles, resolved when building Google Docs requests.
+Each style has an optional :parent, :text, and :paragraph plist.  Text may set
+:font-family, :font-size, :font-weight, :foreground-color, :small-caps, and
+:background-color.
+Paragraphs may set :space-above, :space-below, :indent-start, :indent-end,
+:indent-first-line, :border-padding, and :borders.  An explicit nil paragraph
+:background-color clears inherited shading.  Distances are in points.
+These choices do not change Org or IR semantics."
+  :type '(alist :key-type symbol :value-type plist)
+  :group 'gdocs-styles)
+
+(defcustom gdocs-style-base-font-size 11
+  "Fallback font size in points used to resolve logical :font-scale values."
+  :type 'number
+  :group 'gdocs-styles)
+
+(defcustom gdocs-convert-monospace-font-families
+  '("Courier New" "Consolas" "Source Code Pro" "Roboto Mono" "Courier")
+  "Fonts recognized as code on import; the first is the monospace fallback."
+  :type '(repeat string)
+  :group 'gdocs-styles)
+
+(defcustom gdocs-style-default-border-color "#FFFFFF"
+  "Fallback border colour as a hexadecimal #RRGGBB string."
+  :type 'string
+  :group 'gdocs-styles)
+
+(defcustom gdocs-style-default-border-width 1
+  "Fallback border width in points when a style omits :width."
+  :type 'number
+  :group 'gdocs-styles)
+
+(defcustom gdocs-style-default-border-padding 0
+  "Fallback border padding in points when a style omits :padding."
+  :type 'number
+  :group 'gdocs-styles)
+
+(defvaralias 'gdocs-convert--status-default-styles 'gdocs-status-default-styles)
+
+(defcustom gdocs-status-default-styles
+  '((grey :bold t :foreground-color "#3C4043" :background-color "#E2E3E5")
+    (red :bold t :foreground-color "#A50E0E" :background-color "#FCE8E6")
+    (yellow :bold t :foreground-color "#7A4F01" :background-color "#FEF7E0")
+    (green :bold t :foreground-color "#137333" :background-color "#E6F4EA")
+    (blue :bold t :foreground-color "#174EA6" :background-color "#E8F0FE")
+    (purple :bold t :foreground-color "#681DA8" :background-color "#F3E8FD"))
+  "Fallback presentation for static status colour identifiers.
+Each value is a logical text-style plist.  A gdocs-status-COLOR entry in
+`gdocs-style-definitions' takes precedence.  Presentation does not alter
+status colour identifiers, labels, original link spelling, or named ranges.
+The former private palette variable remains an alias for compatibility."
+  :type '(alist :key-type symbol :value-type plist)
+  :group 'gdocs-styles)
+
+(provide 'gdocs-styles)
+;;; gdocs-styles.el ends here

@@ -68,6 +68,48 @@ ROWS is a list of lists of lists of run plists."
         :strikethrough nil :code nil :link nil
         :footnote-label label))
 
+(defun gdocs-diff-test--apply-body-text-requests (text requests)
+  "Apply REQUESTS to TEXT while enforcing the protected body newline."
+  (dolist (request requests text)
+    (let* ((insert (alist-get 'insertText request))
+           (delete (alist-get 'deleteContentRange request))
+           (end (+ 1 (gdocs-convert--string-to-utf16-length text))))
+      (cond
+       (insert
+        (let ((index (alist-get 'index (alist-get 'location insert))))
+          (should (<= 1 index))
+          (should (< index end))
+          (let ((offset (gdocs-convert--utf16-string-index text (1- index))))
+            (setq text (concat (substring text 0 offset)
+                               (alist-get 'text insert) (substring text offset))))))
+       (delete
+        (let* ((range (alist-get 'range delete))
+               (start (alist-get 'startIndex range))
+               (stop (alist-get 'endIndex range)))
+          (should (<= 1 start))
+          (should (< start stop))
+          (should (<= stop (1- end)))
+          (setq text (concat
+                      (substring text 0 (gdocs-convert--utf16-string-index text (1- start)))
+                      (substring text (gdocs-convert--utf16-string-index text (1- stop))))))))
+      (should (string-suffix-p "\n" text)))))
+
+(ert-deftest gdocs-diff-test-append-preserves-protected-terminal-newline ()
+  "Appending paragraphs, lists, and blocks stays inside Google's body segment."
+  (dolist (case '(("Old 😀\n\nNew Bépo.\n" . "Old 😀\nNew Bépo.\n")
+                  ("Old 😀\n\nNext.\n\nLast 😀.\n" . "Old 😀\nNext.\nLast 😀.\n")
+                  ("Old 😀\n\n- Item\n- Deux\n" . "Old 😀\nItem\nDeux\n")
+                  ("Old 😀\n\n#+BEGIN_EXAMPLE\nliteral.\n#+END_EXAMPLE\n" . "Old 😀\nliteral.\n\n")))
+    (let* ((json '((body . ((content . [((startIndex . 1) (endIndex . 8)
+                                         (paragraph . ((elements . [((startIndex . 1) (endIndex . 8)
+                                                                     (textRun . ((content . "Old 😀\n"))))]))))])))))
+           (old (gdocs-convert-docs-json-to-ir json))
+           (new (gdocs-convert-org-string-to-ir (car case)))
+           (requests (gdocs-diff-generate old new)))
+      (should requests)
+      (should (equal (gdocs-diff-test--apply-body-text-requests "Old 😀\n" requests)
+                     (cdr case))))))
+
 ;;;; LCS tests
 
 (ert-deftest gdocs-diff-test-lcs-identical ()
@@ -121,10 +163,10 @@ ROWS is a list of lists of lists of run plists."
                       (list :type 'example-block :lines '("two"))))))
 
 (ert-deftest gdocs-diff-test-example-block-utf16-length ()
-  "Example block length includes one paragraph newline per line."
+  "Example geometry includes literal newlines and its outside guard."
   (should (= (gdocs-diff--element-utf16-length
               (list :type 'example-block :lines '("one" "two")))
-             8)))
+             9)))
 
 (ert-deftest gdocs-diff-test-source-block-key-includes-style-revision ()
   "Source block style revisions can force block replacement."
@@ -1191,6 +1233,33 @@ at D's position, not to keep(C)."
     (should z-req)
     (let ((loc (alist-get 'location (alist-get 'insertText z-req))))
       (should (= (alist-get 'index loc) 13)))))
+
+(ert-deftest gdocs-diff-test-native-footnote-formatting-only-change ()
+  "Changing only note emphasis updates its segment, never the document body."
+  (let* ((old '(:type footnote :label "one" :segment-id "fn-one"
+                      :segment-start 1 :contents ((:text "😀 note"))))
+         (new '(:type footnote :label "one" :contents ((:text "😀 note" :bold t))))
+         (requests (gdocs-diff-generate (list old) (list new))))
+    (should requests)
+    (should (seq-some (lambda (request) (alist-get 'updateTextStyle request)) requests))
+    (dolist (request requests)
+      (let* ((operation (cdar request))
+             (range (or (alist-get 'range operation) (alist-get 'location operation))))
+        (should (equal (alist-get 'segmentId range) "fn-one"))))
+    (should-not (gdocs-diff-generate (list old) (list old)))))
+
+(ert-deftest gdocs-diff-test-native-footnote-and-body-edits-are-both-retained ()
+  "Pairing note deletion with a body insertion must not discard the body edit."
+  (let* ((old '(:type footnote :label "one" :segment-id "fn-one"
+                      :segment-start 1 :contents ((:text "note"))))
+         (paragraph '(:type paragraph :style normal :contents ((:text "New paragraph."))))
+         (new '(:type footnote :label "one" :contents ((:text "note" :bold t))))
+         (requests (gdocs-diff-generate (list old) (list paragraph new))))
+    (should (seq-some (lambda (request)
+                        (let ((insert (alist-get 'insertText request)))
+                          (and insert (equal (alist-get 'text insert) "New paragraph.\n")))) requests))
+    (should (seq-some (lambda (request)
+                        (equal (alist-get 'segmentId (alist-get 'range (alist-get 'updateTextStyle request))) "fn-one")) requests))))
 
 (provide 'gdocs-diff-test)
 ;;; gdocs-diff-test.el ends here
