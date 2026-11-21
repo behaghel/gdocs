@@ -120,12 +120,24 @@ modules. `gdocs-diff-semantics.el` defines three ordinary Emacs hooks and explic
 composes implementations:
 
 - Element descriptors supply content identity and body-model length.
-- Run descriptors supply semantic text/fingerprints, whitespace policy and an
-  optional reference-request emitter.
+- Run descriptors supply semantic text/fingerprints, optional fingerprint width,
+  whitespace policy, reference emission and cleanup of removed runs or tokens.
+  Cleanup emitters receive the complete removed collection once, preserving
+  feature-owned provider identity and deduplication rules.
+- The same run descriptors can require content planning and supply an atomic
+  physical tokenizer. Tokens expose UTF-16 offsets/lengths and opaque keys;
+  optional retention predicates decide whether matched metadata survives, and
+  insertion emitters receive final body indices. Conflicting tokenizers fail
+  closed. Identical physical text requires no character mutation, even when
+  semantic boundaries move.
 - Request plans supply body operations and requests that precede body mutation.
 
 `gdocs-diff-footnotes.el` implements all footnote diff policy through those
 contracts, including zero-width references, native-segment matching and ordering.
+`gdocs-diff-status.el` owns status identity, physical text projection, atomic
+word tokenization, metadata retention and provider-marker lifecycle through the
+same run descriptors. The generic word-diff engine performs LCS/indexing and
+invokes opaque policies; it does not recognize status fields or marker requests.
 There is no runtime discovery, declaration DSL or custom feature registry. New
 extension points require a concrete behavior that the existing contract cannot
 express. Architecture tests enforce the boundary and exercise an unrelated
