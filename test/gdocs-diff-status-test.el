@@ -79,5 +79,14 @@
       (should (equal (car requests) '((deleteNamedRange . ((namedRangeId . "deleted-status"))))))
       (should (alist-get 'deleteContentRange (cadr requests))))))
 
+(ert-deftest gdocs-diff-test-status-cleanup-deduplicates-fragmented-provenance ()
+  "Removing multiple owned fragments deletes their shared provider ID once."
+  (let* ((old (gdocs-convert-org-string-to-ir "A [[status:Green][One]] [[status:Green][Two]].\n"))
+         (new (gdocs-convert-org-string-to-ir "A One Two.\n")))
+    (dolist (run (plist-get (car old) :contents))
+      (when (plist-get run :status) (plist-put run :status-marker-ids '("shared-provider"))))
+    (let ((requests (gdocs-diff-generate old new)))
+      (should (= 1 (length (seq-filter (lambda (request) (alist-get 'deleteNamedRange request)) requests)))))))
+
 (provide 'gdocs-diff-status-test)
 ;;; gdocs-diff-status-test.el ends here
