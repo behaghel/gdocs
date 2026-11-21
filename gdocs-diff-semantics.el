@@ -15,8 +15,15 @@ The first matching descriptor supplies :key and :body-length.")
 
 (defvar gdocs-diff-semantic-run-functions nil
   "Functions accepting an inline run and returning a descriptor or nil.
-The first match may supply :text, :key, :normalize-whitespace and :requests.
-A :requests function accepts the run and its UTF-16 body index.")
+The first match may supply :text, :key, :key-length, :normalize-whitespace
+and :requests.  A :requests function accepts the run and its UTF-16 body index.
+A :delete-requests emitter accepts all removed runs and is called once.
+:content-change forces content planning; :tokenizer accepts runs and an optional
+native flag, returning physical word tokens.  Only one tokenizer may be active.
+Tokens have :text, :offset, :length and optional :key.  Optional :retain-p takes
+matched old/new tokens and identical-text status.  Removed tokens retain the
+feature metadata needed by run cleanup; :insert-requests emits one request at a
+final index.")
 
 (defvar gdocs-diff-semantic-plan-functions nil
   "Functions accepting old IR, new IR, operations and a start index.
@@ -43,6 +50,18 @@ not an unmatched plan.")
       (setq index (+ index (gdocs-convert--run-model-length run))))
     requests))
 
+(defun gdocs-diff-semantic-run-delete-requests (runs)
+  "Compose feature-owned cleanup before removing RUNS.
+An emitter sees the complete run collection, retaining its own deduplication
+and ownership rules rather than making the kernel inspect provider metadata."
+  (let (emitters requests)
+    (dolist (run runs)
+      (when-let* ((emit (plist-get (gdocs-diff-semantic-run run) :delete-requests)))
+        (unless (memq emit emitters) (setq emitters (append emitters (list emit))))))
+    (dolist (emit emitters)
+      (setq requests (append requests (funcall emit runs))))
+    requests))
+
 (defun gdocs-diff-semantic-plan (old-ir new-ir operations start)
   "Compose semantic plans for OLD-IR, NEW-IR, OPERATIONS and START."
   (let (before after)
@@ -56,6 +75,7 @@ not an unmatched plan.")
 
 ;; Explicit composition belongs here, not in the generic LCS/indexing engine.
 (require 'gdocs-diff-footnotes)
+(require 'gdocs-diff-status)
 (require 'gdocs-diff-tables)
 (require 'gdocs-diff-images)
 (require 'gdocs-diff-code-blocks)
@@ -70,8 +90,18 @@ not an unmatched plan.")
 (require 'gdocs-diff-links)
 
 (defun gdocs-diff-semantic-paragraph (element &optional old)
-  "Describe ELEMENT's opaque paragraph structure and compatibility with OLD."
-  (gdocs-diff-lists-paragraph element old))
+  "Describe ELEMENT's opaque paragraph structure and compatibility with OLD.
+Inline descriptors may require content planning and supply a physical tokenizer."
+  (let (tokenizers content-change)
+    (dolist (run (append (plist-get element :contents) (plist-get old :contents)))
+      (let ((descriptor (gdocs-diff-semantic-run run)))
+        (when (plist-get descriptor :content-change) (setq content-change t))
+        (when-let* ((tokenizer (plist-get descriptor :tokenizer)))
+          (cl-pushnew tokenizer tokenizers :test #'eq))))
+    (when (cdr tokenizers)
+      (user-error "Conflicting inline word policies in one paragraph"))
+    (append (list :content-change content-change :tokenizer (car tokenizers))
+            (gdocs-diff-lists-paragraph element old))))
 
 (defun gdocs-diff-semantic-paragraph-requests (element start end)
   "Emit feature-owned paragraph requests for ELEMENT at START..END."

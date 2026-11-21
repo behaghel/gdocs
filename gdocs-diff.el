@@ -23,7 +23,6 @@
 (require 'dash)
 (require 's)
 (require 'gdocs-convert)
-(require 'gdocs-diff-status)
 (require 'gdocs-diff-semantics)
 
 ;; ---------------------------------------------------------------------------
@@ -122,9 +121,6 @@ identical keys."
 (defun gdocs-diff--run-semantic-text (run)
   "Return semantic text contribution for RUN."
   (cond
-   ((plist-get run :status)
-    (format "@status%S" (list (plist-get run :status)
-                              (substring-no-properties (plist-get run :text)))))
    ((plist-get run :date-element)
     (let ((date (plist-get run :date-element)))
       (format "@date(%s:%s)"
@@ -178,16 +174,16 @@ reference identity."
   (mapconcat (lambda (run)
                (let ((semantic (gdocs-diff-semantic-run run)))
                  (format "%s@%d" (gdocs-diff--run-formatting-key run)
-                         (if (plist-member semantic :text)
-                             (gdocs-convert--string-to-utf16-length (plist-get semantic :text))
-                           (gdocs-convert--run-model-length run)))))
+                         (or (plist-get semantic :key-length)
+                             (if (plist-member semantic :text)
+                                 (gdocs-convert--string-to-utf16-length (plist-get semantic :text))
+                               (gdocs-convert--run-model-length run))))))
              (gdocs-diff--normalized-runs-for-key runs)
              ";"))
 
 (defun gdocs-diff--run-formatting-key (run)
   "Produce a formatting fingerprint string for RUN."
-  (concat (when (plist-get run :status) (format "T%S" (plist-get run :status)))
-          (format "%s%s%s%s%s%s%s%s"
+  (concat (format "%s%s%s%s%s%s%s%s"
                   (if (plist-get run :bold) "B" "")
                   (if (plist-get run :italic) "I" "")
                   (if (plist-get run :underline) "U" "")
@@ -408,7 +404,7 @@ START-INDEX is the UTF-16 index where the first element begins."
           (when (< start end)
             (push (list :index start
                         :sort-phase gdocs-diff--sort-phase-delete/modify
-                        :reqs (append (gdocs-diff--status-marker-delete-requests (plist-get elem :contents))
+                        :reqs (append (gdocs-diff-semantic-run-delete-requests (plist-get elem :contents))
                                       (list (gdocs-diff--make-delete-request start end))))
                   groups)))))
     ;; Modifications (keep delete+insert+style together)
@@ -523,7 +519,7 @@ own trailing newline, remove that newline before the protected one so
 repeated append/pull cycles do not accumulate empty paragraphs."
   (append
    (list `((insertText . ((text . "\n")
-                         (location . ((index . ,(1- start))))))))
+                          (location . ((index . ,(1- start))))))))
    requests
    (when (seq-some
           (lambda (request)
@@ -576,8 +572,7 @@ RANGE is a (START . END) cons.  Returns a plist with
            (gdocs-diff--marker-only-modification new-elem range))
           ((and (eq (plist-get old-elem :type) 'paragraph)
                 (eq (plist-get new-elem :type) 'paragraph)
-                (seq-some (lambda (run) (plist-get run :status))
-                          (append (plist-get old-elem :contents) (plist-get new-elem :contents))))
+                (plist-get (gdocs-diff-semantic-paragraph new-elem old-elem) :content-change))
            (gdocs-diff--content-modification old-elem new-elem range))
           ((gdocs-diff--only-style-changed-p old-elem new-elem)
            (gdocs-diff--style-only-modification old-elem new-elem range))
@@ -709,7 +704,7 @@ native paragraph structure; the kernel does not interpret its identity."
       (let* ((delete-req (gdocs-diff--make-delete-request start end))
              (insert-result (gdocs-convert--ir-element-to-requests
                              new-elem start)))
-        (list :delete-reqs (append (gdocs-diff--status-marker-delete-requests
+        (list :delete-reqs (append (gdocs-diff-semantic-run-delete-requests
                                     (plist-get old-elem :contents)) (list delete-req))
               :insert-reqs (plist-get insert-result :requests)
               :style-reqs nil)))))
@@ -807,15 +802,13 @@ tokens so that comment anchors on unchanged text survive."
                     (plist-get old-elem :contents)))
          (new-text (gdocs-convert--runs-to-plain-text
                     (plist-get new-elem :contents)))
-         (has-status (seq-some (lambda (run) (plist-get run :status))
-                               (append (plist-get old-elem :contents) (plist-get new-elem :contents))))
-         (old-tokens (if has-status (gdocs-diff--tokenize-status-runs (plist-get old-elem :contents) t)
+         (tokenizer (plist-get (gdocs-diff-semantic-paragraph new-elem old-elem) :tokenizer))
+         (old-tokens (if tokenizer (funcall tokenizer (plist-get old-elem :contents) t)
                        (gdocs-diff--tokenize-text old-text)))
-         (new-tokens (if has-status (gdocs-diff--tokenize-status-runs (plist-get new-elem :contents))
+         (new-tokens (if tokenizer (funcall tokenizer (plist-get new-elem :contents))
                        (gdocs-diff--tokenize-text new-text)))
-         (same-visible-text (and has-status
-                                 (equal (mapconcat (lambda (token) (plist-get token :text)) old-tokens "")
-                                        (mapconcat (lambda (token) (plist-get token :text)) new-tokens ""))))
+         (same-visible-text (equal (mapconcat (lambda (token) (plist-get token :text)) old-tokens "")
+                                   (mapconcat (lambda (token) (plist-get token :text)) new-tokens "")))
          (old-strs (mapcar (lambda (tk) (or (plist-get tk :key) (plist-get tk :text))) old-tokens))
          (new-strs (mapcar (lambda (tk) (or (plist-get tk :key) (plist-get tk :text))) new-tokens))
          (lcs-pairs (gdocs-diff--lcs old-strs new-strs))
@@ -826,19 +819,18 @@ tokens so that comment anchors on unchanged text survive."
     (dolist (pair lcs-pairs)
       (let ((old-token (nth (car pair) old-tokens))
             (new-token (nth (cdr pair) new-tokens)))
-        ;; With identical visible text no characters move: a moved semantic
-        ;; boundary requires a new marker, not an LCS-based retained marker.
-        (unless (and same-visible-text (plist-get new-token :status)
-                     (/= (plist-get old-token :offset) (plist-get new-token :offset)))
+        ;; A feature may reject an otherwise matched token's retained identity.
+        ;; The kernel owns LCS mechanics, not semantic boundary compatibility.
+        (unless (and (plist-get new-token :retain-p)
+                     (not (funcall (plist-get new-token :retain-p)
+                                   old-token new-token same-visible-text)))
           (puthash (car pair) t old-kept)
           (puthash (cdr pair) t new-kept)
           (puthash (cdr pair) (car pair) new-to-old))))
-    (let* ((marker-deletions
-            (when has-status
-              (gdocs-diff--status-marker-delete-requests
-               (cl-loop for token in old-tokens for index from 0
-                        when (and (plist-get token :status) (not (gethash index old-kept)))
-                        collect token))))
+    (let* ((semantic-deletions
+            (gdocs-diff-semantic-run-delete-requests
+             (cl-loop for token in old-tokens for index from 0
+                      unless (gethash index old-kept) collect token)))
            (delete-ranges (gdocs-diff--deleted-token-ranges
                            old-tokens old-kept start))
            (delete-reqs
@@ -871,20 +863,17 @@ tokens so that comment anchors on unchanged text survive."
                                   new-elem start (+ start new-text-len))))
               (list request)))
            (run-reqs (gdocs-convert-make-text-style-requests runs start nil t))
-           (status-markers
-            (when has-status
-              (cl-loop for token in new-tokens for index from 0
-                       when (and (plist-get token :status) (not (gethash index new-kept)))
-                       collect (gdocs-convert--status-marker-request
-                                (plist-get token :status)
-                                (+ start (plist-get token :offset))
-                                (+ start (plist-get token :offset) (plist-get token :length))))))
+           (token-requests
+            (cl-loop for token in new-tokens for index from 0
+                     when (and (plist-get token :insert-requests) (not (gethash index new-kept)))
+                     collect (funcall (plist-get token :insert-requests)
+                                      (+ start (plist-get token :offset)))))
            (list-reqs (gdocs-diff-semantic-paragraph-requests new-elem start para-end))
            (semantic-reqs (gdocs-diff-semantic-run-requests runs start)))
-      (list :delete-reqs (append marker-deletions (unless same-visible-text delete-reqs))
+      (list :delete-reqs (append semantic-deletions (unless same-visible-text delete-reqs))
             :insert-reqs (append (unless same-visible-text insert-reqs)
                                  style-reqs reset-reqs logical-reqs
-                                 run-reqs status-markers list-reqs semantic-reqs)
+                                 run-reqs token-requests list-reqs semantic-reqs)
             :style-reqs nil))))
 
 (defun gdocs-diff--deleted-token-ranges (old-tokens old-kept start)
@@ -913,7 +902,7 @@ paragraph's document start index.  Returns a list of
     (nreverse ranges)))
 
 (defun gdocs-diff--inserted-token-ops (new-tokens new-kept new-to-old
-                                                   old-tokens old-kept start)
+                                                  old-tokens old-kept start)
   "Compute insertion operations for new tokens not in NEW-KEPT.
 Returns a list of (TEXT . DOC-POS) pairs for insertText requests.
 DOC-POS is the post-deletion document position."
@@ -940,7 +929,7 @@ DOC-POS is the post-deletion document position."
     ops))
 
 (defun gdocs-diff--token-insert-position (new-idx new-kept new-to-old
-                                                   old-tokens old-kept start)
+                                                  old-tokens old-kept start)
   "Compute the post-deletion insertion position for token NEW-IDX.
 Finds the nearest preceding kept new token, maps it to its old
 token via NEW-TO-OLD, and returns START plus the cumulative
